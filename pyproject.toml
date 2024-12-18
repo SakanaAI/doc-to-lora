@@ -1,0 +1,39 @@
+[project]
+name = "ctx-to-lora"
+version = "0.0.1"
+authors = [{ name = "Rujikorn Charakorn" }]
+description = ""
+readme = "README.md"
+requires-python = ">= 3.10"
+dependencies = [
+    "transformers",
+    "peft",
+    "accelerate",
+    "datasets",
+    "bitsandbytes",
+    "jupyter",
+    "matplotlib",
+    "hf_transfer",
+    "torchmetrics",
+    "inflect",
+    "pre-commit",
+    "trl",
+    "tensorboardX",
+    "wandb",
+    "fasttext-wheel",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.isort]
+profile = "black"
+
+
+[tool.black]
+line-length = 99
+
+[tool.pyright]
+exclude = ["train_outputs", "data", "generated_tasks", "outputs", "plots", "tmp", "wandb"]
+typeCheckingMode = "off"

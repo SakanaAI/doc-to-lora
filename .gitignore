@@ -1,0 +1,14 @@
+tmp/
+models/
+results/
+datasets/
+data/
+__pycache__/
+*egg-info/
+.vscode/
+.ipynb_checkpoints/
+wandb/
+data/
+*.bak
+*outputs/
+plots/
