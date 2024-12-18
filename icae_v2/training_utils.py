@@ -1,10 +1,10 @@
-from transformers import Trainer
+import math
 import os
-import torch
 import random
 
+import torch
+from transformers import Trainer
 from transformers.trainer_utils import get_last_checkpoint
-import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
