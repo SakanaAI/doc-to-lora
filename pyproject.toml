@@ -32,7 +32,7 @@ profile = "black"
 
 
 [tool.black]
-line-length = 99
+line-length = 89
 
 [tool.pyright]
 exclude = ["train_outputs", "data", "generated_tasks", "outputs", "plots", "tmp", "wandb"]

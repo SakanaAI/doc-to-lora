@@ -12,3 +12,9 @@ data/
 *.bak
 *outputs/
 plots/
+*.out
+*.pt
+*.pth
+*.bin
+*.safetensors
+*tfevents*
