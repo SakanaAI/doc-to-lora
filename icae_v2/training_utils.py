@@ -165,7 +165,7 @@ def pretrain_tokenize_function(examples, model, mem, lm_ratio=0.0):
 
 def instruct_ft_tokenize_function(examples, model, mem):
     text_output = model.tokenizer(
-        examples["input"],
+        examples["context"],
         max_length=5120,
         truncation=True,
         padding=False,
