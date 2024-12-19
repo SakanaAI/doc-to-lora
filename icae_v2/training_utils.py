@@ -12,14 +12,19 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def train_model(model, train_dataset, eval_dataset, training_args, data_collator=None):
 
     last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and not training_args.overwrite_output_dir:
+    if (
+        os.path.isdir(training_args.output_dir)
+        and not training_args.overwrite_output_dir
+    ):
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
         if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
             raise ValueError(
                 f"Output directory ({training_args.output_dir}) already exists and is not empty. "
                 "Use --overwrite_output_dir to overcome."
             )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+        elif (
+            last_checkpoint is not None and training_args.resume_from_checkpoint is None
+        ):
             print(
                 f"Checkpoint detected, resuming training at {last_checkpoint}. "
                 "To avoid this behavior, change "
@@ -27,7 +32,10 @@ def train_model(model, train_dataset, eval_dataset, training_args, data_collator
             )
 
     if (
-        max(training_args.per_device_train_batch_size, training_args.per_device_eval_batch_size)
+        max(
+            training_args.per_device_train_batch_size,
+            training_args.per_device_eval_batch_size,
+        )
         == 1
     ):
         data_collator = None
@@ -83,7 +91,10 @@ def text_extraction(input_ids, length, lm_ratio=0.0):
     else:
         last_start = input_len - length
         random_start = random.randint(0, last_start)
-        return input_ids[random_start : random_start + length], input_ids[random_start + length :]
+        return (
+            input_ids[random_start : random_start + length],
+            input_ids[random_start + length :],
+        )
 
 
 def pretrain_tokenize_function(examples, model, mem, lm_ratio=0.0):
@@ -173,7 +184,9 @@ def instruct_ft_tokenize_function(examples, model, mem):
         total_mem_length = num_segments * model.mem_size
 
         prompt_ids = (
-            [mem[0]] * total_mem_length + [model.ft_token_id] + prompt_output["input_ids"][idx]
+            [mem[0]] * total_mem_length
+            + [model.ft_token_id]
+            + prompt_output["input_ids"][idx]
         )
         prompt_ids = (
             [1, 733, 16289, 28793] + prompt_ids + [733, 28748, 16289, 28793]
@@ -196,15 +209,26 @@ class DataCollatorForDynamicPadding:
         self.pad_to_multiple_of = pad_to_multiple_of
 
     def __call__(self, examples):
-        input_ids = [torch.tensor(example["input_ids"], dtype=torch.long) for example in examples]
-        labels = [torch.tensor(example["labels"], dtype=torch.long) for example in examples]
+        input_ids = [
+            torch.tensor(example["input_ids"], dtype=torch.long) for example in examples
+        ]
+        labels = [
+            torch.tensor(example["labels"], dtype=torch.long) for example in examples
+        ]
         prompt_answer_ids = [
-            torch.tensor(example["prompt_answer_ids"], dtype=torch.long) for example in examples
+            torch.tensor(example["prompt_answer_ids"], dtype=torch.long)
+            for example in examples
         ]
         input_ids = self.dynamic_padding(input_ids, fill_value=self.pad_token_id)
-        prompt_answer_ids = self.dynamic_padding(prompt_answer_ids, fill_value=self.pad_token_id)
+        prompt_answer_ids = self.dynamic_padding(
+            prompt_answer_ids, fill_value=self.pad_token_id
+        )
         labels = self.dynamic_padding(labels)
-        batch = {"input_ids": input_ids, "labels": labels, "prompt_answer_ids": prompt_answer_ids}
+        batch = {
+            "input_ids": input_ids,
+            "labels": labels,
+            "prompt_answer_ids": prompt_answer_ids,
+        }
         return batch
 
     def dynamic_padding(self, sequences, fill_value=-100):
@@ -213,7 +237,9 @@ class DataCollatorForDynamicPadding:
             max_length = (
                 (max_length - 1) // self.pad_to_multiple_of + 1
             ) * self.pad_to_multiple_of
-        padded_sequences = torch.full((len(sequences), max_length), fill_value, dtype=torch.long)
+        padded_sequences = torch.full(
+            (len(sequences), max_length), fill_value, dtype=torch.long
+        )
         for i, seq in enumerate(sequences):
             padded_sequences[i, : len(seq)] = seq
         return padded_sequences

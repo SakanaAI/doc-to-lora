@@ -22,7 +22,11 @@ model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
 # Define Lora configuration
 lora_config = LoraConfig(
-    r=512, lora_alpha=32, lora_dropout=model_args.lora_dropout, bias="none", task_type="CAUSAL_LM"
+    r=512,
+    lora_alpha=32,
+    lora_dropout=model_args.lora_dropout,
+    bias="none",
+    task_type="CAUSAL_LM",
 )
 
 # Initialize model and send it to CUDA device
@@ -31,7 +35,9 @@ model = ICAE(model_args, training_args, lora_config)
 # Load the fine-tuned checkpoint
 print(f"Loading trained checkpoint from {training_args.output_dir}")
 state_dict = load_file(training_args.output_dir)
-model.load_state_dict(state_dict, strict=False)  # only load lora and memory token embeddings
+model.load_state_dict(
+    state_dict, strict=False
+)  # only load lora and memory token embeddings
 
 model = model.to(device)
 
@@ -73,7 +79,9 @@ with torch.no_grad():
             # the following code is for Mistral tokenizer for example: 733, 16289, 28793 are for the Mistral instruction tempmlate
             prompt_left_ids = torch.LongTensor([[1, 733, 16289, 28793]]).to(device)
             prompt_right_ids = (
-                [model.ft_token_id] + tokenized_prompt["input_ids"] + [733, 28748, 16289, 28793]
+                [model.ft_token_id]
+                + tokenized_prompt["input_ids"]
+                + [733, 28748, 16289, 28793]
             )
             prompt_right_ids = torch.LongTensor([prompt_right_ids]).to(device)
 
@@ -94,7 +102,9 @@ with torch.no_grad():
             for i in range(max_out_length):
                 with model.icae.disable_adapter():  # no independent decoder; use self.icae
                     out = model.icae(
-                        inputs_embeds=output, past_key_values=past_key_values, use_cache=True
+                        inputs_embeds=output,
+                        past_key_values=past_key_values,
+                        use_cache=True,
                     )
                 # out = decoder(inputs_embeds=output, past_key_values=past_key_values, use_cache=True)
                 logit = out.logits[:, -1, : model.vocab_size - 1]

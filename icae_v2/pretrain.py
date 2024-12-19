@@ -15,7 +15,9 @@ from training_utils import (
 
 
 def main():
-    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
+    parser = transformers.HfArgumentParser(
+        (ModelArguments, DataArguments, TrainingArguments)
+    )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     print(model_args)
@@ -26,7 +28,11 @@ def main():
     }  # manually add this argument in the code
 
     lora_config = LoraConfig(
-        r=model_args.lora_r, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"
+        r=model_args.lora_r,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
     )
 
     # check model_args.mem_size and min_tokens_for_lm
@@ -57,10 +63,16 @@ def main():
         pretrain_tokenize_function,
         batched=True,
         batch_size=64,
-        fn_kwargs={"model": model, "mem": MEM_TOKENS, "lm_ratio": training_args.lm_ratio},
+        fn_kwargs={
+            "model": model,
+            "mem": MEM_TOKENS,
+            "lm_ratio": training_args.lm_ratio,
+        },
     )
     eval_dataset = eval_dataset.map(
-        pretrain_tokenize_function, batched=True, fn_kwargs={"model": model, "mem": MEM_TOKENS}
+        pretrain_tokenize_function,
+        batched=True,
+        fn_kwargs={"model": model, "mem": MEM_TOKENS},
     )  # don't add lm in the dev set.
 
     data_collator = DataCollatorForDynamicPadding(model.pad_token_id)

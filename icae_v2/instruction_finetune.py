@@ -15,7 +15,9 @@ from training_utils import (
 
 
 def main():
-    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
+    parser = transformers.HfArgumentParser(
+        (ModelArguments, DataArguments, TrainingArguments)
+    )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     print(model_args)
@@ -26,7 +28,11 @@ def main():
     }  # manually add this argument in the code
 
     lora_config = LoraConfig(
-        r=model_args.lora_r, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"
+        r=model_args.lora_r,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
     )
 
     # check model_args.mem_size and min_tokens_for_lm
@@ -50,10 +56,14 @@ def main():
     MEM_TOKENS = list(range(model.vocab_size, model.vocab_size + memory_size))
 
     train_dataset = train_dataset.map(
-        instruct_ft_tokenize_function, batched=True, fn_kwargs={"model": model, "mem": MEM_TOKENS}
+        instruct_ft_tokenize_function,
+        batched=True,
+        fn_kwargs={"model": model, "mem": MEM_TOKENS},
     )
     eval_dataset = eval_dataset.map(
-        instruct_ft_tokenize_function, batched=True, fn_kwargs={"model": model, "mem": MEM_TOKENS}
+        instruct_ft_tokenize_function,
+        batched=True,
+        fn_kwargs={"model": model, "mem": MEM_TOKENS},
     )
 
     train_model(model, train_dataset, eval_dataset, training_args)
