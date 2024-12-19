@@ -3,13 +3,20 @@ import os
 import random
 
 import torch
-from transformers import Trainer
+from transformers import Seq2SeqTrainer, Trainer
 from transformers.trainer_utils import get_last_checkpoint
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def train_model(model, train_dataset, eval_dataset, training_args, data_collator=None):
+def train_model(
+    model,
+    train_dataset,
+    eval_dataset,
+    training_args,
+    data_collator=None,
+    compute_metrics=None,
+):
 
     last_checkpoint = None
     if (
@@ -19,7 +26,8 @@ def train_model(model, train_dataset, eval_dataset, training_args, data_collator
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
         if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
             raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
+                f"Output directory ({training_args.output_dir})"
+                " already exists and is not empty. "
                 "Use --overwrite_output_dir to overcome."
             )
         elif (
@@ -45,12 +53,18 @@ def train_model(model, train_dataset, eval_dataset, training_args, data_collator
     if local_rank == 0:
         print(training_args)
 
+    # Seq2SeqTrainer is actually just the same as Trainer
+    # (although it uses a different data collator, i.e., explicit prompt/answer separation)
+    # it just allows `predict_with_generate`
+    # allowing us to compute metrics on the generated outputs
+    # no clue why they call this seq2seq...
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
+        compute_metrics=compute_metrics,
     )
 
     checkpoint = None
