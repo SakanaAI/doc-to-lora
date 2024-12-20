@@ -1,12 +1,16 @@
 import math
 import os
 import random
+from enum import Enum, auto
 
 import torch
 from transformers import Seq2SeqTrainer, Trainer
 from transformers.trainer_utils import get_last_checkpoint
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+TRAINING_TASK = Enum("TRAINING_TASK", ["CAUSAL_LM", "COMPLETION"])
 
 
 def train_model(
@@ -19,7 +23,10 @@ def train_model(
 ):
 
     last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and not training_args.overwrite_output_dir:
+    if (
+        os.path.isdir(training_args.output_dir)
+        and not training_args.overwrite_output_dir
+    ):
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
         if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
             raise ValueError(
@@ -27,7 +34,9 @@ def train_model(
                 " already exists and is not empty. "
                 "Use --overwrite_output_dir to overcome."
             )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+        elif (
+            last_checkpoint is not None and training_args.resume_from_checkpoint is None
+        ):
             print(
                 f"Checkpoint detected, resuming training at {last_checkpoint}. "
                 "To avoid this behavior, change "
@@ -193,7 +202,9 @@ def instruct_ft_tokenize_function(examples, model, mem):
         total_mem_length = num_segments * model.mem_size
 
         prompt_ids = (
-            [mem[0]] * total_mem_length + [model.ft_token_id] + prompt_output["input_ids"][idx]
+            [mem[0]] * total_mem_length
+            + [model.ft_token_id]
+            + prompt_output["input_ids"][idx]
         )
         prompt_ids = (
             [1, 733, 16289, 28793] + prompt_ids + [733, 28748, 16289, 28793]
@@ -216,13 +227,20 @@ class DataCollatorForDynamicPadding:
         self.pad_to_multiple_of = pad_to_multiple_of
 
     def __call__(self, examples):
-        input_ids = [torch.tensor(example["input_ids"], dtype=torch.long) for example in examples]
-        labels = [torch.tensor(example["labels"], dtype=torch.long) for example in examples]
+        input_ids = [
+            torch.tensor(example["input_ids"], dtype=torch.long) for example in examples
+        ]
+        labels = [
+            torch.tensor(example["labels"], dtype=torch.long) for example in examples
+        ]
         prompt_answer_ids = [
-            torch.tensor(example["prompt_answer_ids"], dtype=torch.long) for example in examples
+            torch.tensor(example["prompt_answer_ids"], dtype=torch.long)
+            for example in examples
         ]
         input_ids = self.dynamic_padding(input_ids, fill_value=self.pad_token_id)
-        prompt_answer_ids = self.dynamic_padding(prompt_answer_ids, fill_value=self.pad_token_id)
+        prompt_answer_ids = self.dynamic_padding(
+            prompt_answer_ids, fill_value=self.pad_token_id
+        )
         labels = self.dynamic_padding(labels)
         batch = {
             "input_ids": input_ids,
@@ -237,7 +255,9 @@ class DataCollatorForDynamicPadding:
             max_length = (
                 (max_length - 1) // self.pad_to_multiple_of + 1
             ) * self.pad_to_multiple_of
-        padded_sequences = torch.full((len(sequences), max_length), fill_value, dtype=torch.long)
+        padded_sequences = torch.full(
+            (len(sequences), max_length), fill_value, dtype=torch.long
+        )
         for i, seq in enumerate(sequences):
             padded_sequences[i, : len(seq)] = seq
         return padded_sequences
