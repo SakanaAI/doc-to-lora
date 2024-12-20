@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Union, Tuple, Any
+from typing import Any, Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -46,7 +46,7 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_ids: Optional[torch.LongTensor] = None,
         ctx_attention_mask: Optional[torch.LongTensor] = None,
         **model_inputs_kwargs: dict[str, Any],
-    ) -> Union[Tuple, ModelOutput]:
+    ) -> Union[tuple, ModelOutput]:
         """Forward pass of the modulated model.
 
         Args:

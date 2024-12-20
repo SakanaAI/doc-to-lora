@@ -1,8 +1,8 @@
-import pandas as pd
-from typing import Literal, List, Dict, Any, Tuple, Iterator, Callable, Optional, Union
-from transformers import PreTrainedTokenizerBase
+from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
+import pandas as pd
 from training_utils import TRAINING_TASK
+from transformers import PreTrainedTokenizerBase
 
 IGNORE_INDEX = -100
 
@@ -10,7 +10,7 @@ IGNORE_INDEX = -100
 def get_sft_prompt_formatting_fn(
     sft_mode: TRAINING_TASK,
     tokenizer: PreTrainedTokenizerBase,
-) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """
     Get a function that formats examples for supervised fine-tuning.
 
@@ -70,9 +70,9 @@ def get_sft_prompt_formatting_fn(
 
 
 def convert_ctx_prompt_response_to_messages(
-    example: Dict[str, Any],
+    example: dict[str, Any],
     add_ctx_to_chat: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Convert context/prompt/response format to chat messages format.
 
@@ -106,7 +106,7 @@ def convert_ctx_prompt_response_to_messages(
     return example
 
 
-def get_preprocessing_fn(ds_name: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """
     Get preprocessing function for a specific dataset.
 
@@ -230,9 +230,9 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[Dict[str, Any]], Dict[str, A
 
 # taken from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
 def get_assistant_start_end_indices(
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
     conversation_text: str,
-) -> List[Tuple[int, int]]:
+) -> list[tuple[int, int]]:
     """
     Get the start and end indices of assistant messages in conversation text.
 
@@ -263,8 +263,8 @@ def get_assistant_start_end_indices(
 
 
 def get_masked_labels(
-    conversation_ids: Dict[str, List[Any]],
-    assistant_ranges: List[Tuple[int, int]],
+    conversation_ids: dict[str, list[Any]],
+    assistant_ranges: list[tuple[int, int]],
 ) -> Iterator[int]:
     """
     Generate masked labels for conversation, masking non-assistant tokens.
@@ -290,11 +290,11 @@ def get_masked_labels(
 
 
 def tokenize_chat_messages(
-    example: Dict[str, Any],
+    example: dict[str, Any],
     tokenizer: PreTrainedTokenizerBase,
     mask_assistant_inputs: bool = True,
-    tokenizer_kwargs: Optional[Dict[str, Any]] = None,
-) -> Dict[str, List[int]]:
+    tokenizer_kwargs: Optional[dict[str, Any]] = None,
+) -> dict[str, list[int]]:
     """
     Tokenize chat messages and optionally mask non-assistant tokens.
 

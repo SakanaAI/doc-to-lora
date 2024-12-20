@@ -1,29 +1,27 @@
 import logging
+
 import numpy as np
 import torch
-
-from datasets import load_dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    HfArgumentParser,
-    TrainingArguments,
-    DataCollatorForSeq2Seq,
-    EvalPrediction,
-)
-
-
-from configs import CtxTrainingArguments, LoRAArguments, ModelArguments, ExperimentSetup
-from utils import log_num_train_params
-from model_loading import get_model_and_tokenizer, get_lora_config
-from modeling_utils import ModulatedPretrainedModel
+from configs import CtxTrainingArguments, ExperimentSetup, LoRAArguments, ModelArguments
 from data_utils import (
     convert_ctx_prompt_response_to_messages,
     get_preprocessing_fn,
     get_sft_prompt_formatting_fn,
     tokenize_chat_messages,
 )
+from datasets import load_dataset
+from model_loading import get_lora_config, get_model_and_tokenizer
+from modeling_utils import ModulatedPretrainedModel
 from training_utils import TRAINING_TASK, train_model
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    DataCollatorForSeq2Seq,
+    EvalPrediction,
+    HfArgumentParser,
+    TrainingArguments,
+)
+from utils import log_num_train_params
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +69,6 @@ def main():
     training_args.gradient_checkpointing_kwargs = {
         "use_reentrant": False
     }  # manually add this argument in the code
-
-    # "meta-llama/Llama-3.1-8B-Instruct",
-
-    # model = AutoModelForCausalLM.from_pretrained(
-    #     base_model_name,
-    #     torch_dtype=torch.bfloat16,
-    #     attn_implementation="flash_attention_2",
-    # )
-    # tokenizer = AutoTokenizer.from_pretrained(base_model_name)
-    # tokenizer.pad_token_id = tokenizer.eos_token_id
-    # tokenizer.padding_side = "right"
 
     model_name = model_args.model_name_or_path
 
@@ -134,12 +121,6 @@ def main():
         "train": tokenized_ds["train"].select(range(100)),
         "val": tokenized_ds["eval"],
     }
-
-    # train_ds = dataset["train"].map(tokenize, batched=True)
-    # eval_ds = {
-    #     "train": dataset["train"].select(range(100)).map(tokenize, batched=True),
-    #     "val": dataset["eval"].map(tokenize, batched=True),
-    # }
 
     # DataCollatorForSeq2Seq also pads the `labels`
     # useful when we're computing the labels manually

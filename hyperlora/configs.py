@@ -2,8 +2,8 @@ import dataclasses
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 from enum import Enum, auto
+from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 
 from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
 
@@ -40,7 +40,7 @@ class LoRAArguments:
         default=0.05,
         metadata={"help": ("LoRA dropout.")},
     )
-    target_modules: Optional[List[str]] = field(
+    target_modules: Optional[list[str]] = field(
         default=None,
         metadata={"help": ("LoRA target modules.")},
     )

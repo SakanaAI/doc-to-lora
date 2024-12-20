@@ -2,13 +2,10 @@ import logging
 import os
 
 import torch
-from peft import PeftModel, LoraConfig, VeraConfig, PeftConfig
+from peft import LoraConfig, PeftConfig, PeftModel, VeraConfig
 from peft import get_peft_config as _get_peft_config
 from peft.utils import PeftType
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
-
-from hyper_llm_modulator.utils.pooling import get_pooling_fn
-from hyper_llm_modulator.utils.preprocessing import add_full_stop, apply_sfr_template
+from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 
 logger = logging.getLogger()
 
