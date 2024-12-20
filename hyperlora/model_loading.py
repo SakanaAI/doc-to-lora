@@ -101,7 +101,6 @@ def get_model(
     device="cuda:0",
     dtype=torch.bfloat16,
 ):
-    # TODO: we could use lower precision during finetuning
     model_init_kwargs = dict(
         pretrained_model_name_or_path=model_name_or_path,
         device_map=device,

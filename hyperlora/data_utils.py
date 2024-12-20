@@ -314,7 +314,7 @@ def tokenize_chat_messages(
         text,
         return_offsets_mapping=mask_assistant_inputs,
         add_special_tokens=False,
-        **tokenizer_kwargs if tokenizer_kwargs is not None else {},
+        **(tokenizer_kwargs or {}),
     )
     if mask_assistant_inputs:
         assistant_ranges = get_assistant_start_end_indices(messages, text)
