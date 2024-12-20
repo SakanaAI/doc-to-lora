@@ -1,4 +1,6 @@
+import numpy as np
 import torch
+
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -28,13 +30,13 @@ def compute_metrics(eval_pred) -> dict:
         dictionary containing metric names (str) and values (Any)
     """
     # compute per token accuracy
-    preds, labels = eval_pred.predictions, eval_pred.label_ids
+    logits, labels = eval_pred.predictions, eval_pred.label_ids
 
-    valid_mask = labels != -100
-    valid_preds = preds[valid_mask].argmax(-1)
-    valid_labels = labels[valid_mask]
-    acc = (valid_preds == valid_labels).mean()
-    return {"per_token_acc": acc}
+    shift_logits = logits[..., :-1, :]
+    shift_labels = labels[..., 1:]
+    indices = np.where(shift_labels != -100)
+    acc = (shift_logits.argmax(-1) == shift_labels)[indices].mean()
+    return {"per_token_acc": acc, "num_valid_tokens": indices[0].size}
 
 
 def main():
@@ -58,8 +60,8 @@ def main():
     }  # manually add this argument in the code
 
     model = AutoModelForCausalLM.from_pretrained(
-        "meta-llama/Llama-3.1-8B-Instruct",
-        # "meta-llama/Llama-3.2-1B-Instruct",
+        # "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.2-1B-Instruct",
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
@@ -131,7 +133,14 @@ def main():
     # tokenize the chat + mask the assistant inputs
     tokenized_ds = ds.map(
         tokenize_chat_messages,
-        fn_kwargs={"tokenizer": tokenizer, "mask_assistant_inputs": True},
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "mask_assistant_inputs": True,
+            "tokenizer_kwargs": {
+                "add_special_tokens": False,
+                "max_length": max_seq_len,
+            },
+        },
         remove_columns=ds["train"].column_names,
     )
     train_ds = tokenized_ds["train"]

@@ -190,6 +190,7 @@ def get_preprocessing_fn(ds_name):
 #     return tokenize_function
 
 
+# taken from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
 def get_assistant_start_end_indices(messages, conversation_text):
     """
     Get the start and end indices of the assistant's messages in the conversation text.
@@ -221,14 +222,19 @@ def get_masked_labels(conversation_ids, assistant_ranges):
             yield IGNORE_INDEX
 
 
-def tokenize_chat_messages(example, tokenizer, mask_assistant_inputs=True):
+def tokenize_chat_messages(
+    example,
+    tokenizer,
+    mask_assistant_inputs=True,
+    tokenizer_kwargs=None,
+):
     # should be used only with chat models
     text = example["chat"]
     messages = example["messages"]
     conversation_ids = tokenizer(
         text,
         return_offsets_mapping=mask_assistant_inputs,
-        add_special_tokens=False,
+        **tokenizer_kwargs if tokenizer_kwargs is not None else {},
     )
     if mask_assistant_inputs:
         assistant_ranges = get_assistant_start_end_indices(messages, text)
@@ -260,5 +266,5 @@ if __name__ == "__main__":
         {"chat": chat, "messages": messages}, tokenizer
     )
 
-    print(tokenizer(chat))
-    breakpoint()
+    print(tokenizer(chat, add_special_tokens=False))
+    print(model_inputs)
