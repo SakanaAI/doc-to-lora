@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Literal
+from typing import Literal, List, Dict, Any, Tuple, Iterator, Callable, Optional, Union
 from transformers import PreTrainedTokenizerBase
 
 from training_utils import TRAINING_TASK
@@ -10,7 +10,20 @@ IGNORE_INDEX = -100
 def get_sft_prompt_formatting_fn(
     sft_mode: TRAINING_TASK,
     tokenizer: PreTrainedTokenizerBase,
-):
+) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Get a function that formats examples for supervised fine-tuning.
+
+    Args:
+        sft_mode: The training task type
+        tokenizer: The tokenizer to use for chat template application
+
+    Returns:
+        A function that takes a training example and returns formatted data
+
+    Raises:
+        NotImplementedError: If sft_mode is not COMPLETION or tokenizer has no chat template
+    """
     if sft_mode != TRAINING_TASK.COMPLETION:
         raise NotImplementedError(
             f"Training task {sft_mode} not supported. "
@@ -56,7 +69,23 @@ def get_sft_prompt_formatting_fn(
     return f_intx
 
 
-def convert_ctx_prompt_response_to_messages(example, add_ctx_to_chat=True):
+def convert_ctx_prompt_response_to_messages(
+    example: Dict[str, Any],
+    add_ctx_to_chat: bool = True,
+) -> Dict[str, Any]:
+    """
+    Convert context/prompt/response format to chat messages format.
+
+    Args:
+        example: Dictionary containing 'prompt' and 'response' keys
+        add_ctx_to_chat: Whether to prepend context to the user message
+
+    Returns:
+        Dictionary with added 'messages' key containing chat format
+
+    Raises:
+        ValueError: If 'prompt' or 'response' keys are missing
+    """
     if "prompt" not in example or "response" not in example:
         raise ValueError(f"'prompt' and 'response' are required. Got: {example}")
 
@@ -77,7 +106,16 @@ def convert_ctx_prompt_response_to_messages(example, add_ctx_to_chat=True):
     return example
 
 
-def get_preprocessing_fn(ds_name):
+def get_preprocessing_fn(ds_name: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Get preprocessing function for a specific dataset.
+
+    Args:
+        ds_name: Name of the dataset
+
+    Returns:
+        A preprocessing function that takes and returns a dictionary
+    """
     f = lambda x: x
 
     # if ds_name == "context_numbers":
@@ -191,16 +229,28 @@ def get_preprocessing_fn(ds_name):
 
 
 # taken from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
-def get_assistant_start_end_indices(messages, conversation_text):
+def get_assistant_start_end_indices(
+    messages: List[Dict[str, str]],
+    conversation_text: str,
+) -> List[Tuple[int, int]]:
     """
-    Get the start and end indices of the assistant's messages in the conversation text.
+    Get the start and end indices of assistant messages in conversation text.
+
+    Args:
+        messages: List of message dictionaries with 'role' and 'content' keys
+        conversation_text: Full conversation text
+
+    Returns:
+        List of (start, end) index tuples for assistant messages
     """
     start_indices = []
+    # end_indices = []
     current_index = 0
     for message in messages:
         message_text = message["content"]
         match_index = conversation_text[current_index:].find(message_text)
         start_indices.append(current_index + match_index)
+        # end_indices.append(current_index + match_index + len(message_text))
         current_index += match_index + len(message_text)
     end_indices = [
         len(conversation_text) if i == len(start_indices) - 1 else start_indices[i + 1]
@@ -212,7 +262,24 @@ def get_assistant_start_end_indices(messages, conversation_text):
     ]
 
 
-def get_masked_labels(conversation_ids, assistant_ranges):
+def get_masked_labels(
+    conversation_ids: Dict[str, List[Any]],
+    assistant_ranges: List[Tuple[int, int]],
+) -> Iterator[int]:
+    """
+    Generate masked labels for conversation, masking non-assistant tokens.
+    NOTE: This will also includes extra tokens between assistant and user messages
+    in multi-turn conversations.
+    E.g., {assistant_msg} <|eot_id|><|start_header_id|>user<|end_header_id|> {user_msg}
+    for Llama 3 models.
+
+    Args:
+        conversation_ids: Dictionary with tokenized conversation info
+        assistant_ranges: List of (start, end) indices for assistant messages
+
+    Yields:
+        Token ID or IGNORE_INDEX for each position
+    """
     for id_, (id_s, id_e) in list(
         zip(conversation_ids["input_ids"], conversation_ids["offset_mapping"])
     ):
@@ -223,17 +290,30 @@ def get_masked_labels(conversation_ids, assistant_ranges):
 
 
 def tokenize_chat_messages(
-    example,
-    tokenizer,
-    mask_assistant_inputs=True,
-    tokenizer_kwargs=None,
-):
+    example: Dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+    mask_assistant_inputs: bool = True,
+    tokenizer_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, List[int]]:
+    """
+    Tokenize chat messages and optionally mask non-assistant tokens.
+
+    Args:
+        example: Dictionary containing 'chat' and 'messages' keys
+        tokenizer: Tokenizer to use
+        mask_assistant_inputs: Whether to mask non-assistant tokens
+        tokenizer_kwargs: Additional arguments to pass to tokenizer
+
+    Returns:
+        Dictionary containing tokenized inputs and labels
+    """
     # should be used only with chat models
     text = example["chat"]
     messages = example["messages"]
     conversation_ids = tokenizer(
         text,
         return_offsets_mapping=mask_assistant_inputs,
+        add_special_tokens=False,
         **tokenizer_kwargs if tokenizer_kwargs is not None else {},
     )
     if mask_assistant_inputs:

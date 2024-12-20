@@ -8,6 +8,7 @@ from transformers import (
     HfArgumentParser,
     TrainingArguments,
     DataCollatorForSeq2Seq,
+    EvalPrediction,
 )
 
 
@@ -21,7 +22,7 @@ from data_utils import (
 from training_utils import TRAINING_TASK, train_model
 
 
-def compute_metrics(eval_pred) -> dict:
+def compute_metrics(eval_pred: EvalPrediction) -> dict:
     """
     Custom metrics function for the trainer
     Args:
@@ -137,7 +138,6 @@ def main():
             "tokenizer": tokenizer,
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": {
-                "add_special_tokens": False,
                 "max_length": max_seq_len,
             },
         },
