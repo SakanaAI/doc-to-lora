@@ -10,6 +10,8 @@ from data_utils import (
     tokenize_chat_messages,
 )
 from datasets import load_dataset
+
+from configs import ArgumentParser
 from model_loading import get_lora_config, get_model_and_tokenizer
 from modeling_utils import ModulatedPretrainedModel
 from training_utils import TRAINING_TASK, train_model
@@ -48,10 +50,10 @@ def main():
     # Set logging verbosity to INFO
     logging.basicConfig(level=logging.INFO)
 
-    parser = HfArgumentParser(
+    parser = ArgumentParser(
         (CtxTrainingArguments, ModelArguments, LoRAArguments, TrainingArguments)
     )
-    ctx_args, model_args, lora_args, training_args = parser.parse_args_into_dataclasses()
+    ctx_args, model_args, lora_args, training_args = parser.parse()
 
     training_args.label_names = ["labels"]
     training_args.eval_on_start = True
@@ -85,13 +87,14 @@ def main():
         # activate LoRA
         model.set_adapter("default")
 
+    print(model)
     log_num_train_params(model)
 
     # max_seq_len = 1024
 
     print("Loading dataset...")
-    train_file = "../data/raw_datasets/context_numbers/train.jsonl"
-    eval_file = "../data/raw_datasets/context_numbers/val.jsonl"
+    train_file = "data/raw_datasets/context_numbers/train.jsonl"
+    eval_file = "data/raw_datasets/context_numbers/val.jsonl"
     ds = load_dataset("json", data_files={"train": train_file, "eval": eval_file})
     # preprocessing
     ds = ds.map(get_preprocessing_fn("context_numbers"))
