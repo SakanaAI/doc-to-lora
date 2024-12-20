@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import torch
 
@@ -12,6 +13,9 @@ from transformers import (
 )
 
 
+from configs import CtxTrainingArguments, LoRAArguments, ModelArguments, ExperimentSetup
+from utils import log_num_train_params
+from model_loading import get_model_and_tokenizer, get_lora_config
 from modeling_utils import ModulatedPretrainedModel
 from data_utils import (
     convert_ctx_prompt_response_to_messages,
@@ -20,6 +24,8 @@ from data_utils import (
     tokenize_chat_messages,
 )
 from training_utils import TRAINING_TASK, train_model
+
+logger = logging.getLogger(__name__)
 
 
 def compute_metrics(eval_pred: EvalPrediction) -> dict:
@@ -41,9 +47,15 @@ def compute_metrics(eval_pred: EvalPrediction) -> dict:
 
 
 def main():
-    parser = HfArgumentParser((TrainingArguments,))
-    training_args, *_ = parser.parse_args_into_dataclasses()
+    # Set logging verbosity to INFO
+    logging.basicConfig(level=logging.INFO)
 
+    parser = HfArgumentParser(
+        (CtxTrainingArguments, ModelArguments, LoRAArguments, TrainingArguments)
+    )
+    ctx_args, model_args, lora_args, training_args = parser.parse_args_into_dataclasses()
+
+    training_args.label_names = ["labels"]
     training_args.eval_on_start = True
     training_args.eval_strategy = "steps"
     training_args.eval_steps = 500
@@ -60,61 +72,35 @@ def main():
         "use_reentrant": False
     }  # manually add this argument in the code
 
-    model = AutoModelForCausalLM.from_pretrained(
-        # "meta-llama/Llama-3.1-8B-Instruct",
-        "meta-llama/Llama-3.2-1B-Instruct",
-        torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+    # "meta-llama/Llama-3.1-8B-Instruct",
+
+    # model = AutoModelForCausalLM.from_pretrained(
+    #     base_model_name,
+    #     torch_dtype=torch.bfloat16,
+    #     attn_implementation="flash_attention_2",
+    # )
+    # tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+    # tokenizer.pad_token_id = tokenizer.eos_token_id
+    # tokenizer.padding_side = "right"
+
+    model_name = model_args.model_name_or_path
+
+    model, tokenizer = get_model_and_tokenizer(
+        **vars(model_args),
+        train=True,
+        requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
+        peft_config=get_lora_config(model_name, **vars(lora_args)),
     )
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
-    tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.padding_side = "right"
+    if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
+        hypernet = ...
+        model = ModulatedPretrainedModel(model, hypernet)
+    else:
+        # activate LoRA
+        model.set_adapter("default")
 
-    max_seq_len = 1024
+    log_num_train_params(model)
 
-    # if isinstance(model, ModulatedPretrainedModel):
-
-    #     # TODO: how to tokenize properly?
-    #     def tokenize(example):
-    #         model_inputs = tokenizer(
-    #             example["prompt"],
-    #             truncation=True,
-    #             padding=False,
-    #         )
-    #         model_inputs["ctx_ids"] = tokenizer(example["context"]).input_ids
-    #         model_inputs["ctx_attention_mask"] = tokenizer(
-    #             example["context"]
-    #         ).attention_mask
-    #         model_inputs["labels"] = ...
-    #         return model_inputs
-
-    # else:
-
-    #     def tokenize(example):
-    #         inp = [
-    #             ctx + "\n" + prompt
-    #             for ctx, prompt in zip(example["context"], example["prompt"])
-    #         ]
-    #         model_inputs = tokenizer(
-    #             inp,
-    #             example["answer"],
-    #             add_special_tokens=False,
-    #             truncation=True,
-    #             padding=False,
-    #             max_length=max_seq_len,
-    #         )
-
-    #         input_ids = model_inputs["input_ids"]
-    #         labels = [None] * len(input_ids)
-
-    #         for i in range(len(input_ids)):
-    #             sequence_ids = model_inputs.sequence_ids(i)
-    #             labels[i] = [
-    #                 -100 if sequence_id == 0 else label
-    #                 for sequence_id, label in zip(sequence_ids, input_ids[i])
-    #             ]
-    #         model_inputs["labels"] = labels
-    #         return model_inputs
+    # max_seq_len = 1024
 
     print("Loading dataset...")
     train_file = "../data/raw_datasets/context_numbers/train.jsonl"
@@ -138,7 +124,7 @@ def main():
             "tokenizer": tokenizer,
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": {
-                "max_length": max_seq_len,
+                "max_length": None,
             },
         },
         remove_columns=ds["train"].column_names,
@@ -158,8 +144,12 @@ def main():
     # DataCollatorForSeq2Seq also pads the `labels`
     # useful when we're computing the labels manually
     # or masking the loss only on completion
+    # TODO: change to a faster collator? e.g.,
+    # https://huggingface.co/blog/packing-with-FA2
     data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
 
+    # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
+    # TODO: use packing with SFTTrainer
     train_model(
         model,
         train_ds,
