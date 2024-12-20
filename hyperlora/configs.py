@@ -43,7 +43,6 @@ class ArgumentParser(HfArgumentParser):
 
         # overwrite the default/loaded value with the value provided to the command line
         # adapted from https://github.com/huggingface/transformers/blob/d0b5002378daabf62769159add3e7d66d3f83c3b/src/transformers/hf_argparser.py#L327
-        print(arg_list)
         for data_yaml, data_class in zip(arg_list, self.dataclass_types):
             keys = {f.name for f in dataclasses.fields(data_yaml) if f.init}
             inputs = {k: v for k, v in vars(data_yaml).items() if k in keys}

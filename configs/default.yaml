@@ -1,4 +1,3 @@
-output_dir: train_outputs/
 bf16: true
 target_modules:
   - down_proj

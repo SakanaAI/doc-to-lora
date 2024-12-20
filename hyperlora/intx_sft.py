@@ -1,4 +1,7 @@
 import logging
+import random
+import string
+import time
 
 import numpy as np
 import torch
@@ -63,6 +66,14 @@ def main():
     # training_args.save_steps = 500
     training_args.logging_strategy = "steps"
     training_args.logging_steps = 100
+
+    uuid = "".join(
+        [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
+    )
+    run_name = time.strftime("%Y%m%d-%H%M%S") + f"_{uuid}"
+
+    training_args.output_dir = f"train_outputs/{run_name}"
+    training_args.logging_dir = f"train_outputs/{run_name}"
 
     # seq2seq args for generation evaluation
     # training_args.predict_with_generate = True
