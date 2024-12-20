@@ -30,11 +30,12 @@ def compute_metrics(eval_pred) -> dict:
     # decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
     # compute per token accuracy
-    predictions, labels = eval_pred.predictions, eval_pred.label_ids
+    preds, labels = eval_pred.predictions, eval_pred.label_ids
 
-    # predictions is logits for Trainer
-    preds = predictions.argmax(-1)
-    acc = (preds == labels).mean()
+    valid_mask = labels != -100
+    valid_preds = preds[valid_mask].argmax(-1)
+    valid_labels = labels[valid_mask]
+    acc = (valid_preds == valid_labels).mean()
     return {"per_token_acc": acc}
 
 
