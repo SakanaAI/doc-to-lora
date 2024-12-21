@@ -1,8 +1,8 @@
-from typing import Optional
-from jaxtyping import Float, Integer
 from enum import Enum
+from typing import Optional
 
 import torch
+from jaxtyping import Float, Integer
 from torch import Tensor
 from torch.nn import functional as F
 

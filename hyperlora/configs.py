@@ -1,13 +1,12 @@
 import dataclasses
 import os
 import sys
-import yaml
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 
+import yaml
 from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
-
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -18,8 +17,8 @@ DataClassType = NewType("DataClassType", Any)
 
 class ArgumentParser(HfArgumentParser):
     def parse_yaml_and_args(
-        self, yaml_arg: str, other_args: Optional[List[str]] = None
-    ) -> List[dataclass]:
+        self, yaml_arg: str, other_args: Optional[list[str]] = None
+    ) -> list[dataclass]:
         """
         Parse a YAML file and overwrite the default/loaded values with the values provided to the command line.
 
@@ -84,7 +83,7 @@ class ArgumentParser(HfArgumentParser):
 
         return outputs
 
-    def parse(self) -> DataClassType | Tuple[DataClassType]:
+    def parse(self) -> DataClassType | tuple[DataClassType]:
         if len(sys.argv) == 2 and sys.argv[1].endswith(".yaml"):
             # If we pass only one argument to the script and it's the path to a YAML file,
             # let's parse it to get our arguments.
