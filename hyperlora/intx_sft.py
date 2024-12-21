@@ -204,9 +204,10 @@ def main():
 
 
 def validate_columns(tokenized_ds):
-    ref_cols = set(
-        ["input_ids", "attention_mask", "labels", "ctx_features", "ctx_attn_mask"]
-    )
+    cols = ["input_ids", "attention_mask", "labels"]
+    if "ctx_features" in tokenized_ds["train"].column_names:
+        cols += ["ctx_features", "ctx_attn_mask"]
+    ref_cols = set(cols)
     assert (
         set(tokenized_ds["train"].column_names) == ref_cols
     ), f"Columns mismatch: {set(tokenized_ds['train'].column_names)} != {ref_cols}"
