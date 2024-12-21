@@ -137,7 +137,7 @@ class ModelArguments:
 
 @dataclass
 class LoRAArguments:
-    r: Optional[int] = field(
+    lora_r: Optional[int] = field(
         default=8,
         metadata={"help": ("LoRA R value.")},
     )

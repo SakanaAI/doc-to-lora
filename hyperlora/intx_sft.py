@@ -63,30 +63,14 @@ def main():
     )
     ctx_args, model_args, lora_args, training_args = parser.parse()
 
-    training_args.label_names = ["labels"]
-    training_args.eval_on_start = True
-    training_args.eval_strategy = "steps"
-    training_args.eval_steps = 500
-    training_args.save_strategy = "no"
-    # training_args.save_steps = 500
-    training_args.logging_strategy = "steps"
-    training_args.logging_steps = 100
-
     uuid = "".join(
         [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
     )
     run_name = time.strftime("%Y%m%d-%H%M%S") + f"_{uuid}"
 
+    training_args.run_name = run_name
     training_args.output_dir = f"train_outputs/{run_name}"
     training_args.logging_dir = f"train_outputs/{run_name}"
-
-    # seq2seq args for generation evaluation
-    # training_args.predict_with_generate = True
-    # training_args.generation_max_length = 100
-
-    training_args.gradient_checkpointing_kwargs = {
-        "use_reentrant": False
-    }  # manually add this argument in the code
 
     model_name = model_args.model_name_or_path
 

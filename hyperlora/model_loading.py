@@ -128,13 +128,13 @@ def get_model(
 
 
 def get_lora_config(model_dir, **kwargs):
-    r = kwargs.get("r", 8)
+    r = kwargs.pop("lora_r", 8)
     peft_conf_kwargs = dict(
         r=r,
         peft_type=PeftType.LORA,
         base_model_name_or_path=model_dir,
         task_type="CAUSAL_LM",
-        lora_dropout=0.05,
+        lora_dropout=kwargs.get("lora_dropout", 0.05),
         lora_alpha=r ** (3 / 2) * 2,
     )
 

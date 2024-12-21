@@ -1,0 +1,4 @@
+einops
+jaxtyping
+schedulefree
+liger-kernel
