@@ -10,6 +10,7 @@ save_strategy: "no"
 logging_strategy: "steps"
 logging_steps: 100
 use_liger_kernel: true
+remove_unused_columns: false
 
 optim: schedule_free_adamw
 learning_rate: 0.00001
