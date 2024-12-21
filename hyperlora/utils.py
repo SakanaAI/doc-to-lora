@@ -3,6 +3,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def get_layers(model):
+    if hasattr(model, "model"):
+        return get_layers(model.model)
+    return model.layers
+
+
+def get_num_layers(model):
+    return len(get_layers(model))
+
+
 def get_num_params(model):
     total_params = 0
     trainable_params = 0

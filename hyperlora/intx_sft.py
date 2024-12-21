@@ -136,6 +136,8 @@ def main():
         "val": tokenized_ds["eval"],
     }
 
+    # TODO: computes ctx_features offline
+
     # DataCollatorForSeq2Seq also pads the `labels`
     # useful when we're computing the labels manually
     # or masking the loss only on completion

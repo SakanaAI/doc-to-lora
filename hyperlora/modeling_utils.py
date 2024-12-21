@@ -12,72 +12,124 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 from model_loading import get_lora_config, get_model_and_tokenizer
+from utils import get_num_layers
+from pooling import get_pooling_fn, POOL_FN
 
 logger = logging.getLogger(__name__)
-
-
-def inv_bool_mask(m: Integer[Tensor, "bs seq_len"]) -> Integer[Tensor, "bs seq_len 1"]:
-    return (m - 1).bool().unsqueeze(-1)
 
 
 # TODO: implement Perceiver
 class Perceiver(nn.Module): ...
 
 
-class MeanPool(nn.Module):
-    def forward(
+class Mixer(nn.Module):
+    def __init__(
         self,
-        features: Float[Tensor, "bs seq_len feature_dim"],
-        attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        input_size: int,
+        intermediate_emb_size: int,
+        output_size: int,
     ):
-        if attn_mask is not None:
-            features = features.masked_fill(inv_bool_mask(attn_mask), 0)
-        return features.sum(dim=1, keepdim=True) / attn_mask.sum(
-            dim=1, keepdim=True
-        ).unsqueeze(2)
+        super().__init__()
+        self.gate_proj = nn.Linear(input_size, intermediate_emb_size, bias=False)
+        self.up_proj = nn.Linear(input_size, intermediate_emb_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_emb_size, output_size, bias=False)
+        self.act_fn = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 
-class MaxPool(nn.Module):
-    def forward(
+class MLPResidualBlock(nn.Module):
+    def __init__(
         self,
-        features: Float[Tensor, "bs seq_len feature_dim"],
-        attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        input_size: int,
+        hidden_size: int,
+        output_size: int,
+        pre_layer_norm: bool = True,
+        post_dropout: bool = True,
     ):
-        if attn_mask is not None:
-            features = features.masked_fill(inv_bool_mask(attn_mask), -float("inf"))
-        return torch.max(features, dim=1, keepdim=True)
+        super().__init__()
+        layers = []
+        if pre_layer_norm:
+            layers.append(nn.LayerNorm(input_size))
+        layers += [
+            nn.Dropout(0.05),
+            nn.Linear(input_size, hidden_size),
+            nn.SiLU(),
+            nn.Dropout(0.05),
+            nn.Linear(hidden_size, output_size),
+            nn.SiLU(),
+        ]
+        if post_dropout:
+            layers.append(nn.Dropout(0.05))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return x + self.mlp(x)
 
 
-class LastTokenPool(nn.Module):
-    def forward(
+class Pooler(nn.Module):
+    def __init__(
         self,
-        features: Float[Tensor, "bs seq_len feature_dim"],
-        attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        feature_size: int,
+        output_size: int,
+        pooling_type: POOL_FN,
+        num_layers: int,
+        num_modules: int,
     ):
-        last_hidden_states = (
-            features["hidden_states"][-1]
-            if "hidden_states" in features
-            else features["last_hidden_state"]
+        super().__init__()
+        self.num_layers = num_layers
+        self.num_modules = num_modules
+
+        self.pool_fn = get_pooling_fn(pooling_type)
+        self.feature_proj = nn.Linear(feature_size, output_size)
+        self.ln = nn.LayerNorm(output_size)
+        self.layer_embs = nn.Sequential(
+            nn.Embedding(num_layers, output_size // 2),
+            nn.LayerNorm(output_size // 2),
         )
+        self.module_embs = nn.Sequential(
+            nn.Embedding(num_modules, output_size // 2),
+            nn.LayerNorm(output_size // 2),
+        )
+        self.mixer = Mixer(output_size * 2, output_size * 8, output_size * 2)
+        self.mlp = MLPResidualBlock(output_size * 2, output_size * 8, output_size * 2)
 
-        left_padding = attn_mask[:, -1].sum() == attn_mask.shape[0]
-        if left_padding:
-            return last_hidden_states[:, -1]
-        else:
-            sequence_lengths = attn_mask.sum(dim=1) - 1
-            batch_size = last_hidden_states.shape[0]
-            return last_hidden_states[
-                torch.arange(batch_size, device=last_hidden_states.device),
-                sequence_lengths,
-            ]
+        self.register_buffer("layer_indices", torch.arange(num_layers))
+        self.register_buffer("module_indices", torch.arange(num_modules))
+
+    def forward(
+        self,
+        features: Float[Tensor, "bs seq_len feature_dim"],
+        attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    ):
+        bs = features.shape[0]
+
+        # [bs, feature_dim]
+        x = self.ln(self.feature_proj(self.pool_fn(features, attn_mask).float()))
+        # [bs, feature_dim] -> [bs, num_modules, num_layers, feature_dim]
+        x = x.expand(self.num_modules, self.num_layers, -1, -1)
+        x = x.permute((2, 0, 1, 3))
+
+        layer_embs = self.layer_embs(self.layer_indices)  # [num_layers, d]
+        # [num_layers, d] -> [bs, num_modules, num_layers, d]
+        layer_embs = layer_embs.expand(bs, self.num_modules, -1, -1)
+
+        module_embs = self.module_embs(self.module_indices)  # [num_modules, d]
+        # [num_modules, d] -> [bs, num_modules, num_layers, d]
+        module_embs = module_embs.expand(bs, self.num_layers, -1, -1).transpose(1, 2)
+
+        emb = torch.cat([x, layer_embs, module_embs], dim=3)
+        return self.mlp(self.mixer(emb))
 
 
-AGGREGATOR = Enum("AGGREGATOR", ["MEAN", "MAX", "PERCEIVER", "LAST_TOKEN"])
+AGGREGATOR = Enum("AGGREGATOR", ["POOLER", "PERCEIVER"])
 
 AGGREGATOR_CLS = {
-    AGGREGATOR.MEAN: MeanPool,
-    AGGREGATOR.MAX: MaxPool,
-    AGGREGATOR.LAST_TOKEN: LastTokenPool,
+    # AGGREGATOR.MEAN: MeanPool,
+    # AGGREGATOR.MAX: MaxPool,
+    # AGGREGATOR.LAST_TOKEN: LastTokenPool,
+    AGGREGATOR.POOLER: Pooler,
     AGGREGATOR.PERCEIVER: Perceiver,
 }
 
@@ -86,12 +138,27 @@ class HyperLoRA(nn.Module):
     def __init__(
         self,
         lora_config: LoraConfig,
+        layer_indices: Integer[Tensor, "num_layers"],
         aggregator: AGGREGATOR,
         aggregator_kwargs: Optional[dict[str, Any]] = None,
     ):
         super().__init__()
-        self.lora_config = lora_config
+        # TODO: aggregator should output
+        # [bs, n_modules, n_layers, feature_dim]
+        # by mixing the pooled features with layer embs and module embs (for pooling)
+        # or via a perceiver w/ bottleneck size = n_modules * n_layers
+
+        # NOTE: this class then only handles the output space of the hypernet
+        # e.g., shared_AB_head, per_rank_gen, etc.
         self.aggregator = AGGREGATOR_CLS[aggregator](**(aggregator_kwargs or {}))
+
+        self.lora_config = lora_config
+
+        self.target_modules = lora_config.target_modules
+        self.layer_indices = layer_indices
+
+        self.in_features = ...
+        self.out_features = ...
 
     def forward(
         self,
@@ -151,6 +218,7 @@ class ModulatedPretrainedModel(nn.Module):
 
         loss = ...
         logits = ...
+        # TODO: get ctx_features offline
         features = self.get_ctx_features(ctx_ids, ctx_attn_mask)
         generated_loras = self.hypernet(features, ctx_attn_mask)
 
@@ -174,8 +242,21 @@ if __name__ == "__main__":
         peft_config=get_lora_config(model_name),
     )
     print(base_model)
-    hypernet = HyperLoRA(base_model.peft_config, aggregator=AGGREGATOR.MEAN)
-    model = ModulatedPretrainedModel(base_model, hypernet)
+    peft_config = base_model.peft_config["default"]
+
+    hypernet = HyperLoRA(
+        peft_config,
+        torch.arange(get_num_layers(base_model), device=base_model.device),
+        aggregator=AGGREGATOR.POOLER,
+        aggregator_kwargs={
+            "feature_size": base_model.config.hidden_size,
+            "output_size": 128,
+            "num_layers": get_num_layers(base_model),
+            "num_modules": len(peft_config.target_modules),
+            "pooling_type": POOL_FN.MEAN,
+        },
+    ).to(base_model.device)
+    model = ModulatedPretrainedModel(base_model, hypernet).to(base_model.device)
     print(model)
 
     ctx_msg = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
@@ -184,9 +265,12 @@ if __name__ == "__main__":
     ctx_attn_mask = ctx_inputs["attention_mask"]
     print(ctx_features.shape)
 
+    hypernet.eval()
     agg_features = hypernet.aggregator(ctx_features, ctx_attn_mask)
+    print(agg_features)
     print(agg_features.shape)
 
     hnetout = hypernet(ctx_features, ctx_attn_mask)
+    print(hnetout)
     print(hnetout.shape)
     breakpoint()

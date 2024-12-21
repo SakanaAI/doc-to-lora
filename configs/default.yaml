@@ -1,4 +1,5 @@
 bf16: true
+base_model_name_or_path: meta-llama/Llama-3.2-1B-Instruct
 target_modules:
   - down_proj
   - up_proj
