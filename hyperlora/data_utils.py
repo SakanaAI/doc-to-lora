@@ -326,6 +326,17 @@ def tokenize_chat_messages(
     return conversation_ids
 
 
+def tokenize_ctx_text(
+    example: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> dict[str, Any]:
+    text = example["context"]
+    tokenized_text = tokenizer(text)
+    ctx_ids = tokenized_text["input_ids"]
+    ctx_attn_mask = tokenized_text["attention_mask"]
+    return dict(ctx_ids=ctx_ids, ctx_attn_mask=ctx_attn_mask)
+
+
 if __name__ == "__main__":
     from transformers import AutoTokenizer
 

@@ -242,6 +242,8 @@ class HyperLoRA(nn.Module):
             output_size=config.latent_size,
         )
 
+        # TODO: check initialization of the head
+        # default values are prob. way too big
         self.head = Mix(
             "bs n_layers n_modules d -> bs n_layers r out_d",
             weight_shape="n_modules d r out_d",
@@ -319,16 +321,23 @@ class ModulatedPretrainedModel(nn.Module):
         self.register_module("base_model", base_model)
         self.register_module("hypernet", hypernet)
 
+    def get_input_embeddings(self):
+        return self.base_model.get_input_embeddings()
+
     def get_ctx_features(
         self,
-        input_ids: Integer[Tensor, "bs seq_len"],
-        attention_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        examples: dict[str, Any],
     ):
+        out = dict()
+        input_ids = torch.tensor(examples.get("ctx_ids")).to(self.device)
+        attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
+
         if isinstance(self.encoder, nn.Embedding):
             features = self.encoder(input_ids)
         else:
             features = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        return features
+        out["ctx_features"] = features
+        return out
 
     def forward(
         self,

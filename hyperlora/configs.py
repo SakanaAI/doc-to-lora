@@ -113,7 +113,7 @@ class ArgumentParser(HfArgumentParser):
         return output
 
 
-class ExperimentSetup(Enum):
+class ExperimentSetup(str, Enum):
     LORA = "lora"
     HYPER_LORA = "hyper_lora"
     FULL_FINETUNE = "full_finetune"
@@ -157,3 +157,10 @@ class CtxTrainingArguments:
         default=ExperimentSetup.LORA,
         metadata={"help": "Experiment setup - LoRA, HyperLoRA, or full finetuning"},
     )
+
+
+if __name__ == "__main__":
+    print(ExperimentSetup)
+    print(ExperimentSetup.LORA)
+    print(ExperimentSetup.HYPER_LORA)
+    print(ExperimentSetup.FULL_FINETUNE)

@@ -70,6 +70,8 @@ def apply_hook_to_layer(
 
     if mname in ["q_proj", "k_proj", "v_proj", "o_proj", "qkv_proj"]:
         mname = f"self_attn.{mname}"
+    elif mname in ["down_proj", "up_proj", "gate_proj"]:
+        mname = f"mlp.{mname}"
     module = attrgetter(mname)(layer)
 
     if pre_hook is not None:
