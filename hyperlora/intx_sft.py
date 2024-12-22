@@ -96,7 +96,17 @@ def main():
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
         hypernet = HyperLoRA(get_hypernet_config(model)).to(model.device)
-        model = ModulatedPretrainedModel(model, hypernet).to(model.device).train()
+        # HACK: hardcode the embedding layer for now
+        # TODO: add explicit encoder
+        ctx_encoder = torch.nn.Embedding.from_pretrained(
+            model.get_input_embeddings().weight.clone(),
+            freeze=True,
+        )
+        model = (
+            ModulatedPretrainedModel(model, hypernet, ctx_encoder)
+            .to(model.device)
+            .train()
+        )
     else:
         # activate LoRA
         logger.info("Using LoRA")
@@ -193,6 +203,10 @@ def main():
 
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
     # TODO: use packing with SFTTrainer
+
+    # HACK: see transformers/trainer.py for liger-kernel patch
+    # slows down training speed w/ short inputs
+    # might improve/decrease training speed w/ longer inputs
     train_model(
         model,
         train_ds,

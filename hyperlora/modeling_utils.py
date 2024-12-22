@@ -305,7 +305,12 @@ class HyperLoRA(nn.Module):
 
 
 class ModulatedPretrainedModel(nn.Module):
-    def __init__(self, base_model: PreTrainedModel, hypernet: HyperLoRA):
+    def __init__(
+        self,
+        base_model: PreTrainedModel,  # TODO: maybe just use the name/config?
+        hypernet: HyperLoRA,
+        ctx_encoder: nn.Module,  # TODO: maybe just use the name/config?
+    ):
         super().__init__()
         # self.base_model = base_model
         self.device = base_model.device
@@ -313,13 +318,26 @@ class ModulatedPretrainedModel(nn.Module):
         # e.g., self.extractor_lm.model.layers = self.extractor_lm.model.layers[:num_extractor_layers]
         # or just use the token embeddings extractor_lm.embed_tokens(input_ids)
 
-        # HACK: hardcode the embedding layer for now
-        # TODO: add explicit encoder
-        self.encoder = base_model.get_input_embeddings()
+        # self.ctx_encoder = ctx_encoder  # base_model.get_input_embeddings()
 
         # register base_model as a submodule
         self.register_module("base_model", base_model)
         self.register_module("hypernet", hypernet)
+        self.register_module("ctx_encoder", ctx_encoder)
+
+    # TODO: fix model saving/loading
+    def state_dict(self, *args, **kwargs):
+        state_dict = super().state_dict(*args, **kwargs)
+
+        # remove non-trainable params
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                state_dict.pop(name)
+        return state_dict
+
+    def load_state_dict(self, state_dict: dict, *args, **kwargs):
+        # NOTE: might have to set `strict=False` as we don't save all the params
+        return super().load_state_dict(state_dict, *args, **kwargs)
 
     def get_input_embeddings(self):
         return self.base_model.get_input_embeddings()
@@ -332,10 +350,12 @@ class ModulatedPretrainedModel(nn.Module):
         input_ids = torch.tensor(examples.get("ctx_ids")).to(self.device)
         attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
 
-        if isinstance(self.encoder, nn.Embedding):
-            features = self.encoder(input_ids)
+        if isinstance(self.ctx_encoder, nn.Embedding):
+            features = self.ctx_encoder(input_ids)
         else:
-            features = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+            features = self.ctx_encoder(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
         out["ctx_features"] = features
         return out
 
