@@ -40,6 +40,37 @@ from configs import (
 logger = logging.getLogger(__name__)
 
 
+def compute_per_token_acc(shifted_logits, shifted_labels):
+    indices = np.where(shifted_labels != -100)
+    acc = (shifted_logits.argmax(-1) == shifted_labels)[indices].mean()
+    return {"per_token_acc": acc, "num_valid_tokens": indices[0].size}
+
+
+def compute_prefix_matching(shifted_logits, shifted_labels):
+    masks = np.where(shifted_labels != -100, 1, 0)
+    lengths = np.sum(masks, axis=1)
+
+    is_wrong = (shifted_logits.argmax(-1) != shifted_labels) * masks
+    is_correct = (shifted_logits.argmax(-1) == shifted_labels) * masks
+    # NOTE: not reliable for multi-turn conversations
+    # ie, all tokens in the following user's turn will be correct
+    # still monotonically correlate with perf though
+    wrong_pos = np.argmax(is_wrong, axis=1) - np.argmax(masks, axis=1)
+    perf = wrong_pos / lengths
+
+    # if all tokens are correct, set to 1
+    perf = np.where(is_correct.sum(axis=1) == lengths, 1, perf)
+    return {"prefix_matching": perf.mean()}
+
+
+def compute_entropy(shifted_logits, shifted_labels):
+    indices = np.where(shifted_labels != -100)
+    logits = shifted_logits[indices]
+    probs = torch.softmax(torch.tensor(logits), dim=-1)
+    entropy = -torch.sum(probs * torch.log(probs), dim=-1)
+    return {"entropy": entropy.mean()}
+
+
 def compute_metrics(eval_pred: EvalPrediction) -> dict:
     """
     Custom metrics function for the trainer
@@ -50,12 +81,13 @@ def compute_metrics(eval_pred: EvalPrediction) -> dict:
     """
     # compute per token accuracy
     logits, labels = eval_pred.predictions, eval_pred.label_ids
+    shifted_logits = logits[..., :-1, :]
+    shifted_labels = labels[..., 1:]
 
-    shift_logits = logits[..., :-1, :]
-    shift_labels = labels[..., 1:]
-    indices = np.where(shift_labels != -100)
-    acc = (shift_logits.argmax(-1) == shift_labels)[indices].mean()
-    return {"per_token_acc": acc, "num_valid_tokens": indices[0].size}
+    per_token_acc = compute_per_token_acc(shifted_logits, shifted_labels)
+    prefix_matching = compute_prefix_matching(shifted_logits, shifted_labels)
+    entropy = compute_entropy(shifted_logits, shifted_labels)
+    return dict(**per_token_acc, **prefix_matching, **entropy)
 
 
 def get_run_name():

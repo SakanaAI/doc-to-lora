@@ -15,7 +15,7 @@ remove_unused_columns: false
 optim: schedule_free_adamw
 learning_rate: 0.0001
 lr_scheduler_type: "constant_with_warmup"
-neftune_noise_alpha: 5
+neftune_noise_alpha: 0
 weight_decay: 0.01
 warmup_ratio: 0.1
 
