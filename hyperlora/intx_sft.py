@@ -157,6 +157,7 @@ def main():
         )
 
     tokenized_ds = tokenized_ds.remove_columns(pre_tok_cols)
+    tokenized_ds.set_format(type="pt")
 
     validate_columns(tokenized_ds)
 
@@ -166,27 +167,30 @@ def main():
         "val": tokenized_ds["eval"],
     }
 
-    # DataCollatorForSeq2Seq also pads the `labels`
-    # useful when we're computing the labels manually
-    # or masking the loss only on completion
     # TODO: change to a faster collator? e.g.,
     # https://huggingface.co/blog/packing-with-FA2
     # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
 
-    # TODO: check tokenization pipeline (if prompt + ctx are tokenized correctly)
     def collator(inp_list, tokenizer):
         # input is a list of tokenized sequences
         padding_kwargs = dict(padding=True, pad_to_multiple_of=8, return_tensors="pt")
         labels = [x.pop("labels") for x in inp_list]
         ctx_features = None
         if "ctx_features" in inp_list[0]:
-            # TODO: also pad ctx_features
-            # have to be manual since it has [bs, ctx_len, features] shape
-            # => pad to the max ctx_len in the batch with zeros
-
-            # HACK: assumes ctx_features with the same size
-            # only works with context_numbers
-            ctx_features = torch.tensor([x.pop("ctx_features") for x in inp_list])
+            # have to be manual since it has [ctx_len, features] shape
+            ctx_features = [example.pop("ctx_features") for example in inp_list]
+            ctx_features = torch.nn.utils.rnn.pad_sequence(
+                ctx_features,
+                batch_first=True,
+                padding_value=0,
+            )
+            # exotic keys won't be padded, so we need to pad them as well
+            ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
+            ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
+                ctx_attn_mask,
+                batch_first=True,
+                padding_value=0,
+            )
 
         padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
 
@@ -196,9 +200,7 @@ def main():
         out = {**padded_seq, "labels": labels}
         if ctx_features is not None:
             out["ctx_features"] = ctx_features
-        # if task_descs:
-        #     task_descs = tokenizer.pad({"input_ids": task_descs}, **padding_kwargs)["input_ids"]
-        #     out["task_descs_ids"] = task_descs
+            out["ctx_attn_mask"] = ctx_attn_mask
         return out
 
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
