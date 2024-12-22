@@ -325,14 +325,12 @@ class ModulatedPretrainedModel(nn.Module):
         self.register_module("hypernet", hypernet)
         self.register_module("ctx_encoder", ctx_encoder)
 
-    # TODO: fix model saving/loading
     def state_dict(self, *args, **kwargs):
         state_dict = super().state_dict(*args, **kwargs)
-
-        # remove non-trainable params
+        # remove non-trainable and base_model's params
         for name, param in self.named_parameters():
-            if not param.requires_grad:
-                state_dict.pop(name)
+            if (not param.requires_grad) or name.startswith("base_model"):
+                state_dict.pop(name, None)
         return state_dict
 
     def load_state_dict(self, state_dict: dict, *args, **kwargs):
