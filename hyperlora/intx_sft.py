@@ -131,14 +131,9 @@ def compute_generation_based_metrics(
     gen_toks = [x[start_indices[i] :] for i, x in enumerate(pred_toks)]
     label_toks = [x[start_indices[i] :] for i, x in enumerate(labels)]
 
-    # print(pred_toks[indices])
-    # print(labels[indices])
-    # breakpoint()
     gen_text = tokenizer.batch_decode(gen_toks, skip_special_tokens=True)
     label_text = tokenizer.batch_decode(label_toks, skip_special_tokens=True)
     rouge = compute_rouge(gen_text, label_text)
-    # acc = (pred_toks[indices] == labels[indices]).mean()
-    # "gen_text": gen_text, "label_text": label_text
     return {**rouge}
 
 
