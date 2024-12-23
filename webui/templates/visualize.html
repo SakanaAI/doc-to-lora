@@ -166,6 +166,43 @@
     .performance-table th {
         background-color: #f2f2f2;
     }
+
+    .chat-container {
+        margin-bottom: 20px;
+    }
+
+    .chat-output {
+        min-height: 150px;
+        border: 1px solid #ddd;
+        padding: 10px;
+        margin-bottom: 10px;
+        overflow-y: auto;
+    }
+
+    .chat-input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+    }
+
+    .system-msg-container {
+        margin-bottom: 10px;
+    }
+
+    .system-msg-container label {
+        display: block;
+        margin-bottom: 5px;
+    }
+
+    .system-msg-container input {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+    }
+
+    /* Removed system-msg-container button styles */
 </style>
 {% endblock %}
 
@@ -219,6 +256,22 @@
         </div>
         {% endif %}
         {% endfor %}
+
+        <div id="load-chat-container">
+            <button id="load-chat-button">Load Chat with {{ model_name }}</button>
+        </div>
+        <div class="chat-container" id="chat-container" style="display: none;">
+            <h2>Chat with <span id="chat-model-name"></span></h2>
+
+            <div class="system-msg-container">
+                <label for="system-msg">System Message:</label>
+                <input type="text" id="system-msg" class="chat-input" placeholder="Enter system message..." value="">
+                <!-- Removed the Update System Message button -->
+            </div>
+
+            <div id="chat-output" class="chat-output"></div>
+            <input type="text" id="chat-input" class="chat-input" placeholder="Enter your message..." disabled>
+        </div>
     </div>
 </div>
 
@@ -267,6 +320,114 @@
     function goBack() {
         window.history.back();
     }
+
+
+    function sendMessage() {
+        const systemMsg = document.getElementById('system-msg').value;
+        fetch('/update_system_msg', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ system_msg: systemMsg })
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('System message updated successfully.');
+                } else {
+                    console.log('No update needed for system message.');
+                }
+                // Proceed to send the chat message
+                const message = document.getElementById('chat-input').value;
+                document.getElementById('chat-input').value = '';
+                addMessageToChat('You: ' + message);
+
+                fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'message=' + encodeURIComponent(message)
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        addMessageToChat('{{ model_name }}: ' + data.response);
+                    })
+                    .catch(error => {
+                        console.error("Error during chat fetch:", error);
+                    });
+            })
+            .catch(error => {
+                console.error('Error updating system message:', error);
+            });
+    }
+
+    function initializeChat() {
+        fetch('/get_system_msg')
+            .then(response => response.json())
+            .then(data => {
+                if (data.system_msg) {
+                    document.getElementById('system-msg').value = data.system_msg;
+                    chat_history[0]["content"] = data.system_msg;
+                }
+            });
+    }
+
+    // Call initializeChat when chat is loaded
+    document.getElementById('load-chat-button').addEventListener('click', function () {
+        fetch('/load_model', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'run=' + encodeURIComponent('{{ run }}')
+        })
+            .then(response => {
+                console.log("Received response status:", response.status);
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log("Parsed data:", data);
+                if (data.error) {
+                    alert(data.error);
+                } else {
+                    document.getElementById('chat-model-name').textContent = data.model_name;
+                    document.getElementById('load-chat-container').style.display = 'none';
+                    document.getElementById('chat-container').style.display = 'block';
+                    document.getElementById('chat-input').disabled = false;
+
+                    console.log("Chat interface loaded successfully.");
+                    initializeChat();
+                }
+            })
+            .catch(error => {
+                console.error("Error during /load_model fetch:", error);
+            });
+    });
+
+
+    function addMessageToChat(message) {
+        var chatOutput = document.getElementById('chat-output');
+        var newMessage = document.createElement('p');
+        newMessage.textContent = message;
+        chatOutput.appendChild(newMessage);
+        chatOutput.scrollTop = chatOutput.scrollHeight;
+    }
+
+    // Removed the separate updateSystemMsg function
+
+    // Updated sendMessage function handles system msg update and chat message
+    // Bind the sendMessage function to the Enter key
+    document.getElementById('chat-input').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            sendMessage();
+        }
+    });
+
 </script>
 
 {% endblock %}
