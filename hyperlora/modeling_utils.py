@@ -325,6 +325,14 @@ class ModulatedPretrainedModel(nn.Module):
         self.register_module("hypernet", hypernet)
         self.register_module("ctx_encoder", ctx_encoder)
 
+    # Delegate to base_model
+    @property
+    def config(self):
+        return self.base_model.config
+
+    def get_input_embeddings(self):
+        return self.base_model.get_input_embeddings()
+
     def state_dict(self, *args, **kwargs):
         state_dict = super().state_dict(*args, **kwargs)
         # remove non-trainable and base_model's params
@@ -336,9 +344,6 @@ class ModulatedPretrainedModel(nn.Module):
     def load_state_dict(self, state_dict: dict, *args, **kwargs):
         # NOTE: might have to set `strict=False` as we don't save all the params
         return super().load_state_dict(state_dict, *args, **kwargs)
-
-    def get_input_embeddings(self):
-        return self.base_model.get_input_embeddings()
 
     def get_ctx_features(
         self,
@@ -386,6 +391,33 @@ class ModulatedPretrainedModel(nn.Module):
             model_outputs = self.base_model(**model_inputs_kwargs)
         # model_outputs.generated_loras = generated_loras
 
+        return model_outputs
+
+    def generate(
+        self,
+        ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
+        ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
+        **model_inputs_kwargs: dict[str, Any],
+    ):
+        if ctx_features is None:
+            logger.warning(
+                "No context ids provided, using the base model for the forward pass"
+            )
+            model_outputs = self.base_model(**model_inputs_kwargs)
+            # model_outputs.generated_loras = None
+            return model_outputs
+
+        generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
+
+        # apply lora hook to the base model
+        # self.apply_generated_loras(generated_loras)
+        with apply_generated_loras(
+            self.base_model,
+            generated_loras,
+            self.hypernet.layer_indices,
+            self.training,
+        ):
+            model_outputs = self.base_model.generate(**model_inputs_kwargs)
         return model_outputs
 
 

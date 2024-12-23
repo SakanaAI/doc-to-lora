@@ -32,6 +32,7 @@ def get_model_and_tokenizer(
         dtype,
     )
     tokenizer = get_tokenizer(model_name_or_path, tokenizer_kwargs, peft_config, train)
+    model.config.pad_token_id = tokenizer.pad_token_id
     return model, tokenizer
 
 

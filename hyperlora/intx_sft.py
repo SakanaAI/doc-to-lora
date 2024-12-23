@@ -1,3 +1,4 @@
+from collections import defaultdict
 from copy import copy
 from functools import partial
 from importlib.resources import read_binary
@@ -29,6 +30,7 @@ from transformers import (
     HfArgumentParser,
     TrainingArguments,
 )
+from rouge_score import rouge_scorer
 from utils import (
     extract_cli_args,
     get_run_name,
@@ -50,22 +52,21 @@ from configs import (
 logger = logging.getLogger()
 
 
-def compute_per_token_acc(shifted_logits, shifted_labels):
-    indices = np.where(shifted_labels != -100)
-    acc = (shifted_logits.argmax(-1) == shifted_labels)[indices].mean()
-    return {"per_token_acc": acc, "num_valid_tokens": indices[0].size}
+def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
+    indices = np.where(valid_masks)
+    acc = (shift_logits.argmax(-1) == shift_labels)[indices].mean()
+    return {"per_token_acc": acc}
 
 
-def compute_prefix_matching(shifted_logits, shifted_labels):
-    masks = np.where(shifted_labels != -100, 1, 0)
-    lengths = np.sum(masks, axis=1)
+def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
+    lengths = np.sum(valid_masks, axis=1)
 
-    is_wrong = (shifted_logits.argmax(-1) != shifted_labels) * masks
-    is_correct = (shifted_logits.argmax(-1) == shifted_labels) * masks
+    is_wrong = (shift_logits.argmax(-1) != shift_labels) * valid_masks
+    is_correct = (shift_logits.argmax(-1) == shift_labels) * valid_masks
     # NOTE: not reliable for multi-turn conversations
     # ie, all tokens in the following user's turn will be correct
     # still monotonically correlate with perf though
-    wrong_pos = np.argmax(is_wrong, axis=1) - np.argmax(masks, axis=1)
+    wrong_pos = np.argmax(is_wrong, axis=1) - np.argmax(valid_masks, axis=1)
     perf = wrong_pos / lengths
 
     # if all tokens are correct, set to 1
@@ -73,9 +74,9 @@ def compute_prefix_matching(shifted_logits, shifted_labels):
     return {"prefix_matching": perf.mean()}
 
 
-def compute_entropy(shifted_logits, shifted_labels):
-    indices = np.where(shifted_labels != -100)
-    logits = shifted_logits[indices]
+def compute_entropy(shift_logits, shift_labels, valid_masks):
+    indices = np.where(valid_masks)
+    logits = shift_logits[indices]
     probs = torch.softmax(torch.tensor(logits), dim=-1)
     entropy = -torch.sum(probs * torch.log(probs), dim=-1)
     return {"entropy": entropy.mean()}
@@ -91,13 +92,54 @@ def compute_metrics(eval_pred: EvalPrediction) -> dict:
     """
     # compute per token accuracy
     logits, labels = eval_pred.predictions, eval_pred.label_ids
-    shifted_logits = logits[..., :-1, :]
-    shifted_labels = labels[..., 1:]
+    shift_logits = logits[..., :-1, :]
+    shift_labels = labels[..., 1:]
+    valid_masks = np.where(shift_labels != -100, 1, 0)
 
-    per_token_acc = compute_per_token_acc(shifted_logits, shifted_labels)
-    prefix_matching = compute_prefix_matching(shifted_logits, shifted_labels)
-    entropy = compute_entropy(shifted_logits, shifted_labels)
-    return dict(**per_token_acc, **prefix_matching, **entropy)
+    per_token_acc = compute_per_token_acc(shift_logits, shift_labels, valid_masks)
+    prefix_matching = compute_prefix_matching(shift_logits, shift_labels, valid_masks)
+    entropy = compute_entropy(shift_logits, shift_labels, valid_masks)
+    return dict(
+        **per_token_acc,
+        **prefix_matching,
+        **entropy,
+        num_valid_tokens=valid_masks.sum(),
+        num_samples=valid_masks.shape[0],
+    )
+
+
+def compute_rouge(pred_texts, label_texts):
+    out = defaultdict(list)
+    scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=False)
+    for pred_text, label_text in zip(pred_texts, label_texts):
+        scores = scorer.score(pred_text, label_text)
+        for k, v in scores.items():
+            out[f"{k}.f1"].append(v.fmeasure)
+    for k in out:
+        out[k] = np.mean(out[k])
+    return out
+
+
+def compute_generation_based_metrics(
+    eval_pred: EvalPrediction,
+    tokenizer: AutoTokenizer,
+) -> dict:
+    pred_toks, labels = eval_pred.predictions, eval_pred.label_ids
+
+    start_indices = np.argmax(labels != -100, axis=1)
+
+    gen_toks = [x[start_indices[i] :] for i, x in enumerate(pred_toks)]
+    label_toks = [x[start_indices[i] :] for i, x in enumerate(labels)]
+
+    # print(pred_toks[indices])
+    # print(labels[indices])
+    # breakpoint()
+    gen_text = tokenizer.batch_decode(gen_toks, skip_special_tokens=True)
+    label_text = tokenizer.batch_decode(label_toks, skip_special_tokens=True)
+    rouge = compute_rouge(gen_text, label_text)
+    # acc = (pred_toks[indices] == labels[indices]).mean()
+    # "gen_text": gen_text, "label_text": label_text
+    return {**rouge}
 
 
 def main(output_dir: str):
@@ -163,8 +205,11 @@ def main(output_dir: str):
 
     logger.info("Loading dataset...")
     train_file = "data/raw_datasets/context_numbers/train.jsonl"
-    eval_file = "data/raw_datasets/context_numbers/val.jsonl"
-    ds = load_dataset("json", data_files={"train": train_file, "eval": eval_file})
+    val_file = "data/raw_datasets/context_numbers/val.jsonl"
+    test_file = "data/raw_datasets/context_numbers/test.jsonl"
+    ds = load_dataset(
+        "json", data_files={"train": train_file, "val": val_file, "test": test_file}
+    )
     # preprocessing
     ds = ds.map(get_preprocessing_fn("context_numbers"))
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
@@ -206,14 +251,15 @@ def main(output_dir: str):
     validate_columns(tokenized_ds)
 
     train_ds = tokenized_ds["train"]
-    eval_ds = {
+    val_ds = {
         "train": tokenized_ds["train"].select(range(100)),
-        "val": tokenized_ds["eval"],
+        "val": tokenized_ds["val"],
     }
+    test_ds = tokenized_ds["test"]
 
     logger.debug(f"train_ds: {train_ds}")
-    logger.debug(f"eval_ds: {eval_ds}")
-
+    logger.debug(f"val_ds: {val_ds}")
+    logger.debug(f"test_ds: {test_ds}")
     # TODO: change to a faster collator? e.g.,
     # https://huggingface.co/blog/packing-with-FA2
     # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
@@ -258,13 +304,18 @@ def main(output_dir: str):
     # might improve/decrease training speed w/ longer inputs
     # TODO: add wandb notes somewhere
     # wandb.init(project="ctx_to_lora", name=run_name, notes=args.notes)
+
+    # TODO: different collator for generation-based eval
     train_model(
         model,
-        train_ds,
-        eval_ds,
+        tokenizer,
         training_args,
+        train_ds,
+        val_ds,
+        test_ds,
         partial(collator, tokenizer=tokenizer),
         compute_metrics,
+        partial(compute_generation_based_metrics, tokenizer=tokenizer),
     )
 
 
