@@ -18,7 +18,7 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 from utils import get_lora_module_names, get_num_layers, get_peft_in_out_features
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 AGGREGATOR_TYPE = Enum("AGGREGATOR_TYPE", ["POOLER", "PERCEIVER"])

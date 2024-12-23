@@ -1,13 +1,20 @@
+import ast
+import os
+import random
+import string
+import time
+import yaml
 import logging
 from contextlib import contextmanager
 from typing import Iterable, Optional
+
 
 import torch
 from peft import PeftConfig, PeftModel
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
 from peft.utils import get_peft_model_state_dict
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 # taken from https://discuss.pytorch.org/t/opinion-eval-should-be-a-context-manager/18998/3
@@ -59,6 +66,91 @@ def log_num_train_params(model):
         f"|| all params: {num_total_params:,d} "
         f"|| trainable%: {100 * num_trainable_params / num_total_params:.4f}"
     )
+
+
+def get_run_name():
+    uuid = "".join(
+        [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
+    )
+    run_name = time.strftime("%Y%m%d-%H%M%S") + f"_{uuid}"
+    return run_name
+
+
+def try_convert(s):
+    try:
+        return ast.literal_eval(s)
+    except:
+        return s
+
+
+def extract_cli_args(argv: list[str]):
+    out = dict()
+    for elem in argv:
+        if elem.endswith(".yaml"):
+            out["config"] = elem
+
+        elif elem.startswith("--"):
+            k, v = elem.split("=")
+            k = k.split("--")[1]
+            v = try_convert(v)
+            # if k.startswith('env_'):
+            #     k = k.split('_')[1]
+            out[k] = v
+    return out
+
+
+def setup_logging(output_dir, debug=False):
+    global logger
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    log_formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    stream_level = logging.DEBUG if debug else logging.INFO
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(log_formatter)
+    stream_handler.setLevel(stream_level)
+    logger.addHandler(stream_handler)
+
+    log_path = f"{output_dir}/debug.log"
+    debug_handler = logging.FileHandler(log_path, delay=True)
+    debug_handler.setLevel(logging.DEBUG)
+    debug_handler.setFormatter(log_formatter)
+    logger.addHandler(debug_handler)
+    logger.setLevel(logging.DEBUG)
+    logger.info(f"Logging to: {log_path}")
+
+
+def validate_columns(tokenized_ds):
+    cols = ["input_ids", "attention_mask", "labels"]
+    if "ctx_features" in tokenized_ds["train"].column_names:
+        cols += ["ctx_features", "ctx_attn_mask"]
+    ref_cols = set(cols)
+    assert (
+        set(tokenized_ds["train"].column_names) == ref_cols
+    ), f"Columns mismatch: {set(tokenized_ds['train'].column_names)} != {ref_cols}"
+
+
+def validate_args(args_list):
+    # there shouldn't be overlap between args
+    keys = set()
+    for args in args_list:
+        args_keys = set(vars(args).keys())
+        assert len(keys & args_keys) == 0, "Overlap between args"
+        keys |= args_keys
+
+
+def save_yaml(data, path):
+    # Filter out non-primitive fields
+    data = {
+        k: v
+        for k, v in data.items()
+        if isinstance(v, (int, float, str, bool, list, dict, type(None)))
+    }
+
+    with open(path, "w") as file:
+        yaml.dump(data, file)
 
 
 def get_peft_in_out_features(

@@ -2,12 +2,14 @@ from copy import copy
 from functools import partial
 from importlib.resources import read_binary
 import logging
+import os
 import random
 import string
 import time
 
 import numpy as np
 import torch
+import yaml
 from data_utils import (
     convert_ctx_prompt_response_to_messages,
     get_preprocessing_fn,
@@ -27,7 +29,15 @@ from transformers import (
     HfArgumentParser,
     TrainingArguments,
 )
-from utils import log_num_train_params
+from utils import (
+    extract_cli_args,
+    get_run_name,
+    log_num_train_params,
+    save_yaml,
+    setup_logging,
+    validate_args,
+    validate_columns,
+)
 
 from configs import (
     ArgumentParser,
@@ -37,7 +47,7 @@ from configs import (
     ModelArguments,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 def compute_per_token_acc(shifted_logits, shifted_labels):
@@ -90,32 +100,34 @@ def compute_metrics(eval_pred: EvalPrediction) -> dict:
     return dict(**per_token_acc, **prefix_matching, **entropy)
 
 
-def get_run_name():
-    uuid = "".join(
-        [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
-    )
-    run_name = time.strftime("%Y%m%d-%H%M%S") + f"_{uuid}"
-    return run_name
-
-
-def main():
-    # Set logging verbosity to INFO
-    logging.basicConfig(level=logging.INFO)
-
+def main(output_dir: str):
+    ############ Argument parsing
     parser = ArgumentParser(
         (CtxTrainingArguments, ModelArguments, LoRAArguments, TrainingArguments)
     )
     ctx_args, model_args, lora_args, training_args = parser.parse()
 
-    run_name = get_run_name()
-    training_args.run_name = run_name
-    training_args.output_dir = f"train_outputs/{run_name}"
-    training_args.logging_dir = f"train_outputs/{run_name}"
+    # there shouldn't be overlap between args
+    validate_args([ctx_args, model_args, lora_args, training_args])
 
-    logger.info(f"Run name: {run_name}")
+    args = {
+        **vars(ctx_args),
+        **vars(model_args),
+        **vars(lora_args),
+        **vars(training_args),
+    }
+
+    run_name = os.path.basename(output_dir)
+    training_args.run_name = run_name
+    training_args.output_dir = output_dir
+    training_args.logging_dir = output_dir
+    logger.info(f"run_name: {run_name}")
     logger.info(f"ctx_args: {ctx_args}")
     logger.info(f"model_args: {model_args}")
     logger.info(f"lora_args: {lora_args}")
+    logger.debug(f"args: {args}")
+
+    ############ Model setup
 
     model_name = model_args.model_name_or_path
     model, tokenizer = get_model_and_tokenizer(
@@ -144,12 +156,12 @@ def main():
         logger.info("Using LoRA")
         model.set_adapter("default")
 
-    print(model)
+    logger.debug(model)
     log_num_train_params(model)
 
-    # max_seq_len = 1024
+    ############ Dataset setup
 
-    print("Loading dataset...")
+    logger.info("Loading dataset...")
     train_file = "data/raw_datasets/context_numbers/train.jsonl"
     eval_file = "data/raw_datasets/context_numbers/val.jsonl"
     ds = load_dataset("json", data_files={"train": train_file, "eval": eval_file})
@@ -199,6 +211,9 @@ def main():
         "val": tokenized_ds["eval"],
     }
 
+    logger.debug(f"train_ds: {train_ds}")
+    logger.debug(f"eval_ds: {eval_ds}")
+
     # TODO: change to a faster collator? e.g.,
     # https://huggingface.co/blog/packing-with-FA2
     # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
@@ -241,6 +256,8 @@ def main():
     # HACK: see transformers/trainer.py for liger-kernel patch
     # slows down training speed w/ short inputs
     # might improve/decrease training speed w/ longer inputs
+    # TODO: add wandb notes somewhere
+    # wandb.init(project="ctx_to_lora", name=run_name, notes=args.notes)
     train_model(
         model,
         train_ds,
@@ -251,15 +268,10 @@ def main():
     )
 
 
-def validate_columns(tokenized_ds):
-    cols = ["input_ids", "attention_mask", "labels"]
-    if "ctx_features" in tokenized_ds["train"].column_names:
-        cols += ["ctx_features", "ctx_attn_mask"]
-    ref_cols = set(cols)
-    assert (
-        set(tokenized_ds["train"].column_names) == ref_cols
-    ), f"Columns mismatch: {set(tokenized_ds['train'].column_names)} != {ref_cols}"
-
-
 if __name__ == "__main__":
-    main()
+    run_name = get_run_name()
+    output_dir = f"train_outputs/{run_name}"
+    setup_logging(output_dir, debug=os.environ.get("DEBUG", False))
+    logger.debug(f"CMD: {' '.join(os.sys.argv)}")
+    save_yaml(extract_cli_args(os.sys.argv), f"{output_dir}/config.yaml")
+    main(output_dir)

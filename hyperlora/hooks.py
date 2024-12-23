@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.utils.hooks import RemovableHandle
 from utils import get_layers
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 def remove_hook_handles(handles: list[RemovableHandle]) -> None:
