@@ -1,10 +1,18 @@
 import os
 import json
-from flask import Flask, render_template, request, abort
+
+import torch
+import yaml
+from flask import Flask, render_template, request, abort, jsonify
+from transformers import pipeline
 
 app = Flask(__name__)
 
 TRAIN_OUTPUTS_DIR = "train_outputs"
+chat_generator = None
+chat_model_name = None
+chat_history = None
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def get_run_data(run_path):
@@ -92,9 +100,100 @@ def visualize(run):
 
     generated_data = get_generated_text_data(logdir)
 
+    # Load config.yaml from the run directory
+    config_path = os.path.join(logdir, "config.yaml")
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+            model_name = config.get("model_name_or_path")
+    except FileNotFoundError:
+        model_name = None
+
     return render_template(
-        "visualize.html", run=run, data=data, generated_data=generated_data
+        "visualize.html",
+        run=run,
+        data=data,
+        generated_data=generated_data,
+        model_name=model_name,
     )
+
+
+@app.route("/load_model", methods=["POST"])
+def load_model():
+    """
+    Loads the model and creates the pipeline.
+    """
+    global chat_generator
+    global chat_model_name
+    global chat_history
+
+    print("Loading model...")
+    chat_history = [{"role": "system", "content": ""}]
+    run = request.form["run"]
+    logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
+    config_path = os.path.join(logdir, "config.yaml")
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+            chat_model_name = config.get("model_name_or_path")
+    except FileNotFoundError:
+        chat_model_name = None
+
+    if chat_model_name:
+        chat_generator = pipeline(
+            "text-generation", model=chat_model_name, device=device
+        )
+        return jsonify({"model_name": chat_model_name})
+    else:
+        return jsonify({"error": "Model name not found in config.yaml."})
+
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    """
+    Handles chat requests and generates responses.
+    """
+    global chat_history
+    print("Chat request received")
+    message = request.form["message"]
+    print(f"Received message: {message}")
+    chat_history.append({"role": "user", "content": message})
+
+    if chat_generator:
+        print("Generating response...")
+        response = chat_generator(chat_history, max_length=2**13)[0]["generated_text"][
+            -1
+        ]["content"]
+        print(f"Response: {response}")
+    else:
+        response = "Chat model not loaded."
+    return jsonify({"response": response})
+
+
+@app.route("/update_system_msg", methods=["POST"])
+def update_system_msg():
+    """
+    Updates the system message in chat_history.
+    """
+    global chat_history
+    data = request.get_json()
+    new_system_msg = data.get("system_msg", "").strip()
+    if new_system_msg:
+        if chat_history and chat_history[0]["content"] != new_system_msg:
+            chat_history[0]["content"] = new_system_msg
+            return jsonify({"success": True})
+    return jsonify({"success": False})
+
+
+@app.route("/get_system_msg", methods=["GET"])
+def get_system_msg():
+    """
+    Retrieves the current system message from chat_history.
+    """
+    global chat_history
+    if chat_history and "content" in chat_history[0]:
+        return jsonify({"system_msg": chat_history[0]["content"]})
+    return jsonify({"system_msg": ""})
 
 
 if __name__ == "__main__":
