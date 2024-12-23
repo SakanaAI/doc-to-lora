@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}Training Run Visualizer{% endblock %}
+
+{% block content %}
+<h1>Select a Training Run</h1>
+<ul>
+    {% for run in runs %}
+    <li><a href="{{ url_for('visualize', run=run) }}">{{ run }}</a></li>
+    {% endfor %}
+</ul>
+{% endblock %}

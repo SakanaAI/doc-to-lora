@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Training Run Visualization: {{ run }}{% endblock %}
+
+{% block head %}
+<style>
+    table {
+        width: 80%;
+        margin: 20px auto;
+        border-collapse: collapse;
+    }
+
+    th,
+    td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+    }
+
+    th {
+        background-color: #f2f2f2;
+    }
+
+    .group-header {
+        background-color: #e0e0e0;
+        font-weight: bold;
+    }
+
+    .container {
+        display: flex;
+        gap: 20px;
+        align-items: flex-start;
+    }
+
+    .column {
+        flex: 0 0 auto;
+        padding: 20px;
+        background-color: #f8f8f8;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .generated-text-container {
+        margin-bottom: 20px;
+    }
+
+    .generated-text-controls {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .generated-text-controls button {
+        margin: 0;
+        padding: 8px 16px;
+        background-color: #4CAF50;
+        /* Green */
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+    }
+
+    .generated-text-controls button:hover {
+        background-color: #367c39;
+        /* Darker green */
+    }
+
+    .generated-text-controls input {
+        width: 80px;
+        padding: 8px;
+        margin: 0;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        text-align: center;
+    }
+
+    .generated-text-display {
+        min-height: 150px;
+    }
+
+    .generated-text-display p span {
+        display: block;
+        overflow-y: auto;
+        max-height: 100px;
+        /* Adjust as needed */
+        border: 1px solid #ddd;
+        padding: 5px;
+        margin-bottom: 5px;
+        min-height: 100px;
+    }
+
+    .index-display {
+        font-size: 1.1em;
+        color: #555;
+    }
+
+    button {
+        margin: 0;
+        padding: 8px 16px;
+        background-color: #4CAF50;
+        /* Green */
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+    }
+
+    button:hover {
+        background-color: #367c39;
+        /* Darker green */
+    }
+
+    .top-controls {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .top-controls button {
+        margin-right: 20px;
+        padding: 12px 24px;
+        font-size: 1.2em;
+    }
+
+    .performance-table {
+        width: auto;
+        /* Adjust width to fit content */
+        margin: 20px 0;
+        border-collapse: collapse;
+    }
+
+    .performance-table th,
+    .performance-table td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+        font-size: 0.9em;
+        /* Reduce font size */
+    }
+
+    .performance-table th {
+        background-color: #f2f2f2;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="top-controls">
+    <h1>Training Run: {{ run }}</h1>
+    <button onclick="goBack()">Go Back</button>
+</div>
+
+<div class="container">
+    <div class="column">
+        {% for group, results in data.items() %}
+        <h2>{{ group }}</h2>
+        <table class="performance-table">
+            <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for metric, value in results.items() %}
+                <tr>
+                    <td>{{ metric }}</td>
+                    <td>{{ value }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endfor %}
+    </div>
+
+    <div class="column">
+        {% for split, data in generated_data.items() %}
+        {% if data %}
+        <div class="generated-text-container">
+            <h2>Generated Text ({{ split }})</h2>
+            <div id="{{ split }}-text" class="generated-text-display">
+                <p><strong>Input:</strong> <span id="{{ split }}-input"></span></p>
+                <p><strong>Generated:</strong> <span id="{{ split }}-generated"></span></p>
+                <p><strong>Label:</strong> <span id="{{ split }}-label"></span></p>
+            </div>
+            <div class="generated-text-controls">
+                <button onclick="prev('{{ split }}')">Prev</button>
+                <input type="number" id="{{ split }}-index" value="1" min="1" max="{{ data|length }}"
+                    onchange="updateText('{{ split }}')">
+                <span class="index-display">/ {{ data|length }}</span>
+                <button onclick="next('{{ split }}')">Next</button>
+                <button onclick="randomize('{{ split }}')">Random</button>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+    var generatedData = {{ generated_data | tojson }};
+
+    function updateText(split) {
+        var index = parseInt(document.getElementById(split + '-index').value) - 1;
+        var data = generatedData[split][index];
+        document.getElementById(split + '-input').textContent = data.input;
+        document.getElementById(split + '-generated').textContent = data.generated;
+        document.getElementById(split + '-label').textContent = data.label;
+    }
+
+    function next(split) {
+        var indexInput = document.getElementById(split + '-index');
+        var index = parseInt(indexInput.value);
+        if (index < generatedData[split].length) {
+            indexInput.value = index + 1;
+            updateText(split);
+        }
+    }
+
+    function prev(split) {
+        var indexInput = document.getElementById(split + '-index');
+        var index = parseInt(indexInput.value);
+        if (index > 1) {
+            indexInput.value = index - 1;
+            updateText(split);
+        }
+    }
+
+    function randomize(split) {
+        var randomIndex = Math.floor(Math.random() * generatedData[split].length) + 1;
+        document.getElementById(split + '-index').value = randomIndex;
+        updateText(split);
+    }
+
+    // Initialize text for each split
+    {% for split, data in generated_data.items() %}
+    {% if data %}
+    updateText('{{ split }}');
+    {% endif %}
+    {% endfor %}
+
+    function goBack() {
+        window.history.back();
+    }
+</script>
+
+{% endblock %}
