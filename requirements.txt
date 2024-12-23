@@ -2,3 +2,9 @@ einops
 jaxtyping
 schedulefree
 liger-kernel
+
+# visualization
+tensorboard
+flask
+pandas
+plotly
