@@ -130,7 +130,8 @@ def compute_generation_based_metrics(
 
     gen_toks = [x[start_indices[i] :] for i, x in enumerate(pred_toks)]
     label_toks = [x[start_indices[i] :] for i, x in enumerate(labels)]
-
+    # labels are padded with -100, so we need to replace them with the pad token id
+    label_toks = [np.where(x == -100, tokenizer.pad_token_id, x) for x in label_toks]
     gen_text = tokenizer.batch_decode(gen_toks, skip_special_tokens=True)
     label_text = tokenizer.batch_decode(label_toks, skip_special_tokens=True)
     rouge = compute_rouge(gen_text, label_text)
@@ -259,6 +260,7 @@ def main(output_dir: str):
     # https://huggingface.co/blog/packing-with-FA2
     # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
 
+    # TODO: have to add truncation here for longer inputs
     def collator(inp_list, tokenizer):
         # input is a list of tokenized sequences
         padding_kwargs = dict(padding=True, pad_to_multiple_of=8, return_tensors="pt")
