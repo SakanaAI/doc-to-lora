@@ -79,7 +79,7 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
 def compute_entropy(shift_logits, shift_labels, valid_masks):
     indices = torch.where(valid_masks)
     logits = shift_logits[indices]
-    probs = torch.softmax(torch.tensor(logits), dim=-1)
+    probs = torch.softmax(logits, dim=-1)
     entropy = -torch.sum(probs * torch.log(probs), dim=-1)
     return {"entropy": entropy.mean().item()}
 
