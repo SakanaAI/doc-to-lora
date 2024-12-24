@@ -1,6 +1,6 @@
-from collections import defaultdict
 import json
 import logging
+from collections import defaultdict
 from dataclasses import fields
 from enum import Enum
 
