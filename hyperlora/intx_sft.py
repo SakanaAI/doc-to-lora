@@ -7,6 +7,7 @@ from collections import defaultdict
 from copy import copy
 from functools import partial
 from importlib.resources import read_binary
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -54,59 +55,107 @@ logger = logging.getLogger()
 
 
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
-    indices = np.where(valid_masks)
-    acc = (shift_logits.argmax(-1) == shift_labels)[indices].mean()
+    indices = torch.where(valid_masks)
+    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
     return {"per_token_acc": acc}
 
 
 def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
-    lengths = np.sum(valid_masks, axis=1)
+    lengths = valid_masks.sum(dim=1)
 
     is_wrong = (shift_logits.argmax(-1) != shift_labels) * valid_masks
     is_correct = (shift_logits.argmax(-1) == shift_labels) * valid_masks
     # NOTE: not reliable for multi-turn conversations
     # ie, all tokens in the following user's turn will be correct
     # still monotonically correlate with perf though
-    wrong_pos = np.argmax(is_wrong, axis=1) - np.argmax(valid_masks, axis=1)
+    wrong_pos = torch.argmax(is_wrong, dim=1) - torch.argmax(valid_masks, dim=1)
     perf = wrong_pos / lengths
 
     # if all tokens are correct, set to 1
-    perf = np.where(is_correct.sum(axis=1) == lengths, 1, perf)
-    return {"prefix_matching": perf.mean()}
+    perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
+    return {"prefix_matching": perf.mean().item()}
 
 
 def compute_entropy(shift_logits, shift_labels, valid_masks):
-    indices = np.where(valid_masks)
+    indices = torch.where(valid_masks)
     logits = shift_logits[indices]
     probs = torch.softmax(torch.tensor(logits), dim=-1)
     entropy = -torch.sum(probs * torch.log(probs), dim=-1)
-    return {"entropy": entropy.mean()}
+    return {"entropy": entropy.mean().item()}
 
 
-def compute_metrics(eval_pred: EvalPrediction) -> dict:
-    """
-    Custom metrics function for the trainer
-    Args:
-        eval_pred: tuple of predictions and labels
-    Returns:
-        dictionary containing metric names (str) and values (Any)
-    """
-    # compute per token accuracy
+class Evaluator:
+    def __init__(self, metric_fns: list[Callable]):
+        self.metric_fns = metric_fns
+        self.reset()
+
+    def reset(self):
+        self.accum_metrics = defaultdict(list)
+
+    def update(self, shift_logits, shift_labels, valid_masks):
+        for metric_fn in self.metric_fns:
+            metric = metric_fn(shift_logits, shift_labels, valid_masks)
+            for k, v in metric.items():
+                self.accum_metrics[k].append(v)
+
+    def compute(self):
+        # Get result across entire eval set
+        result = {k: np.mean(v) for k, v in self.accum_metrics.items()}
+        # Reset batch statistics
+        self.reset()
+        return result
+
+
+def compute_metrics(
+    eval_pred: EvalPrediction,
+    compute_result: bool,
+    evaluator: Evaluator,
+) -> Optional[dict]:
     logits, labels = eval_pred.predictions, eval_pred.label_ids
     shift_logits = logits[..., :-1, :]
     shift_labels = labels[..., 1:]
-    valid_masks = np.where(shift_labels != -100, 1, 0)
+    valid_masks = torch.where(shift_labels != -100, 1, 0)
+    evaluator.update(shift_logits, shift_labels, valid_masks)
+    if compute_result:
+        return evaluator.compute()
 
-    per_token_acc = compute_per_token_acc(shift_logits, shift_labels, valid_masks)
-    prefix_matching = compute_prefix_matching(shift_logits, shift_labels, valid_masks)
-    entropy = compute_entropy(shift_logits, shift_labels, valid_masks)
-    return dict(
-        **per_token_acc,
-        **prefix_matching,
-        **entropy,
-        num_valid_tokens=valid_masks.sum(),
-        num_samples=valid_masks.shape[0],
-    )
+
+# def compute_metrics(eval_pred: EvalPrediction) -> dict:
+#     """
+#     Custom metrics function for the trainer
+#     Args:
+#         eval_pred: tuple of predictions and labels
+#     Returns:
+#         dictionary containing metric names (str) and values (Any)
+#     """
+#     # compute per token accuracy
+#     # logits, labels = eval_pred.predictions, eval_pred.label_ids
+#     # shift_logits = logits[..., :-1, :]
+#     pred_ids, labels = eval_pred.predictions, eval_pred.label_ids
+#     shift_pred_ids = pred_ids[..., :-1]
+#     shift_labels = labels[..., 1:]
+#     valid_masks = np.where(shift_labels != -100, 1, 0)
+
+#     per_token_acc = compute_per_token_acc(shift_pred_ids, shift_labels, valid_masks)
+#     prefix_matching = compute_prefix_matching(shift_pred_ids, shift_labels, valid_masks)
+#     # entropy = compute_entropy(shift_logits, shift_labels, valid_masks)
+#     return dict(
+#         **per_token_acc,
+#         **prefix_matching,
+#         # **entropy,
+#         num_valid_tokens=valid_masks.sum(),
+#         num_samples=valid_masks.shape[0],
+#     )
+
+
+# # https://discuss.huggingface.co/t/cuda-out-of-memory-when-using-trainer-with-compute-metrics/2941/13
+# def preprocess_logits_for_metrics(logits, labels):
+#     """
+#     Original Trainer may have a memory leak.
+#     This is a workaround to avoid storing too many tensors that are not needed.
+#     """
+#     pred_ids = torch.argmax(logits, dim=-1)
+#     return pred_ids
 
 
 def main(output_dir: str):
@@ -346,7 +395,14 @@ def main(output_dir: str):
         test_ds,
         partial(train_collator, tokenizer=tokenizer),
         partial(generation_collator, tokenizer=tokenizer),
-        compute_metrics,
+        partial(
+            compute_metrics,
+            evaluator=Evaluator(
+                [compute_per_token_acc, compute_prefix_matching, compute_entropy]
+            ),
+        ),
+        # compute_metrics,
+        # preprocess_logits_for_metrics,
     )
 
 
@@ -357,5 +413,5 @@ if __name__ == "__main__":
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
     save_yaml(extract_cli_args(os.sys.argv), f"{output_dir}/config.yaml")
 
-    disable_caching()
+    # disable_caching()
     main(output_dir)

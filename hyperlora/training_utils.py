@@ -93,6 +93,7 @@ def train_model(
     train_collator=None,
     generation_collator=None,
     compute_metrics=None,
+    preprocess_logits_for_metrics=None,
 ):
 
     # last_checkpoint = None
@@ -137,6 +138,7 @@ def train_model(
         eval_dataset=val_dataset,
         data_collator=train_collator,
         compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 
     checkpoint = None

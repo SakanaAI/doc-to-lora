@@ -12,6 +12,10 @@ logging_steps: 100
 use_liger_kernel: true
 remove_unused_columns: false
 
+# needed to avoid OOM by compute the metrics batch by batch
+# w/o this the trainer stores logits of all sample in memory...
+batch_eval_metrics: true
+
 optim: schedule_free_adamw
 learning_rate: 0.0001
 lr_scheduler_type: "constant_with_warmup"
