@@ -24,20 +24,24 @@ def save_generated_text(samples, output_dir, split):
 
 
 def decode_test_result(test_dataset, test_result, tokenizer):
-    for sample, pred_toks, labels in zip(
-        test_dataset, test_result.predictions, test_result.label_ids
-    ):
-        start_idx = np.argmax(labels != -100, axis=0)
-        input_toks = sample["input_ids"][:start_idx]
-        gen_toks = pred_toks[start_idx:]
-        label_toks = labels[start_idx:]
-        # labels are padded with -100, so we need to replace them with the pad token id
-        label_toks = np.where(label_toks == -100, tokenizer.pad_token_id, label_toks)
+    out = dict()
+    for sample, pred_toks in zip(test_dataset, test_result.predictions):
+        if "labels" in sample:
+            start_idx = np.argmax(sample["labels"] != -100)
+            label_toks = sample["labels"][start_idx:]
+            # labels are padded with -100, so we need to replace them with the pad token id
+            label_toks = np.where(label_toks == -100, tokenizer.pad_token_id, label_toks)
+            label_text = tokenizer.decode(label_toks, skip_special_tokens=True)
+            out["label"] = label_text
 
-        input_text = tokenizer.decode(input_toks, skip_special_tokens=True)
-        gen_text = tokenizer.decode(gen_toks, skip_special_tokens=True)
-        label_text = tokenizer.decode(label_toks, skip_special_tokens=True)
-        yield {"input": input_text, "generated": gen_text, "label": label_text}
+        # HACK: remove the label part
+        input_toks = sample["input_ids"][:start_idx]
+        gen_toks = pred_toks[len(input_toks) :]
+
+        out["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
+        out["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True)
+
+        yield out
 
 
 def eval_generation(eval_trainer, tokenizer, dataset, split, gen_kwargs):

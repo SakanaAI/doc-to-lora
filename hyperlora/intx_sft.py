@@ -218,6 +218,7 @@ def main(output_dir: str):
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
+    # TODO: apply different conversion for generation?
     ds = ds.map(
         convert_ctx_prompt_response_to_messages,
         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
@@ -276,7 +277,7 @@ def main(output_dir: str):
             pad_to_multiple_of=8,
             return_tensors="pt",
         )
-        labels = [x.pop("labels") for x in inp_list]
+
         ctx_features = None
         if "ctx_features" in inp_list[0]:
             # have to be manual since it has [ctx_len, features] shape
@@ -300,6 +301,7 @@ def main(output_dir: str):
         padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
 
         # hacky explicit padding since the labels are not padded by default
+        labels = [x.pop("labels") for x in inp_list]
         labels = tokenizer.pad({"input_ids": labels}, **padding_kwargs)["input_ids"]
         labels = torch.where(padded_seq["attention_mask"] == 0, -100, labels)
         out = {**padded_seq, "labels": labels}
@@ -308,28 +310,30 @@ def main(output_dir: str):
             out["ctx_attn_mask"] = ctx_attn_mask
         return out
 
+    # TODO: generation dataset shouldn't include labels in the "input_ids" field
     def generation_collator(inp_list, tokenizer):
         padding_kwargs = dict(padding=True, padding_side="left", return_tensors="pt")
         input_ids = [x.pop("input_ids") for x in inp_list]
         attn_mask = [x.pop("attention_mask") for x in inp_list]
         labels = [x.pop("labels") for x in inp_list]
         for i, label in enumerate(labels):
-            # remove the label part
+            # HACK: remove the label part
             idx = np.argmax(label != -100)
             input_ids[i] = input_ids[i][:idx]
             attn_mask[i] = attn_mask[i][:idx]
         out = tokenizer.pad(
             {"input_ids": input_ids, "attention_mask": attn_mask}, **padding_kwargs
         )
-        label_pad_len = len(out["input_ids"][0])
-        labels[0] = torch.cat(
-            [torch.tensor([-100] * (label_pad_len - len(label))), label], dim=0
-        )
-        labels = torch.nn.utils.rnn.pad_sequence(
-            labels,
-            batch_first=True,
-            padding_value=-100,
-        ).long()
+        # label_pad_len = len(out["input_ids"][0])
+        # labels[0] = torch.cat(
+        #     [torch.tensor([-100] * (label_pad_len - len(label))), label], dim=0
+        # )
+        # labels = torch.nn.utils.rnn.pad_sequence(
+        #     labels,
+        #     batch_first=True,
+        #     padding_value=-100,
+        # ).long()
+
         out["labels"] = labels
 
         if "ctx_features" in inp_list[0]:
