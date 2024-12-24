@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 import yaml
 from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
 
+from modeling_utils import AGGREGATOR_TYPE
+
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
@@ -160,6 +162,10 @@ class CtxTrainingArguments:
     max_base_len: Optional[int] = field(
         default=2**13,
         metadata={"help": "Maximum base length for training."},
+    )
+    aggregator_type: AGGREGATOR_TYPE = field(
+        default=AGGREGATOR_TYPE.POOLER,
+        metadata={"help": "Aggregator type for HyperLoRA."},
     )
 
 

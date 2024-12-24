@@ -5,43 +5,75 @@ from enum import Enum
 from functools import partial
 from typing import Any, Iterable, Optional, Tuple, Union
 
+from math import pi, log
+from functools import wraps
+
 import torch
+import torch.nn.functional as F
 from einops import rearrange, repeat, unpack
-from einops.layers.torch import EinMix as Mix
+from einops.layers.torch import Reduce, EinMix as Mix
 from hooks import add_generated_lora_hook, remove_hook_handles
 from jaxtyping import Float, Integer
 from model_loading import get_lora_config, get_model_and_tokenizer
 from peft import LoraConfig
 from pooling import POOL_FN, get_pooling_fn
-from torch import Tensor, nn
-from transformers import PreTrainedModel
+from torch import Tensor, nn, einsum
+from transformers import PreTrainedModel, PerceiverConfig, PerceiverModel
 from transformers.modeling_outputs import ModelOutput
 from utils import get_lora_module_names, get_num_layers, get_peft_in_out_features
 
 logger = logging.getLogger()
 
 
-AGGREGATOR_TYPE = Enum("AGGREGATOR_TYPE", ["POOLER", "PERCEIVER"])
+class AGGREGATOR_TYPE(str, Enum):
+    POOLER = "pooler"
+    PERCEIVER = "perceiver"
 
 
 @dataclass
 class AggregatorConfig:
+    # pooler
+    pooling_type: POOL_FN
     feature_size: int
     num_layers: int
     num_modules: int
-    pooling_type: POOL_FN
+    output_size: int
+
+    # # perceiver
+    # depth: int = 8
+    # input_channels: int = 2048
+    # input_axis: int = 1
+    # num_latents: int = 512
+    # latent_dim: int = 512
+    # cross_heads: int = 1
+    # latent_heads: int = 8
+    # cross_dim_head: int = 64
+    # latent_dim_head: int = 64
+    # attn_dropout: float = 0.0
+    # ff_dropout: float = 0.0
+    # weight_tie_layers: bool = False
+    # self_per_cross_attn: int = 1
+
+    # final_classifier_head: bool = False
+    # num_classes: int = 1000
+
+    # fourier_encode_data: bool = False
+    # num_freq_bands: int = 16
+    # max_freq: float = 10.0
 
 
 def get_aggregator_config(
     model: PreTrainedModel,
+    output_size: int,
     pooling_type: POOL_FN = POOL_FN.MEAN,
 ):
     lora_config = model.peft_config["default"]
     return AggregatorConfig(
+        pooling_type=pooling_type,
         feature_size=model.config.hidden_size,
+        output_size=output_size,
         num_layers=get_num_layers(model),
         num_modules=len(lora_config.target_modules),
-        pooling_type=pooling_type,
     )
 
 
@@ -56,7 +88,11 @@ class HypernetConfig:
     aggregator_config: AggregatorConfig
 
 
-def get_hypernet_config(model: PreTrainedModel, latent_size: int = 256):
+def get_hypernet_config(
+    model: PreTrainedModel,
+    latent_size: int = 256,
+    aggregator_type: AGGREGATOR_TYPE = AGGREGATOR_TYPE.POOLER,
+):
     lora_config = model.peft_config["default"]
     indices = torch.arange(get_num_layers(model), device=model.device)
     return HypernetConfig(
@@ -65,18 +101,42 @@ def get_hypernet_config(model: PreTrainedModel, latent_size: int = 256):
         module_names=get_lora_module_names(model, lora_config.target_modules, indices),
         layer_indices=indices,
         feature_sizes=get_peft_in_out_features(model, peft_config=lora_config),
-        aggregator_type=AGGREGATOR_TYPE.POOLER,
-        aggregator_config=get_aggregator_config(model, POOL_FN.MEAN),
+        aggregator_type=aggregator_type,
+        aggregator_config=get_aggregator_config(model, latent_size, POOL_FN.MEAN),
     )
 
 
-# TODO: implement Perceiver
 class Perceiver(nn.Module):
     """perceiver w/ bottleneck size = n_modules * n_layers"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self, feature_size, output_size, num_layers, num_modules, *args, **kwargs
+    ):
         super().__init__()
-        pass
+        self.num_layers = num_layers
+        self.num_modules = num_modules
+        self.config = PerceiverConfig(
+            d_model=feature_size,
+            num_latents=num_layers * num_modules,
+            d_latents=output_size,
+            **kwargs,
+        )
+        # TODO: could do something more complex e.g., decoder query, etc.
+        self.perceiver = PerceiverModel(self.config)
+
+    def forward(
+        self,
+        ctx_features: Float[Tensor, "bs seq_len feature_dim"],
+        ctx_attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    ):
+        x = self.perceiver(ctx_features * ctx_attn_mask.unsqueeze(-1)).last_hidden_state
+        x = rearrange(
+            x,
+            "bs (n_layers n_modules) d -> bs n_layers n_modules d",
+            n_modules=self.num_modules,
+            n_layers=self.num_layers,
+        )
+        return x
 
 
 class Mixer(nn.Module):
@@ -133,6 +193,8 @@ class Pooler(nn.Module):
         pooling_type: POOL_FN,
         num_layers: int,
         num_modules: int,
+        *args,
+        **kwargs,
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -194,7 +256,7 @@ class Pooler(nn.Module):
         return self.mlp(self.mixer(emb))
 
 
-AGGREGATOR_CLS = {
+AG = {
     AGGREGATOR_TYPE.POOLER: Pooler,
     AGGREGATOR_TYPE.PERCEIVER: Perceiver,
 }
@@ -273,10 +335,7 @@ class HyperLoRA(nn.Module):
         # aggregator output [bs, n_layers, n_modules, feature_dim]
         # by mixing the pooled features with layer embs and module embs (for pooling)
         # or via a perceiver w/ bottleneck size = n_modules * n_layers
-        self.aggregator = AGGREGATOR_CLS[config.aggregator_type](
-            **vars(config.aggregator_config),
-            output_size=config.latent_size,
-        )
+        self.aggregator = AG[config.aggregator_type](**vars(config.aggregator_config))
 
         self.lora_config = config.lora_config
 
@@ -404,10 +463,13 @@ class ModulatedPretrainedModel(nn.Module):
         # TODO: truncate the ctx_ids to the max_ctx_len
         out = dict()
         input_ids = torch.tensor(examples.get("ctx_ids")).to(self.device)
+        # we don't really use ctx_attn_mask here but it'll be padded
+        # and used by hypernet.aggregator which has to handle ctx_attn_mask
         attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
 
+        # NOTE: this might not work for batched inputs
         if isinstance(self.ctx_encoder, nn.Embedding):
-            features = self.ctx_encoder(input_ids[torch.where(attention_mask)])
+            features = self.ctx_encoder(input_ids)
         else:
             features = self.ctx_encoder(
                 input_ids=input_ids, attention_mask=attention_mask

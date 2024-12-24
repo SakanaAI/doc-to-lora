@@ -209,7 +209,9 @@ def main(output_dir):
 
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
-        hypernet = HyperLoRA(get_hypernet_config(model)).to(model.device)
+        hypernet = HyperLoRA(
+            get_hypernet_config(model, aggregator_type=ctx_args.aggregator_type)
+        ).to(model.device)
         # HACK: hardcode the embedding layer for now
         # TODO: add ctx_encoder config
         # ctx_encoder = torch.nn.Embedding.from_pretrained(
@@ -265,6 +267,7 @@ def main(output_dir):
     # computes ctx_features offline when using hyperlora
     if isinstance(model, ModulatedPretrainedModel):
         # TODO: can we batch this?
+        # TODO: can we cache this?
         tokenized_ds = tokenized_ds.map(
             tokenize_ctx_text, fn_kwargs={"tokenizer": tokenizer}
         )
