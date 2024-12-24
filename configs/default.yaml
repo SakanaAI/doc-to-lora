@@ -16,6 +16,8 @@ remove_unused_columns: false
 # w/o this the trainer stores logits of all sample in memory...
 batch_eval_metrics: true
 
+per_device_train_batch_size: 128
+per_device_eval_batch_size: 128
 optim: schedule_free_adamw
 learning_rate: 0.0001
 lr_scheduler_type: "constant_with_warmup"
