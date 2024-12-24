@@ -309,6 +309,7 @@ def tokenize_chat_messages(
         text,
         return_offsets_mapping=mask_assistant_inputs,
         add_special_tokens=False,
+        truncation=True,
         **(tokenizer_kwargs or {}),
     )
     if mask_assistant_inputs:

@@ -63,7 +63,8 @@ def train_model(
     train_dataset=None,
     val_dataset=None,
     test_dataset=None,
-    data_collator=None,
+    train_collator=None,
+    generation_collator=None,
     compute_metrics=None,
     compute_generation_based_metrics=None,
 ):
@@ -108,7 +109,7 @@ def train_model(
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        data_collator=data_collator,
+        data_collator=train_collator,
         compute_metrics=compute_metrics,
     )
 
@@ -169,7 +170,9 @@ def train_model(
         model=model,
         args=eval_trainer_args,
         # TODO: use a different collator for test, e.g., more max_len truncation
-        data_collator=data_collator,
+        # w/ left padding?
+        # removing label part from input_ids
+        data_collator=generation_collator,
         compute_metrics=compute_generation_based_metrics,
     )
     if val_dataset is not None:

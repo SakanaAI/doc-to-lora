@@ -349,6 +349,7 @@ class ModulatedPretrainedModel(nn.Module):
         self,
         examples: dict[str, Any],
     ):
+        # TODO: truncate the ctx_ids to the max_ctx_len
         out = dict()
         input_ids = torch.tensor(examples.get("ctx_ids")).to(self.device)
         attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
@@ -370,15 +371,21 @@ class ModulatedPretrainedModel(nn.Module):
     ) -> Union[tuple, ModelOutput]:
         """Forward pass of the modulated model."""
 
+        generated_loras = None
         if ctx_features is None:
             logger.warning(
-                "No context ids provided, using the base model for the forward pass"
+                (
+                    "*" * 100,
+                    "\n\nNo ctx_features provided, using the base model for forward pass\n\n",
+                    "*" * 100,
+                )
             )
-            model_outputs = self.base_model(**model_inputs_kwargs)
+            # model_outputs = self.base_model(**model_inputs_kwargs)
             # model_outputs.generated_loras = None
-            return model_outputs
+            # return model_outputs
 
-        generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
+        else:
+            generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
         # apply lora hook to the base model
         # self.apply_generated_loras(generated_loras)
@@ -399,15 +406,20 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         **model_inputs_kwargs: dict[str, Any],
     ):
+        generated_loras = None
         if ctx_features is None:
             logger.warning(
-                "No context ids provided, using the base model for the forward pass"
+                (
+                    "*" * 100,
+                    "\n\nNo ctx_features provided, using the base model for generation\n\n",
+                    "*" * 100,
+                )
             )
-            model_outputs = self.base_model(**model_inputs_kwargs)
+            # model_outputs = self.base_model(**model_inputs_kwargs)
             # model_outputs.generated_loras = None
-            return model_outputs
-
-        generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
+            # return model_outputs
+        else:
+            generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
         # apply lora hook to the base model
         # self.apply_generated_loras(generated_loras)
@@ -424,10 +436,14 @@ class ModulatedPretrainedModel(nn.Module):
 @contextmanager
 def apply_generated_loras(
     base_model: nn.Module,
-    generated_loras: dict,
-    layer_indices: Iterable[int],
+    generated_loras: Optional[dict] = None,
+    layer_indices: Optional[Iterable[int]] = None,
     training: bool = False,
 ):
+    if generated_loras is None:
+        yield base_model
+        return
+
     try:
         hooks = []
         for module_name in generated_loras:

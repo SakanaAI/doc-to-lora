@@ -157,6 +157,18 @@ class CtxTrainingArguments:
         default=ExperimentSetup.LORA,
         metadata={"help": "Experiment setup - LoRA, HyperLoRA, or full finetuning"},
     )
+    max_base_len: Optional[int] = field(
+        default=2**13,
+        metadata={"help": "Maximum base length for training."},
+    )
+
+
+@dataclass
+class DataArguments:
+    train_ds_name: str = field(
+        default="",
+        metadata={"help": "Name of the training dataset."},
+    )
 
 
 if __name__ == "__main__":
