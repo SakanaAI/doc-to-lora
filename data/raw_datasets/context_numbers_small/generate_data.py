@@ -1,10 +1,10 @@
 import json
-import random
-from typing import List, Dict
 import os
+import random
+from typing import Dict, List
 
 
-def save_jsonl(data: List[Dict], filepath: str) -> None:
+def save_jsonl(data: list[dict], filepath: str) -> None:
     """Save data to a JSONL file."""
     parent_dir = os.path.dirname(filepath)
     if parent_dir:  # Only create directories if there's a parent path

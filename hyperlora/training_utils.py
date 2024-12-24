@@ -6,12 +6,11 @@ from enum import Enum
 import numpy as np
 from transformers import (
     GenerationConfig,
-    Trainer,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    Trainer,
 )
 from transformers.trainer_utils import get_last_checkpoint
-
 
 TRAINING_TASK = Enum("TRAINING_TASK", ["CAUSAL_LM", "COMPLETION"])
 

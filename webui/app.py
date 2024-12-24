@@ -1,9 +1,9 @@
-import os
 import json
+import os
 
 import torch
 import yaml
-from flask import Flask, render_template, request, abort, jsonify
+from flask import Flask, abort, jsonify, render_template, request
 from transformers import pipeline
 
 app = Flask(__name__)
@@ -27,7 +27,7 @@ def get_run_data(run_path):
     """
     results_file = os.path.join(run_path, "all_results.json")
     try:
-        with open(results_file, "r") as f:
+        with open(results_file) as f:
             data = json.load(f)
     except FileNotFoundError:
         return None
@@ -59,7 +59,7 @@ def get_generated_text_data(run_path):
         filename = f"{split}_generated_text.jsonl"
         filepath = os.path.join(run_path, filename)
         try:
-            with open(filepath, "r") as f:
+            with open(filepath) as f:
                 lines = f.readlines()
                 data = [json.loads(line) for line in lines]
             generated_data[split] = data
@@ -103,7 +103,7 @@ def visualize(run):
     # Load config.yaml from the run directory
     config_path = os.path.join(logdir, "config.yaml")
     try:
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             config = yaml.safe_load(f)
             model_name = config.get("model_name_or_path")
     except FileNotFoundError:
@@ -133,7 +133,7 @@ def load_model():
     logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
     config_path = os.path.join(logdir, "config.yaml")
     try:
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             config = yaml.safe_load(f)
             chat_model_name = config.get("model_name_or_path")
     except FileNotFoundError:

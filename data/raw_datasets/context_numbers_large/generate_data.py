@@ -1,11 +1,11 @@
-import json
-import random
-from typing import List, Dict
-import os
 import itertools
+import json
+import os
+import random
+from typing import Dict, List
 
 
-def save_jsonl(data: List[Dict], filepath: str) -> None:
+def save_jsonl(data: list[dict], filepath: str) -> None:
     """Save data to a JSONL file."""
     parent_dir = os.path.dirname(filepath)
     if parent_dir:  # Only create directories if there's a parent path
@@ -16,7 +16,7 @@ def save_jsonl(data: List[Dict], filepath: str) -> None:
             f.write("\n")
 
 
-def get_random_combinations(numbers: List[int], n: int, k: int) -> List[List[int]]:
+def get_random_combinations(numbers: list[int], n: int, k: int) -> list[list[int]]:
     """Get n random combinations of k numbers from the list."""
     # using itertools.combinations hangs with large numbers
     # so we explicitly generate the n indices
