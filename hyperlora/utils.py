@@ -42,6 +42,12 @@ def get_num_layers(model):
     return len(get_layers(model))
 
 
+def get_base_model(model):
+    if hasattr(model, "model"):
+        return get_base_model(model.model)
+    return model
+
+
 def get_num_params(model):
     total_params = 0
     trainable_params = 0

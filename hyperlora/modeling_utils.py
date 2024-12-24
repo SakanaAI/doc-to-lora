@@ -200,6 +200,59 @@ AGGREGATOR_CLS = {
 }
 
 
+@contextmanager
+def early_exit(base_model: PreTrainedModel, exit_layer: int):
+    try:
+        layers = base_model.layers
+        base_model.layers = layers[:exit_layer]
+        yield base_model
+    finally:
+        base_model.layers = layers
+
+
+@contextmanager
+def maybe_add_batch_dim(kwargs):
+    try:
+        batched_input = False
+        batched_attn_mask = False
+        if len(kwargs["input_ids"].shape) == 1:
+            kwargs["input_ids"] = kwargs["input_ids"].unsqueeze(0)
+            batched_input = True
+        if len(kwargs["attention_mask"].shape) == 1:
+            kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
+            batched_attn_mask = True
+        yield batched_input, batched_attn_mask
+    finally:
+        if batched_input:
+            kwargs["input_ids"] = kwargs["input_ids"].squeeze(0)
+        if batched_attn_mask:
+            kwargs["attention_mask"] = kwargs["attention_mask"].squeeze(0)
+
+
+class EarlyExit(nn.Module):
+    def __init__(self, base_model: PreTrainedModel, exit_layer: int):
+        super().__init__()
+        self.base_model = base_model
+        self.exit_layer = exit_layer
+
+    def forward(self, **kwargs):
+        # if len(kwargs["input_ids"].shape) == 1:
+        #     kwargs["input_ids"] = kwargs["input_ids"].unsqueeze(0)
+        # if len(kwargs["attention_mask"].shape) == 1:
+        #     kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
+
+        with (
+            early_exit(self.base_model, self.exit_layer),
+            maybe_add_batch_dim(kwargs) as (batched_input, batched_attn_mask),
+        ):
+            model_outputs = self.base_model(**kwargs)
+
+        if batched_input:
+            model_outputs.last_hidden_state = model_outputs.last_hidden_state.squeeze(0)
+
+        return model_outputs.last_hidden_state
+
+
 class HyperLoRA(nn.Module):
     def __init__(
         self,
@@ -312,14 +365,7 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_encoder: nn.Module,  # TODO: maybe just use the name/config?
     ):
         super().__init__()
-        # self.base_model = base_model
         self.device = base_model.device
-        # NOTE: we can reduce extractor_lm's depth by
-        # e.g., self.extractor_lm.model.layers = self.extractor_lm.model.layers[:num_extractor_layers]
-        # or just use the token embeddings extractor_lm.embed_tokens(input_ids)
-
-        # self.ctx_encoder = ctx_encoder  # base_model.get_input_embeddings()
-
         # register base_model as a submodule
         self.register_module("base_model", base_model)
         self.register_module("hypernet", hypernet)
@@ -337,14 +383,20 @@ class ModulatedPretrainedModel(nn.Module):
         state_dict = super().state_dict(*args, **kwargs)
         # remove non-trainable and base_model's params
         for name, param in self.named_parameters():
-            if (not param.requires_grad) or name.startswith("base_model"):
+            if not param.requires_grad:
                 state_dict.pop(name, None)
+
+        for name in list(state_dict.keys()):
+            if name.startswith("base_model") or name.startswith("ctx_encoder"):
+                state_dict.pop(name, None)
+
         return state_dict
 
     def load_state_dict(self, state_dict: dict, *args, **kwargs):
         # NOTE: might have to set `strict=False` as we don't save all the params
         return super().load_state_dict(state_dict, *args, **kwargs)
 
+    @torch.no_grad()
     def get_ctx_features(
         self,
         examples: dict[str, Any],
@@ -355,7 +407,7 @@ class ModulatedPretrainedModel(nn.Module):
         attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
 
         if isinstance(self.ctx_encoder, nn.Embedding):
-            features = self.ctx_encoder(input_ids)
+            features = self.ctx_encoder(input_ids[torch.where(attention_mask)])
         else:
             features = self.ctx_encoder(
                 input_ids=input_ids, attention_mask=attention_mask
@@ -400,6 +452,7 @@ class ModulatedPretrainedModel(nn.Module):
 
         return model_outputs
 
+    @torch.no_grad()
     def generate(
         self,
         ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,

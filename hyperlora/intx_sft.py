@@ -21,7 +21,12 @@ from data_utils import (
 )
 from datasets import disable_caching, load_dataset
 from model_loading import get_lora_config, get_model_and_tokenizer
-from modeling_utils import HyperLoRA, ModulatedPretrainedModel, get_hypernet_config
+from modeling_utils import (
+    EarlyExit,
+    HyperLoRA,
+    ModulatedPretrainedModel,
+    get_hypernet_config,
+)
 from rouge_score import rouge_scorer
 from training_utils import TRAINING_TASK, train_model
 from transformers import (
@@ -34,6 +39,7 @@ from transformers import (
 )
 from utils import (
     extract_cli_args,
+    get_base_model,
     get_run_name,
     log_num_train_params,
     save_yaml,
@@ -158,7 +164,7 @@ def compute_metrics(
 #     return pred_ids
 
 
-def main(output_dir: str):
+def main(output_dir):
     ############ Argument parsing
     parser = ArgumentParser(
         (
@@ -205,21 +211,20 @@ def main(output_dir: str):
         logger.info("Using HyperLoRA")
         hypernet = HyperLoRA(get_hypernet_config(model)).to(model.device)
         # HACK: hardcode the embedding layer for now
-        # TODO: add explicit encoder
-        ctx_encoder = torch.nn.Embedding.from_pretrained(
-            model.get_input_embeddings().weight.clone(),
-            freeze=True,
-        )
-        model = (
-            ModulatedPretrainedModel(model, hypernet, ctx_encoder)
-            .to(model.device)
-            .train()
-        )
+        # TODO: add ctx_encoder config
+        # ctx_encoder = torch.nn.Embedding.from_pretrained(
+        #     model.get_input_embeddings().weight.clone(),
+        #     freeze=True,
+        # )
+        # TODO: have to use at least 1 layer bc positional embeddings
+        ctx_encoder = EarlyExit(get_base_model(model), 1)
+        model = ModulatedPretrainedModel(model, hypernet, ctx_encoder).to(model.device)
     else:
         # activate LoRA
         logger.info("Using LoRA")
         model.set_adapter("default")
 
+    model.train()
     logger.debug(model)
     log_num_train_params(model)
 
