@@ -109,36 +109,6 @@ def compute_metrics(eval_pred: EvalPrediction) -> dict:
     )
 
 
-def compute_rouge(pred_texts, label_texts):
-    out = defaultdict(list)
-    scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=False)
-    for pred_text, label_text in zip(pred_texts, label_texts):
-        scores = scorer.score(pred_text, label_text)
-        for k, v in scores.items():
-            out[f"{k}.f1"].append(v.fmeasure)
-    for k in out:
-        out[k] = np.mean(out[k])
-    return out
-
-
-def compute_generation_based_metrics(
-    eval_pred: EvalPrediction,
-    tokenizer: AutoTokenizer,
-) -> dict:
-    pred_toks, labels = eval_pred.predictions, eval_pred.label_ids
-
-    start_indices = np.argmax(labels != -100, axis=1)
-
-    gen_toks = [x[start_indices[i] :] for i, x in enumerate(pred_toks)]
-    label_toks = [x[start_indices[i] :] for i, x in enumerate(labels)]
-    # labels are padded with -100, so we need to replace them with the pad token id
-    label_toks = [np.where(x == -100, tokenizer.pad_token_id, x) for x in label_toks]
-    gen_text = tokenizer.batch_decode(gen_toks, skip_special_tokens=True)
-    label_text = tokenizer.batch_decode(label_toks, skip_special_tokens=True)
-    rouge = compute_rouge(gen_text, label_text)
-    return {**rouge}
-
-
 def main(output_dir: str):
     ############ Argument parsing
     parser = ArgumentParser(
@@ -377,7 +347,6 @@ def main(output_dir: str):
         partial(train_collator, tokenizer=tokenizer),
         partial(generation_collator, tokenizer=tokenizer),
         compute_metrics,
-        partial(compute_generation_based_metrics, tokenizer=tokenizer),
     )
 
 
