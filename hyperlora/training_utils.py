@@ -72,7 +72,8 @@ def eval_generation(eval_trainer, tokenizer, dataset, split, gen_kwargs):
         [txt["generated"] for txt in decoded_txts],
         [txt["label"] for txt in decoded_txts],
     )
-    eval_result.metrics.update(rouge_metrics)
+    for k, v in rouge_metrics.items():
+        eval_result.metrics[f"{split}_{k}"] = v
     eval_trainer.log_metrics("eval" if split == "val" else split, eval_result.metrics)
     eval_trainer.save_metrics("eval" if split == "val" else split, eval_result.metrics)
 
