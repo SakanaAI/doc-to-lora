@@ -90,7 +90,7 @@ class HypernetConfig:
 
 def get_hypernet_config(
     model: PreTrainedModel,
-    latent_size: int = 256,
+    latent_size: int = 512,
     aggregator_type: AGGREGATOR_TYPE = AGGREGATOR_TYPE.POOLER,
 ):
     lora_config = model.peft_config["default"]
@@ -107,6 +107,9 @@ def get_hypernet_config(
 
 
 class Perceiver(nn.Module):
+    # TODO: we could expand the latent query size to be much bigger
+    # and then do cross-attn with an output query with size [n_layers x n_modules]
+    # https://huggingface.co/docs/transformers/en/model_doc/perceiver#transformers.models.perceiver.modeling_perceiver.PerceiverBasicDecoder
     """perceiver w/ bottleneck size = n_modules * n_layers"""
 
     def __init__(
@@ -356,25 +359,35 @@ class HyperLoRA(nn.Module):
 
         # TODO: check initialization of the head
         # default values are prob. way too big
+        #
+        # we can separate the modules while vectorizing by
+        # making modules have the same output size then slicing
+        # the output to the correct size
+        # TODO: could be even more efficient if we use lightweight LoRA
+        # ie. project the input to a smaller subspace (w/ same size) for all modules
         self.head = Mix(
-            "bs n_layers n_modules d -> bs n_layers r out_d",
-            weight_shape="n_modules d r out_d",
+            "bs n_layers n_modules d -> bs n_layers n_modules r out_d",
+            weight_shape="d r out_d",
             bias_shape=None,  # no bias
-            n_modules=len(self.target_modules),
             d=config.latent_size,
             r=config.lora_config.r,
-            out_d=sum(self.in_d[m] + self.out_d[m] for m in self.target_modules),
+            out_d=max(self.in_d[m] + self.out_d[m] for m in self.target_modules),
         )
 
     def _to_lora_dict(
-        self, flat_loras: Float[Tensor, "bs n_layers r _"]
+        self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
     ) -> dict[str, dict[str, Float[Tensor, "bs n_layers r _"]]]:
-        # list of [bs, n_layers, r, in_out_dim]
-        # and in_out_dim might vary across modules
+        # # list of [bs, n_layers, r, in_out_dim]
+        # # and in_out_dim might vary across modules
+        # loras = unpack(
+        #     flat_loras,
+        #     [[self.in_d[m] + self.out_d[m]] for m in self.target_modules],
+        #     "bs n_layers r *",
+        # )
         loras = unpack(
             flat_loras,
-            [[self.in_d[m] + self.out_d[m]] for m in self.target_modules],
-            "bs n_layers r *",
+            [[] for _ in range(len(self.target_modules))],
+            "bs n_layers * r max_io_dim",
         )
 
         # dict of {module:
@@ -383,7 +396,7 @@ class HyperLoRA(nn.Module):
         lora_dict = dict()
         for module, lora in zip(self.target_modules, loras):
             A, B = unpack(
-                lora,
+                lora[..., : self.in_d[module] + self.out_d[module]],
                 [[self.in_d[module]], [self.out_d[module]]],
                 "bs n_layers r *",
             )
@@ -402,7 +415,7 @@ class HyperLoRA(nn.Module):
         # [bs, n_layers, n_modules, feature_dim]
         emb = self.aggregator(features, attn_mask)
 
-        # [bs, n_layers, r, in_out_dim_mod1 + in_out_dim_mod2 + ...]
+        # [bs, n_layers, n_modules, r, max_in_out_dim]
         flat_loras = self.head(self.layers(emb))
 
         return flat_loras
