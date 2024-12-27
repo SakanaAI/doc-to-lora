@@ -70,6 +70,12 @@ def get_tokenizer(
     # tokenizer.pad_token = tokenizer.eos_token
     # tokenizer.add_bos_token = True
 
+    template_path = f"chat_templates/{model_name_or_path}.jinja"
+    if os.path.exists(template_path):
+        logger.info(f"Using chat template from {template_path}")
+        chat_template = open(template_path).read()
+        chat_template = chat_template.replace("    ", "").replace("\n", "")
+        tokenizer.chat_template = chat_template
     # assert os.path.exists(f"{model_name_or_path}/chat_template.jinja"), (
     #     f"Chat template not found in {model_name_or_path}\n\n"
     #     "We assume a specfic form of chat template for consistency between models. Please use the templates provided",

@@ -324,7 +324,7 @@ def main(output_dir):
                 batch_first=True,
                 padding_value=0,
             )
-
+        labels = [x.pop("labels") for x in inp_list]
         padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
 
         # hacky explicit padding since the labels are not padded by default
