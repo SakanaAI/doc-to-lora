@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import torch
 import yaml
@@ -194,6 +195,31 @@ def get_system_msg():
     if chat_history and "content" in chat_history[0]:
         return jsonify({"system_msg": chat_history[0]["content"]})
     return jsonify({"system_msg": ""})
+
+
+@app.route("/get_command/<run>")
+def get_command(run):
+    """
+    Extracts the command from the debug.log file.
+
+    Args:
+        run: The name of the training run.
+
+    Returns:
+        A JSON response containing the command or an error message.
+    """
+    logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
+    debug_log_path = os.path.join(logdir, "debug.log")
+
+    try:
+        with open(debug_log_path) as f:
+            for line in f:
+                if "CMD:" in line:
+                    command = line.split("CMD:")[1].strip()
+                    return jsonify({"command": command})
+        return jsonify({"command": "Command not found in debug.log."})
+    except FileNotFoundError:
+        return jsonify({"command": "debug.log not found."})
 
 
 if __name__ == "__main__":

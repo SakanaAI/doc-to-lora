@@ -141,6 +141,16 @@
         margin-bottom: 20px;
     }
 
+    .top-controls>div {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .top-controls h1 {
+        margin-bottom: 5px;
+    }
+
     .top-controls button {
         margin-right: 20px;
         padding: 12px 24px;
@@ -208,7 +218,10 @@
 
 {% block content %}
 <div class="top-controls">
-    <h1>Training Run: {{ run }}</h1>
+    <div>
+        <h1>Training Run: {{ run }}</h1>
+        <p>Command: <span id="command"></span></p>
+    </div>
     <button onclick="goBack()">Go Back</button>
 </div>
 
@@ -241,9 +254,13 @@
         <div class="generated-text-container">
             <h2>Generated Text ({{ split }})</h2>
             <div id="{{ split }}-text" class="generated-text-display">
+                <p id="{{ split }}-context-container" style="display: none;">
+                    <strong>Context:</strong> <span id="{{ split }}-context"></span>
+                </p>
                 <p><strong>Input:</strong> <span id="{{ split }}-input"></span></p>
                 <p><strong>Generated:</strong> <span id="{{ split }}-generated"></span></p>
                 <p><strong>Label:</strong> <span id="{{ split }}-label"></span></p>
+
             </div>
             <div class="generated-text-controls">
                 <button onclick="prev('{{ split }}')">Prev</button>
@@ -281,6 +298,13 @@
     function updateText(split) {
         var index = parseInt(document.getElementById(split + '-index').value) - 1;
         var data = generatedData[split][index];
+        // Check if 'context' exists in the data and update it
+        if ('context' in data) {
+            document.getElementById(split + '-context').textContent = data.context;
+            document.getElementById(split + '-context-container').style.display = 'block';
+        } else {
+            document.getElementById(split + '-context-container').style.display = 'none';
+        }
         document.getElementById(split + '-input').textContent = data.input;
         document.getElementById(split + '-generated').textContent = data.generated;
         document.getElementById(split + '-label').textContent = data.label;
@@ -310,17 +334,39 @@
         updateText(split);
     }
 
-    // Initialize text for each split
-    {% for split, data in generated_data.items() %}
-    {% if data %}
-    updateText('{{ split }}');
-    {% endif %}
-    {% endfor %}
+    // Initialize text for each split using JavaScript
+    window.addEventListener('DOMContentLoaded', (event) => {
+        for (const split in generatedData) {
+            if (generatedData[split].length > 0) {
+                updateText(split);
+            }
+        }
+    });
 
     function goBack() {
         window.history.back();
     }
 
+    function getCommand(run) {
+        fetch('/get_command/' + run)
+            .then(response => response.json())
+            .then(data => {
+                if (data.command) {
+                    document.getElementById('command').textContent = data.command;
+                } else {
+                    document.getElementById('command').textContent = 'Command not found.';
+                }
+            })
+            .catch(error => {
+                console.error("Error fetching command:", error);
+                document.getElementById('command').textContent = 'Error loading command.';
+            });
+    }
+
+    // Call getCommand when the page loads
+    window.addEventListener('DOMContentLoaded', (event) => {
+        getCommand('{{ run }}');
+    });
 
     function sendMessage() {
         const systemMsg = document.getElementById('system-msg').value;
