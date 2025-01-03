@@ -16,10 +16,11 @@ from data_utils import (
     convert_ctx_prompt_response_to_messages,
     get_preprocessing_fn,
     get_sft_prompt_formatting_fn,
+    get_tokenized_dataset,
     tokenize_chat_messages,
     tokenize_ctx_text,
 )
-from datasets import disable_caching, load_dataset
+from datasets import concatenate_datasets, disable_caching, load_dataset
 from model_loading import get_lora_config, get_model_and_tokenizer
 from modeling_utils import (
     EarlyExit,
@@ -45,7 +46,6 @@ from utils import (
     save_yaml,
     setup_logging,
     validate_args,
-    validate_columns,
 )
 
 from configs import (
@@ -178,9 +178,10 @@ def main(output_dir):
     data_args, ctx_args, model_args, lora_args, training_args = parser.parse()
 
     # there shouldn't be overlap between args
-    validate_args([ctx_args, model_args, lora_args, training_args])
+    validate_args([data_args, ctx_args, model_args, lora_args, training_args])
 
     args = {
+        **vars(data_args),
         **vars(ctx_args),
         **vars(model_args),
         **vars(lora_args),
@@ -192,6 +193,7 @@ def main(output_dir):
     training_args.output_dir = output_dir
     training_args.logging_dir = output_dir
     logger.info(f"run_name: {run_name}")
+    logger.info(f"data_args: {data_args}")
     logger.info(f"ctx_args: {ctx_args}")
     logger.info(f"model_args: {model_args}")
     logger.info(f"lora_args: {lora_args}")
@@ -218,8 +220,8 @@ def main(output_dir):
         #     model.get_input_embeddings().weight.clone(),
         #     freeze=True,
         # )
-        # TODO: have to use at least 1 layer bc positional embeddings
-        ctx_encoder = EarlyExit(get_base_model(model), 1)
+        # have to use at least 1 layer bc positional embeddings
+        ctx_encoder = EarlyExit(get_base_model(model), 4)
         model = ModulatedPretrainedModel(model, hypernet, ctx_encoder).to(model.device)
     else:
         # activate LoRA
@@ -234,64 +236,144 @@ def main(output_dir):
 
     logger.info("Loading dataset...")
 
-    # TODO: handle multiple training datasets
-    # TODO: handle evaluating on different datasets
-
-    ds = load_dataset(data_args.train_ds_name)
-    logger.debug(f"ds: {ds}")
-    # preprocessing
-    ds = ds.map(get_preprocessing_fn(data_args.train_ds_name))
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
-    # for sft + chat_model, we need to convert the dataset to chat format
-    # add "messages" field
-    # TODO: apply different conversion for generation?
-    ds = ds.map(
-        convert_ctx_prompt_response_to_messages,
-        fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+    need_ctx_features = isinstance(model, ModulatedPretrainedModel)
+    prompt_formatting_fn = get_sft_prompt_formatting_fn(
+        TRAINING_TASK.COMPLETION, tokenizer
     )
-    # add "chat" field
-    ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
-    # tokenize the chat + mask the assistant inputs
-    pre_tok_cols = copy(ds["train"].column_names)
-    tokenized_ds = ds.map(
-        tokenize_chat_messages,
-        fn_kwargs={
-            "tokenizer": tokenizer,
-            "mask_assistant_inputs": True,
-            "tokenizer_kwargs": {
-                "max_length": ctx_args.max_base_len,
-            },
-        },
+    tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
+    # get_ctx_features_fn = model.get_ctx_features if need_ctx_features else None
+    _get_tokenized_dataset = partial(
+        get_tokenized_dataset,
+        tokenizer=tokenizer,
+        tokenizer_kwargs=tokenizer_kwargs,
+        add_ctx_to_chat=add_ctx_to_chat,
+        # get_ctx_features_fn=get_ctx_features_fn,
     )
-
-    # computes ctx_features offline when using hyperlora
-    if isinstance(model, ModulatedPretrainedModel):
-        # TODO: can we batch this?
-        # TODO: can we cache this?
-        tokenized_ds = tokenized_ds.map(
-            tokenize_ctx_text, fn_kwargs={"tokenizer": tokenizer}
-        )
-        tokenized_ds = tokenized_ds.map(
-            # TODO: truncate the ctx_ids to the max_ctx_len
-            model.get_ctx_features,
-            remove_columns=["ctx_ids"],
+    tokenized_ds = {}
+    for split, ds_names in zip(
+        ["train", "validation", "test"],
+        [data_args.train_ds_names, data_args.val_ds_names, data_args.test_ds_names],
+    ):
+        if ds_names is None:
+            continue
+        tokenized_ds[split] = concatenate_datasets(
+            [_get_tokenized_dataset(ds_name, split) for ds_name in ds_names]
         )
 
-    tokenized_ds = tokenized_ds.remove_columns(pre_tok_cols)
-    tokenized_ds.set_format(type="pt")
+    # for ds_name in data_args.train_ds_names:
+    #     ds = load_dataset(ds_name)
+    #     ds = ds.map(get_preprocessing_fn(ds_name))
+    #     if "test" in ds:
+    #         ds.pop("test")
+    #     # check if the dataset has only ["train", "validation"]
+    #     if ds.keys() > set(["train", "validation"]):
+    #         raise ValueError(
+    #             f"Dataset should only have 'train' and 'validation'. " f"Got {ds.keys()}"
+    #         )
+    #     # for sft + chat_model, we need to convert the dataset to chat format
+    #     # add "messages" field
+    #     ds = ds.map(
+    #         convert_ctx_prompt_response_to_messages,
+    #         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+    #     )
+    #     # add "chat" field
+    #     # ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
 
-    validate_columns(tokenized_ds)
+    #     # apply chat template for chat model
+    #     ds = ds.map(prompt_formatting_fn)
+    #     # tokenize the chat + mask the assistant inputs
+    #     pre_tok_cols = copy(ds["train"].column_names)
+    #     tokenized_ds = ds.map(
+    #         tokenize_chat_messages,
+    #         fn_kwargs={
+    #             "tokenizer": tokenizer,
+    #             "mask_assistant_inputs": True,
+    #             "tokenizer_kwargs": {
+    #                 "max_length": ctx_args.max_base_len,
+    #             },
+    #         },
+    #     )
+
+    #     # computes ctx_features offline when using hyperlora
+    #     if need_ctx_features:
+    #         # TODO: can we batch this?
+    #         # TODO: can we cache this?
+    #         tokenized_ds = tokenized_ds.map(
+    #             tokenize_ctx_text, fn_kwargs={"tokenizer": tokenizer}
+    #         )
+    #         tokenized_ds = tokenized_ds.map(
+    #             # TODO: truncate the ctx_ids to the max_ctx_len
+    #             model.get_ctx_features,
+    #             remove_columns=["ctx_ids"],
+    #         )
+
+    #     tokenized_ds = tokenized_ds.remove_columns(pre_tok_cols)
+    #     tokenized_ds.set_format(type="pt")
+
+    #     validate_columns(tokenized_ds["train"])
+    #     validate_columns(tokenized_ds["validation"])
+
+    # TODO: add explicit validation set
+
+    # test_ds_names = [] if data_args.test_ds_names is None else data_args.test_ds_names
+    # for ds_name in test_ds_names:
+    #     ds = load_dataset(ds_name)
+    #     ds = ds.map(get_preprocessing_fn(ds_name))["test"]
+
+    #     # for sft + chat_model, we need to convert the dataset to chat format
+    #     # add "messages" field
+    #     ds = ds.map(
+    #         convert_ctx_prompt_response_to_messages,
+    #         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+    #     )
+    #     # add "chat" field
+    #     # ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
+
+    #     # apply chat template for chat model
+    #     ds = ds.map(prompt_formatting_fn)
+    #     # tokenize the chat + mask the assistant inputs
+    #     pre_tok_cols = copy(ds.column_names)
+    #     tokenized_ds["test"] = ds.map(
+    #         tokenize_chat_messages,
+    #         fn_kwargs={
+    #             "tokenizer": tokenizer,
+    #             "mask_assistant_inputs": True,
+    #             "tokenizer_kwargs": {
+    #                 "max_length": ctx_args.max_base_len,
+    #             },
+    #         },
+    #     )
+
+    #     # computes ctx_features offline when using hyperlora
+    #     if need_ctx_features:
+    #         # TODO: can we batch this?
+    #         # TODO: can we cache this?
+    #         tokenized_ds["test"] = tokenized_ds["test"].map(
+    #             tokenize_ctx_text, fn_kwargs={"tokenizer": tokenizer}
+    #         )
+    #         tokenized_ds["test"] = tokenized_ds["test"].map(
+    #             # TODO: truncate the ctx_ids to the max_ctx_len
+    #             model.get_ctx_features,
+    #             remove_columns=["ctx_ids"],
+    #         )
+
+    #     tokenized_ds["test"] = tokenized_ds["test"].remove_columns(pre_tok_cols)
+    #     tokenized_ds["test"].set_format(type="pt")
+
+    #     validate_columns(tokenized_ds["test"])
 
     train_ds = tokenized_ds["train"]
+    rand_indices = np.random.permutation(len(train_ds))[:500]
     val_ds = {
-        "train": tokenized_ds["train"].select(range(500)),
+        "train": tokenized_ds["train"].select(rand_indices),
         "val": tokenized_ds.get("validation", None),
     }
     test_ds = tokenized_ds.get("test", None)
 
-    logger.debug(f"train_ds: {train_ds}")
-    logger.debug(f"val_ds: {val_ds}")
-    logger.debug(f"test_ds: {test_ds}")
+    logger.info(f"train_ds: {train_ds}")
+    logger.info(f"val_ds: {val_ds}")
+    logger.info(f"test_ds: {test_ds}")
     # TODO: change to a faster collator? e.g.,
     # https://huggingface.co/blog/packing-with-FA2
     # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
@@ -305,15 +387,15 @@ def main(output_dir):
             return_tensors="pt",
         )
 
-        ctx_features = None
-        if "ctx_features" in inp_list[0]:
+        ctx_ids = None
+        if "ctx_ids" in inp_list[0]:
             # have to be manual since it has [ctx_len, features] shape
             # pad to the longest ctx_len in the batch
             # which can have a different length from the input_ids, attn_mask, labels
 
-            ctx_features = [example.pop("ctx_features") for example in inp_list]
-            ctx_features = torch.nn.utils.rnn.pad_sequence(
-                ctx_features,
+            ctx_ids = [example.pop("ctx_ids") for example in inp_list]
+            ctx_ids = torch.nn.utils.rnn.pad_sequence(
+                ctx_ids,
                 batch_first=True,
                 padding_value=0,
             )
@@ -328,49 +410,36 @@ def main(output_dir):
         padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
 
         # hacky explicit padding since the labels are not padded by default
-        labels = [x.pop("labels") for x in inp_list]
         labels = tokenizer.pad({"input_ids": labels}, **padding_kwargs)["input_ids"]
         labels = torch.where(padded_seq["attention_mask"] == 0, -100, labels)
         out = {**padded_seq, "labels": labels}
-        if ctx_features is not None:
-            out["ctx_features"] = ctx_features
+        if ctx_ids is not None:
+            out["ctx_ids"] = ctx_ids
             out["ctx_attn_mask"] = ctx_attn_mask
         return out
 
-    # TODO: generation dataset shouldn't include labels in the "input_ids" field
     def generation_collator(inp_list, tokenizer):
         padding_kwargs = dict(padding=True, padding_side="left", return_tensors="pt")
         input_ids = [x.pop("input_ids") for x in inp_list]
         attn_mask = [x.pop("attention_mask") for x in inp_list]
         labels = [x.pop("labels") for x in inp_list]
         for i, label in enumerate(labels):
-            # HACK: remove the label part
+            # remove the response tokens
             idx = np.argmax(label != -100)
             input_ids[i] = input_ids[i][:idx]
             attn_mask[i] = attn_mask[i][:idx]
         out = tokenizer.pad(
             {"input_ids": input_ids, "attention_mask": attn_mask}, **padding_kwargs
         )
-        # label_pad_len = len(out["input_ids"][0])
-        # labels[0] = torch.cat(
-        #     [torch.tensor([-100] * (label_pad_len - len(label))), label], dim=0
-        # )
-        # labels = torch.nn.utils.rnn.pad_sequence(
-        #     labels,
-        #     batch_first=True,
-        #     padding_value=-100,
-        # ).long()
-
         out["labels"] = labels
 
-        if "ctx_features" in inp_list[0]:
+        if "ctx_ids" in inp_list[0]:
             # have to be manual since it has [ctx_len, features] shape
             # pad to the longest ctx_len in the batch
             # which can have a different length from the input_ids, attn_mask, labels
-
-            ctx_features = [example.pop("ctx_features") for example in inp_list]
-            ctx_features = torch.nn.utils.rnn.pad_sequence(
-                ctx_features,
+            ctx_ids = [example.pop("ctx_ids") for example in inp_list]
+            ctx_ids = torch.nn.utils.rnn.pad_sequence(
+                ctx_ids,
                 batch_first=True,
                 padding_value=0,
             )
@@ -381,7 +450,7 @@ def main(output_dir):
                 batch_first=True,
                 padding_value=0,
             )
-            out["ctx_features"] = ctx_features
+            out["ctx_ids"] = ctx_ids
             out["ctx_attn_mask"] = ctx_attn_mask
         return out
 

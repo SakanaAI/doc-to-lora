@@ -6,9 +6,8 @@ from enum import Enum, auto
 from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 
 import yaml
-from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
-
 from modeling_utils import AGGREGATOR_TYPE
+from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -171,9 +170,17 @@ class CtxTrainingArguments:
 
 @dataclass
 class DataArguments:
-    train_ds_name: str = field(
-        default="",
-        metadata={"help": "Name of the training dataset."},
+    train_ds_names: list[str] = field(
+        default=None,
+        metadata={"help": "Training dataset names."},
+    )
+    val_ds_names: Optional[list[str]] = field(
+        default=None,
+        metadata={"help": "Validation dataset names."},
+    )
+    test_ds_names: Optional[list[str]] = field(
+        default=None,
+        metadata={"help": "Test dataset names."},
     )
 
 

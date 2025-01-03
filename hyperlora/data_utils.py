@@ -1,10 +1,85 @@
+from copy import copy
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 import pandas as pd
+from datasets import load_dataset
 from training_utils import TRAINING_TASK
 from transformers import PreTrainedTokenizerBase
 
 IGNORE_INDEX = -100
+
+
+def validate_columns(tokenized_ds):
+    cols = ["input_ids", "attention_mask", "labels"]
+    if "ctx_ids" in tokenized_ds.column_names:
+        cols += ["ctx_ids", "ctx_attn_mask"]
+    ref_cols = set(cols)
+    assert (
+        set(tokenized_ds.column_names) == ref_cols
+    ), f"Columns mismatch: {set(tokenized_ds.column_names)} != {ref_cols}"
+
+
+def get_tokenized_dataset(
+    ds_name: str,
+    split: str,
+    tokenizer: PreTrainedTokenizerBase,
+    tokenizer_kwargs: dict[str, Any],
+    add_ctx_to_chat: bool,
+) -> dict[str, Any]:
+
+    need_ctx_ids = not add_ctx_to_chat
+    ds = load_dataset(ds_name)
+    ds = ds.map(get_preprocessing_fn(ds_name))[split]
+    # for sft + chat_model, we need to convert the dataset to chat format
+    # add "messages" field
+    ds = ds.map(
+        convert_ctx_prompt_response_to_messages,
+        fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+    )
+    # add "chat" field
+    ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
+    # tokenize the chat + mask the assistant inputs
+
+    tokenized_ds = ds.map(
+        tokenize_chat_messages,
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "mask_assistant_inputs": True,
+            "tokenizer_kwargs": tokenizer_kwargs,
+        },
+        remove_columns=["messages", "prompt", "response", "chat"],
+    )
+
+    other_cols = [
+        col
+        for col in tokenized_ds.column_names
+        if col not in ["input_ids", "attention_mask", "labels"]
+    ]
+
+    # computes ctx_features offline when using hyperlora
+    if need_ctx_ids:
+        # TODO: can we batch this?
+        # TODO: can we cache this?
+        # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
+        tokenized_ds = tokenized_ds.map(
+            tokenize_ctx_text,
+            fn_kwargs={"tokenizer": tokenizer},
+        )
+
+        # # FIXME: arrow cant consturct this for very long ctx_len (>1k tokens)
+        # # might have to really do this online
+        # tokenized_ds = tokenized_ds.map(
+        #     # TODO: truncate the ctx_ids to the max_ctx_len
+        #     get_ctx_features_fn,
+        #     remove_columns=["ctx_ids"],
+        # )
+
+    tokenized_ds = tokenized_ds.remove_columns(other_cols)
+
+    tokenized_ds.set_format(type="pt")
+
+    validate_columns(tokenized_ds)
+    return tokenized_ds
 
 
 def get_sft_prompt_formatting_fn(
@@ -160,69 +235,6 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
     return f
 
 
-# def get_inp_tokenize_fn(
-#     tokenizer,
-#     sft_mode: Literal["causal_lm", "completion"],
-#     is_intx_model: bool,
-#     inp_max_len: int,
-# ):
-#     def tokenize_causal_lm(examples):
-#         # a dict with keys: ["input_ids", "attention_mask"]
-#         tokenized_seq = tokenizer(
-#             examples["text"],
-#             # apply_chat_template should already add all the special tokens
-#             add_special_tokens=True if not is_intx_model else False,
-#             truncation=True,
-#             padding=False,
-#             max_length=inp_max_len,
-#         )
-#         tokenized_seq["labels"] = tokenized_seq["input_ids"]
-#         return tokenized_seq
-
-#     # NOTE: we're not considering multi-turn sft
-#     # this fn is used to mask out the loss from the prompt
-#     # and train only on the response
-#     # see # see https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
-#     # https://github.com/huggingface/notebooks/blob/main/examples/question_answering.ipynb
-#     # for more advanced multi-turn training
-#     def tokenize_prompt_completion(examples):
-#         # a dict with keys: ["input_ids", "attention_mask"]
-#         # we can also access seqeunce_ids to differentiate between prompt and response
-#         tokenized_seq = tokenizer(
-#             examples["prompt"],
-#             examples["response"],
-#             add_special_tokens=False,
-#             truncation=True,
-#             padding=False,
-#             max_length=inp_max_len,
-#         )
-
-#         tokenized_seq["labels"] = [None] * len(tokenized_seq["input_ids"])
-#         input_ids = tokenized_seq["input_ids"]
-#         attention_mask = tokenized_seq["attention_mask"]
-#         labels = tokenized_seq["labels"]
-#         for i in range(len(tokenized_seq["input_ids"])):
-#             if not is_intx_model:
-#                 # manually add bos and eos tokens
-#                 input_ids[i] = (
-#                     [tokenizer.bos_token_id] + input_ids[i] + [tokenizer.eos_token_id]
-#                 )
-#                 attention_mask[i] = [1] + attention_mask[i] + [1]
-#                 sequence_ids = [0] + tokenized_seq.sequence_ids(i) + [1]
-#             else:
-#                 sequence_ids = tokenized_seq.sequence_ids(i)
-#             labels[i] = [
-#                 -100 if sequence_id == 0 else label
-#                 for sequence_id, label in zip(sequence_ids, input_ids[i])
-#             ]
-#         return tokenized_seq
-
-#     tokenize_function = (
-#         tokenize_causal_lm if sft_mode == "causal_lm" else tokenize_prompt_completion
-#     )
-#     return tokenize_function
-
-
 # taken from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
 def get_assistant_start_end_indices(
     messages: list[dict[str, str]],
@@ -305,6 +317,9 @@ def tokenize_chat_messages(
     # should be used only with chat models
     text = example["chat"]
     messages = example["messages"]
+    n_response = len([m for m in messages if m["role"] == "assistant"])
+    if n_response != 1:
+        raise ValueError(f"Expected 1 assistant response. Got {n_response}.")
     conversation_ids = tokenizer(
         text,
         return_offsets_mapping=mask_assistant_inputs,

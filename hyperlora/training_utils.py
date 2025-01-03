@@ -52,6 +52,7 @@ def decode_test_result(test_dataset, test_result, tokenizer):
         # HACK: remove the label part
         input_toks = sample["input_ids"][:start_idx]
         gen_toks = pred_toks[len(input_toks) :]
+        gen_toks = np.where(gen_toks == -100, tokenizer.pad_token_id, gen_toks)
 
         d["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
         d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True)
@@ -84,6 +85,10 @@ def eval_generation(eval_trainer, tokenizer, dataset, split, gen_kwargs):
     )
 
 
+# def per_sample_loss_avg_fn(outputs, labels, num_items_in_batch):
+#     ...
+
+
 def train_model(
     model,
     tokenizer,
@@ -95,6 +100,7 @@ def train_model(
     generation_collator=None,
     compute_metrics=None,
     preprocess_logits_for_metrics=None,
+    per_sample_loss_avg=False,
 ):
 
     # last_checkpoint = None
@@ -132,6 +138,8 @@ def train_model(
     # if local_rank == 0:
     #     print(training_args)
 
+    compute_loss_func = per_sample_loss_avg_fn if per_sample_loss_avg else None
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -154,7 +162,7 @@ def train_model(
     # TODO: save the best model based on eval loss?
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
     trainer.log_metrics("train", train_result.metrics)
-    metrics = trainer.evaluate()
+    metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
     trainer.log_metrics("eval", metrics)
     trainer.save_metrics("eval", metrics)
     trainer.save_model()
@@ -203,6 +211,8 @@ def train_model(
         # removing label part from input_ids
         data_collator=generation_collator,
     )
+
+    # TODO: log different datasets separately
     if val_dataset is not None:
         if isinstance(val_dataset, dict):
             val_dataset = val_dataset["val"]

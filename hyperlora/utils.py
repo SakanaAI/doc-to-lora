@@ -127,16 +127,6 @@ def setup_logging(output_dir, debug=False):
     logger.info(f"Logging to: {log_path}")
 
 
-def validate_columns(tokenized_ds):
-    cols = ["input_ids", "attention_mask", "labels"]
-    if "ctx_features" in tokenized_ds["train"].column_names:
-        cols += ["ctx_features", "ctx_attn_mask"]
-    ref_cols = set(cols)
-    assert (
-        set(tokenized_ds["train"].column_names) == ref_cols
-    ), f"Columns mismatch: {set(tokenized_ds['train'].column_names)} != {ref_cols}"
-
-
 def validate_args(args_list):
     # there shouldn't be overlap between args
     keys = set()

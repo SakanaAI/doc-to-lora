@@ -2,23 +2,25 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import partial
+from functools import partial, wraps
+from math import log, pi
 from typing import Any, Iterable, Optional, Tuple, Union
-
-from math import pi, log
-from functools import wraps
 
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat, unpack
-from einops.layers.torch import Reduce, EinMix as Mix
+from einops.layers.torch import EinMix as Mix
+from einops.layers.torch import Reduce
 from hooks import add_generated_lora_hook, remove_hook_handles
 from jaxtyping import Float, Integer
 from model_loading import get_lora_config, get_model_and_tokenizer
 from peft import LoraConfig
 from pooling import POOL_FN, get_pooling_fn
-from torch import Tensor, nn, einsum
-from transformers import PreTrainedModel, PerceiverConfig, PerceiverModel
+from torch import Tensor, einsum, nn
+from transformers import PerceiverConfig, PerceiverModel, PreTrainedModel
+from transformers.models.perceiver.modeling_perceiver import (
+    PerceiverFourierPositionEncoding,
+)
 from transformers.modeling_outputs import ModelOutput
 from utils import get_lora_module_names, get_num_layers, get_peft_in_out_features
 
@@ -116,12 +118,21 @@ class Perceiver(nn.Module):
         self, feature_size, output_size, num_layers, num_modules, *args, **kwargs
     ):
         super().__init__()
+        # num_bands = 256
+        # self.positional_encoding = PerceiverFourierPositionEncoding(
+        #     num_bands=num_bands, max_resolution=(128_000,), concat_pos=False,
+        # )
+        # self.pos_proj = nn.Linear(num_bands * 2, num_bands)
+        # # pos_emb_size = self.positional_encoding.output_size()
         self.num_layers = num_layers
         self.num_modules = num_modules
         self.config = PerceiverConfig(
-            d_model=feature_size,
+            d_model=feature_size,  # + num_bands
             num_latents=num_layers * num_modules,
             d_latents=output_size,
+            attention_probs_dropout_prob=0.0,
+            num_blocks=8,
+            num_self_attends_per_block=3,
             **kwargs,
         )
         # TODO: could do something more complex e.g., decoder query, etc.
@@ -132,7 +143,16 @@ class Perceiver(nn.Module):
         ctx_features: Float[Tensor, "bs seq_len feature_dim"],
         ctx_attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
-        x = self.perceiver(ctx_features * ctx_attn_mask.unsqueeze(-1)).last_hidden_state
+        # bs, seq_len = ctx_features.shape[:2]
+        # pos_embs = self.positional_encoding((seq_len,),
+        #                                     bs,
+        #                                     device=ctx_features.device,
+        #                                     dtype=ctx_features.dtype)
+        # pos_embs = self.pos_proj(pos_embs)
+        # pos_embs = repeat(pos_embs, "seq_len d -> bs seq_len d", bs=bs)
+        # x = torch.cat([ctx_features, pos_embs], dim=-1)
+        x = ctx_features
+        x = self.perceiver(x, ctx_attn_mask).last_hidden_state
         x = rearrange(
             x,
             "bs (n_layers n_modules) d -> bs n_layers n_modules d",
@@ -318,6 +338,12 @@ class EarlyExit(nn.Module):
         return model_outputs.last_hidden_state
 
 
+def init_mixer_weights(m: nn.Module):
+    # bias-hyperinit
+    # init weights to zeros and bias to the base weights
+    ...
+
+
 class HyperLoRA(nn.Module):
     def __init__(
         self,
@@ -345,11 +371,7 @@ class HyperLoRA(nn.Module):
         self.target_modules = self.lora_config.target_modules
         self.layer_indices = config.layer_indices
 
-        # TODO: add lightweight LoRA i.e., a projection layer of the input of LoRA
-        # have to also change in_d and out_d accordingly
         self.in_d, self.out_d = config.feature_sizes
-
-        # TODO: add different output spaces
 
         self.layers = MLPResidualBlock(
             input_size=config.latent_size,
@@ -360,15 +382,15 @@ class HyperLoRA(nn.Module):
         # TODO: check initialization of the head
         # default values are prob. way too big
         #
-        # we can separate the modules while vectorizing by
-        # making modules have the same output size then slicing
-        # the output to the correct size
+        # each module processes d -> r out_d
         # TODO: could be even more efficient if we use lightweight LoRA
         # ie. project the input to a smaller subspace (w/ same size) for all modules
+        # have to also change in_d and out_d accordingly
         self.head = Mix(
             "bs n_layers n_modules d -> bs n_layers n_modules r out_d",
-            weight_shape="d r out_d",
+            weight_shape="n_modules d r out_d",
             bias_shape=None,  # no bias
+            n_modules=len(self.target_modules),
             d=config.latent_size,
             r=config.lora_config.r,
             out_d=max(self.in_d[m] + self.out_d[m] for m in self.target_modules),
@@ -413,7 +435,7 @@ class HyperLoRA(nn.Module):
     ):
 
         # [bs, n_layers, n_modules, feature_dim]
-        emb = self.aggregator(features, attn_mask)
+        emb = self.aggregator(features.to(torch.float32), attn_mask)
 
         # [bs, n_layers, n_modules, r, max_in_out_dim]
         flat_loras = self.head(self.layers(emb))
@@ -468,38 +490,39 @@ class ModulatedPretrainedModel(nn.Module):
         # NOTE: might have to set `strict=False` as we don't save all the params
         return super().load_state_dict(state_dict, *args, **kwargs)
 
-    @torch.no_grad()
-    def get_ctx_features(
-        self,
-        examples: dict[str, Any],
-    ):
-        # TODO: truncate the ctx_ids to the max_ctx_len
-        out = dict()
-        input_ids = torch.tensor(examples.get("ctx_ids")).to(self.device)
-        # we don't really use ctx_attn_mask here but it'll be padded
-        # and used by hypernet.aggregator which has to handle ctx_attn_mask
-        attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
+    # @torch.no_grad()
+    # def get_ctx_features(
+    #     self,
+    #     examples: dict[str, Any],
+    # ):
+    #     # TODO: truncate the ctx_ids to the max_ctx_len
+    #     out = dict()
+    #     input_ids = torch.tensor(examples.get("ctx_ids")).to(self.device)
+    #     # we don't really use ctx_attn_mask here but it'll be padded
+    #     # and used by hypernet.aggregator which has to handle ctx_attn_mask
+    #     attention_mask = torch.tensor(examples.get("ctx_attn_mask")).to(self.device)
 
-        # NOTE: this might not work for batched inputs
-        if isinstance(self.ctx_encoder, nn.Embedding):
-            features = self.ctx_encoder(input_ids)
-        else:
-            features = self.ctx_encoder(
-                input_ids=input_ids, attention_mask=attention_mask
-            )
-        out["ctx_features"] = features
-        return out
+    #     # NOTE: this might not work for batched inputs
+    #     if isinstance(self.ctx_encoder, nn.Embedding):
+    #         features = self.ctx_encoder(input_ids)
+    #     else:
+    #         features = self.ctx_encoder(
+    #             input_ids=input_ids, attention_mask=attention_mask
+    #         )
+    #     out["ctx_features"] = features
+    #     return out
 
     def forward(
         self,
-        ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
+        # ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
+        ctx_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         **model_inputs_kwargs: dict[str, Any],
     ) -> Union[tuple, ModelOutput]:
         """Forward pass of the modulated model."""
 
         generated_loras = None
-        if ctx_features is None:
+        if ctx_ids is None:
             logger.warning(
                 (
                     "*" * 100,
@@ -512,6 +535,10 @@ class ModulatedPretrainedModel(nn.Module):
             # return model_outputs
 
         else:
+            with torch.no_grad():
+                ctx_features = self.ctx_encoder(
+                    input_ids=ctx_ids, attention_mask=ctx_attn_mask
+                )
             generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
         # apply lora hook to the base model
@@ -530,16 +557,16 @@ class ModulatedPretrainedModel(nn.Module):
     @torch.no_grad()
     def generate(
         self,
-        ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
+        ctx_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         **model_inputs_kwargs: dict[str, Any],
     ):
         generated_loras = None
-        if ctx_features is None:
+        if ctx_ids is None:
             logger.warning(
                 (
                     "*" * 100,
-                    "\n\nNo ctx_features provided, using the base model for generation\n\n",
+                    "\n\nNo ctx_ids provided, using the base model for generation\n\n",
                     "*" * 100,
                 )
             )
@@ -547,6 +574,9 @@ class ModulatedPretrainedModel(nn.Module):
             # model_outputs.generated_loras = None
             # return model_outputs
         else:
+            ctx_features = self.ctx_encoder(
+                input_ids=ctx_ids, attention_mask=ctx_attn_mask
+            )
             generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
         # apply lora hook to the base model
@@ -593,6 +623,8 @@ def apply_generated_loras(
 
 
 if __name__ == "__main__":
+    from utils import get_base_model
+
     # set torch randomness seed
     torch.manual_seed(42)
     model_name = "meta-llama/Llama-3.2-1B-Instruct"
@@ -614,16 +646,20 @@ if __name__ == "__main__":
     #     aggregator_config=get_aggregator_config(base_model, POOL_FN.MEAN),
     # ).to(base_model.device)
 
+    ctx_encoder = EarlyExit(get_base_model(base_model), 4)
     hypernet = HyperLoRA(get_hypernet_config(base_model)).to(base_model.device)
 
-    model = ModulatedPretrainedModel(base_model, hypernet).to(base_model.device)
+    model = ModulatedPretrainedModel(base_model, hypernet, ctx_encoder).to(
+        base_model.device
+    )
     print(model)
 
     ctx_msg = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
     ctx_inputs = tokenizer(ctx_msg, return_tensors="pt").to(model.device)
-    ctx_features = model.get_ctx_features(**ctx_inputs)
+    ctx_ids = ctx_inputs["input_ids"]
     ctx_attn_mask = ctx_inputs["attention_mask"]
-    print(ctx_features.shape)
+    ctx_features = model.ctx_encoder(input_ids=ctx_ids, attention_mask=ctx_attn_mask)
+    print(ctx_ids.shape)
 
     model.eval()
     agg_features = hypernet.aggregator(ctx_features, ctx_attn_mask)
@@ -640,7 +676,7 @@ if __name__ == "__main__":
     basemodelout = model.base_model(**prompt_inputs)
     print(basemodelout)
 
-    modelout = model(ctx_features, ctx_attn_mask, **prompt_inputs)
+    modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
     print(modelout)
 
     breakpoint()
