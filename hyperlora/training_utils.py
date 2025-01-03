@@ -44,18 +44,21 @@ def decode_test_result(test_dataset, test_result, tokenizer):
         if "labels" in sample:
             start_idx = np.argmax(sample["labels"] != -100)
             label_toks = sample["labels"][start_idx:]
-            # labels are padded with -100, so we need to replace them with the pad token id
+            # labels are padded with -100, so we need to
+            # replace them with the pad token id
             label_toks = np.where(label_toks == -100, tokenizer.pad_token_id, label_toks)
             label_text = tokenizer.decode(label_toks, skip_special_tokens=True)
             d["label"] = label_text
 
-        # HACK: remove the label part
+        # remove the label part
         input_toks = sample["input_ids"][:start_idx]
         gen_toks = pred_toks[len(input_toks) :]
         gen_toks = np.where(gen_toks == -100, tokenizer.pad_token_id, gen_toks)
 
         d["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
         d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True)
+        if "ctx_ids" in sample:
+            d["context"] = tokenizer.decode(sample["ctx_ids"], skip_special_tokens=True)
         out.append(d)
 
     return out

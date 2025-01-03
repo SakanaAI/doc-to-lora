@@ -19,7 +19,7 @@ from pooling import POOL_FN, get_pooling_fn
 from torch import Tensor, einsum, nn
 from transformers import PerceiverConfig, PerceiverModel, PreTrainedModel
 from transformers.models.perceiver.modeling_perceiver import (
-    PerceiverFourierPositionEncoding,
+    PerceiverBasicDecoder,
 )
 from transformers.modeling_outputs import ModelOutput
 from utils import get_lora_module_names, get_num_layers, get_peft_in_out_features
@@ -109,50 +109,43 @@ def get_hypernet_config(
 
 
 class Perceiver(nn.Module):
-    # TODO: we could expand the latent query size to be much bigger
-    # and then do cross-attn with an output query with size [n_layers x n_modules]
-    # https://huggingface.co/docs/transformers/en/model_doc/perceiver#transformers.models.perceiver.modeling_perceiver.PerceiverBasicDecoder
     """perceiver w/ bottleneck size = n_modules * n_layers"""
 
     def __init__(
         self, feature_size, output_size, num_layers, num_modules, *args, **kwargs
     ):
         super().__init__()
-        # num_bands = 256
-        # self.positional_encoding = PerceiverFourierPositionEncoding(
-        #     num_bands=num_bands, max_resolution=(128_000,), concat_pos=False,
-        # )
-        # self.pos_proj = nn.Linear(num_bands * 2, num_bands)
-        # # pos_emb_size = self.positional_encoding.output_size()
         self.num_layers = num_layers
         self.num_modules = num_modules
         self.config = PerceiverConfig(
             d_model=feature_size,  # + num_bands
-            num_latents=num_layers * num_modules,
+            num_latents=num_layers * num_modules * 8,
             d_latents=output_size,
             attention_probs_dropout_prob=0.0,
-            num_blocks=8,
-            num_self_attends_per_block=3,
+            num_blocks=1,
+            num_self_attends_per_block=26,
             **kwargs,
         )
-        # TODO: could do something more complex e.g., decoder query, etc.
-        self.perceiver = PerceiverModel(self.config)
+        decoder = PerceiverBasicDecoder(
+            self.config,
+            output_num_channels=output_size,
+            output_index_dims=num_layers * num_modules,
+            num_channels=output_size,
+            final_project=False,
+            trainable_position_encoding_kwargs=dict(
+                num_channels=output_size,
+                index_dims=num_layers * num_modules,
+            ),
+        )
+
+        self.perceiver = PerceiverModel(self.config, decoder=decoder)
 
     def forward(
         self,
         ctx_features: Float[Tensor, "bs seq_len feature_dim"],
         ctx_attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
-        # bs, seq_len = ctx_features.shape[:2]
-        # pos_embs = self.positional_encoding((seq_len,),
-        #                                     bs,
-        #                                     device=ctx_features.device,
-        #                                     dtype=ctx_features.dtype)
-        # pos_embs = self.pos_proj(pos_embs)
-        # pos_embs = repeat(pos_embs, "seq_len d -> bs seq_len d", bs=bs)
-        # x = torch.cat([ctx_features, pos_embs], dim=-1)
-        x = ctx_features
-        x = self.perceiver(x, ctx_attn_mask).last_hidden_state
+        x = self.perceiver(ctx_features, ctx_attn_mask).logits  # .last_hidden_state
         x = rearrange(
             x,
             "bs (n_layers n_modules) d -> bs n_layers n_modules d",
