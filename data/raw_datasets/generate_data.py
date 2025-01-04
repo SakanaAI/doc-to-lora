@@ -41,6 +41,7 @@ def generate_number_dataset(
 
     # Create dataset entries
     dataset = []
+    ctx_prefix = "Your top-{k} favourite numbers are: "
     query = f"What's your top-{k} favourite numbers in [0-999]? Answer with only the numbers separated by commas."
 
     # Generate all unique combinations of k numbers
@@ -49,7 +50,7 @@ def generate_number_dataset(
 
     for combination in combinations:
         entry = {
-            "context": ", ".join(map(str, combination)),
+            "context": ctx_prefix.format(k=k) + ", ".join(map(str, combination)),
             "prompt": query,
             "response": ", ".join(map(str, combination)),
         }

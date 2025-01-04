@@ -384,11 +384,15 @@ def main(output_dir):
     #     validate_columns(tokenized_ds["test"])
 
     train_ds = tokenized_ds["train"]
-    rand_indices = np.random.permutation(len(train_ds))[:500]
+    val_train_indices = np.random.permutation(len(train_ds))[:500]
     val_ds = {
-        "train": tokenized_ds["train"].select(rand_indices),
-        "val": tokenized_ds.get("validation", None),
+        "train": tokenized_ds["train"].select(val_train_indices),
     }
+    if "validation" in tokenized_ds:
+        val_ds["validation"] = tokenized_ds["validation"]
+        val_ds_size = len(val_ds["validation"])
+        val_indices = np.random.permutation(val_ds_size)[: args.max_val_samples]
+        val_ds["validation"] = val_ds["validation"].select(val_indices)
     test_ds = tokenized_ds.get("test", None)
 
     logger.info(f"train_ds: {train_ds}")

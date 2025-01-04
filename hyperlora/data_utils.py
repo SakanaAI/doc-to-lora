@@ -28,8 +28,8 @@ def get_tokenized_dataset(
 ) -> dict[str, Any]:
 
     need_ctx_ids = not add_ctx_to_chat
-    ds = load_dataset(ds_name)
-    ds = ds.map(get_preprocessing_fn(ds_name))[split]
+    ds = load_dataset(ds_name, split=split)
+    ds = ds.map(get_preprocessing_fn(ds_name))
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
     ds = ds.map(
