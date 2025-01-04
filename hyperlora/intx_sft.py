@@ -391,7 +391,7 @@ def main(output_dir):
     if "validation" in tokenized_ds:
         val_ds["validation"] = tokenized_ds["validation"]
         val_ds_size = len(val_ds["validation"])
-        val_indices = np.random.permutation(val_ds_size)[: args.max_val_samples]
+        val_indices = np.random.permutation(val_ds_size)[: data_args.max_val_samples]
         val_ds["validation"] = val_ds["validation"].select(val_indices)
     test_ds = tokenized_ds.get("test", None)
 
