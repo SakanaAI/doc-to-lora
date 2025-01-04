@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 from collections import defaultdict
@@ -6,6 +7,7 @@ from enum import Enum
 
 import numpy as np
 from rouge_score import rouge_scorer
+import torch
 from transformers import (
     GenerationConfig,
     Seq2SeqTrainer,
@@ -17,6 +19,13 @@ from transformers.trainer_utils import get_last_checkpoint
 TRAINING_TASK = Enum("TRAINING_TASK", ["CAUSAL_LM", "COMPLETION"])
 
 logger = logging.getLogger()
+
+
+def clear_gpu():
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_max_memory_allocated()
+    torch.cuda.reset_max_memory_cached()
 
 
 def compute_rouge(pred_texts, label_texts):
@@ -170,6 +179,8 @@ def train_model(
     trainer.save_metrics("eval", metrics)
     trainer.save_model()
 
+    clear_gpu()
+
     ############## Evaluation
     # TODO: generalize gen_kwargs for validation
     max_new_tokens = 100
@@ -220,6 +231,7 @@ def train_model(
         if isinstance(val_dataset, dict):
             val_dataset = val_dataset["val"]
         eval_generation(eval_trainer, tokenizer, val_dataset, "val", gen_kwargs)
-
+        clear_gpu()
+        
     if test_dataset is not None:
         eval_generation(eval_trainer, tokenizer, test_dataset, "test", gen_kwargs)

@@ -6,7 +6,6 @@ from enum import Enum, auto
 from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 
 import yaml
-from modeling_utils import AGGREGATOR_TYPE
 from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
@@ -162,10 +161,6 @@ class CtxTrainingArguments:
         default=2**13,
         metadata={"help": "Maximum base length for training."},
     )
-    aggregator_type: AGGREGATOR_TYPE = field(
-        default=AGGREGATOR_TYPE.POOLER,
-        metadata={"help": "Aggregator type for HyperLoRA."},
-    )
 
 
 @dataclass
@@ -181,6 +176,55 @@ class DataArguments:
     test_ds_names: Optional[list[str]] = field(
         default=None,
         metadata={"help": "Test dataset names."},
+    )
+
+
+@dataclass
+class HypernetArguments:
+    latent_size: int = field(
+        default=512,
+        metadata={"help": "Latent size for HyperLoRA."},
+    )
+
+
+@dataclass
+class AggregatorArguments:
+
+    aggregator_type: Literal["pooler", "perceiver"] = field(
+        default="pooler",
+        metadata={"help": "Aggregator type for HyperLoRA."},
+    )
+
+    # pooler
+    pooling_type: str = field(
+        default="mean",
+        metadata={"help": "Pooling type for HyperLoRA."},
+    )
+    # feature_size: int
+    # num_layers: int
+    # num_modules: int
+    # output_size: int
+
+    # perceiver
+    attention_probs_dropout_prob: float = field(
+        default=0.0,
+        metadata={"help": "Attention dropout probability for Perceiver."},
+    )
+    num_blocks: int = field(
+        default=8,
+        metadata={"help": "Number of blocks for Perceiver."},
+    )
+    num_self_attends_per_block: int = field(
+        default=6,
+        metadata={"help": "Number of self-attends per block for Perceiver."},
+    )
+    self_attention_widening_factor: int = field(
+        default=1,
+        metadata={"help": "Self-attention widening factor for Perceiver."},
+    )
+    cross_attention_widening_factor: int = field(
+        default=1,
+        metadata={"help": "Cross-attention widening factor for Perceiver."},
     )
 
 

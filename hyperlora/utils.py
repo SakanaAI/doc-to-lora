@@ -131,6 +131,7 @@ def validate_args(args_list):
     # there shouldn't be overlap between args
     keys = set()
     for args in args_list:
+        logger.debug(args)
         args_keys = set(vars(args).keys())
         assert len(keys & args_keys) == 0, "Overlap between args"
         keys |= args_keys

@@ -22,7 +22,7 @@ per_device_eval_batch_size: 128
 learning_rate: 0.00001
 # lr_scheduler_type: "constant_with_warmup"
 neftune_noise_alpha: 1
-weight_decay: 0.01
+weight_decay: 0.1
 warmup_ratio: 0.1
 
 # LoRA
@@ -35,26 +35,26 @@ target_modules:
 
 # data
 train_ds_names:
-- data/raw_datasets/context_numbers_2
-- data/raw_datasets/context_numbers_3
-- data/raw_datasets/context_numbers_4
-- data/raw_datasets/context_numbers_5
-- data/raw_datasets/context_numbers_6
-- data/raw_datasets/context_numbers_7
-- data/raw_datasets/context_numbers_8
-- data/raw_datasets/context_numbers_9
-- data/raw_datasets/context_numbers_10
+- data/raw_datasets/context_numbers_2_10k
+- data/raw_datasets/context_numbers_3_10k
+- data/raw_datasets/context_numbers_4_10k
+- data/raw_datasets/context_numbers_5_10k
+- data/raw_datasets/context_numbers_6_10k
+- data/raw_datasets/context_numbers_7_10k
+- data/raw_datasets/context_numbers_8_10k
+- data/raw_datasets/context_numbers_9_10k
+- data/raw_datasets/context_numbers_10_10k
 
 val_ds_names:
-- data/raw_datasets/context_numbers_2
-- data/raw_datasets/context_numbers_3
-- data/raw_datasets/context_numbers_4
-- data/raw_datasets/context_numbers_5
-- data/raw_datasets/context_numbers_6
-- data/raw_datasets/context_numbers_7
-- data/raw_datasets/context_numbers_8
-- data/raw_datasets/context_numbers_9
-- data/raw_datasets/context_numbers_10
+- data/raw_datasets/context_numbers_2_10k
+- data/raw_datasets/context_numbers_3_10k
+- data/raw_datasets/context_numbers_4_10k
+- data/raw_datasets/context_numbers_5_10k
+- data/raw_datasets/context_numbers_6_10k
+- data/raw_datasets/context_numbers_7_10k
+- data/raw_datasets/context_numbers_8_10k
+- data/raw_datasets/context_numbers_9_10k
+- data/raw_datasets/context_numbers_10_10k
 
 test_ds_names:
 - data/raw_datasets/context_numbers_11

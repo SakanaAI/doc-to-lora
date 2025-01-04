@@ -55,6 +55,8 @@ from configs import (
     ExperimentSetup,
     LoRAArguments,
     ModelArguments,
+    HypernetArguments,
+    AggregatorArguments,
 )
 
 logger = logging.getLogger()
@@ -173,12 +175,32 @@ def main(output_dir):
             ModelArguments,
             LoRAArguments,
             TrainingArguments,
+            HypernetArguments,
+            AggregatorArguments,
         )
     )
-    data_args, ctx_args, model_args, lora_args, training_args = parser.parse()
+    (
+        data_args,
+        ctx_args,
+        model_args,
+        lora_args,
+        training_args,
+        hypernet_args,
+        aggregator_args,
+    ) = parser.parse()
 
     # there shouldn't be overlap between args
-    validate_args([data_args, ctx_args, model_args, lora_args, training_args])
+    validate_args(
+        [
+            data_args,
+            ctx_args,
+            model_args,
+            lora_args,
+            training_args,
+            hypernet_args,
+            aggregator_args,
+        ]
+    )
 
     args = {
         **vars(data_args),
@@ -186,17 +208,14 @@ def main(output_dir):
         **vars(model_args),
         **vars(lora_args),
         **vars(training_args),
+        **vars(hypernet_args),
+        **vars(aggregator_args),
     }
 
     run_name = os.path.basename(output_dir)
     training_args.run_name = run_name
     training_args.output_dir = output_dir
     training_args.logging_dir = output_dir
-    logger.info(f"run_name: {run_name}")
-    logger.info(f"data_args: {data_args}")
-    logger.info(f"ctx_args: {ctx_args}")
-    logger.info(f"model_args: {model_args}")
-    logger.info(f"lora_args: {lora_args}")
     logger.debug(f"args: {args}")
 
     ############ Model setup
@@ -212,7 +231,8 @@ def main(output_dir):
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
         hypernet = HyperLoRA(
-            get_hypernet_config(model, aggregator_type=ctx_args.aggregator_type)
+            get_hypernet_config(model, hypernet_args, aggregator_args),
+            model,
         ).to(model.device)
         # HACK: hardcode the embedding layer for now
         # TODO: add ctx_encoder config

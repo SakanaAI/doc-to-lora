@@ -24,7 +24,9 @@ def get_random_combinations(numbers: list[int], n: int, k: int) -> list[list[int
     return zip(*[[numbers[i] for i in ind] for ind in indices])
 
 
-def generate_number_dataset(max_num: int = 1000, n: int = 12000, k: int = 3, save_dir: str = None):
+def generate_number_dataset(
+    max_num: int = 1000, n: int = 12000, k: int = 3, save_dir: str = None
+):
     """
     Generate a dataset of numbers with corresponding query and answer,
     split into train/val/test sets.
@@ -62,7 +64,7 @@ def generate_number_dataset(max_num: int = 1000, n: int = 12000, k: int = 3, sav
     train_data = dataset[:train_size]
     val_data = dataset[train_size : train_size + val_size]
     test_data = dataset[train_size + val_size :]
-    
+
     save_dir = "" if save_dir is None else save_dir
     # Save splits to separate files
     save_jsonl(train_data, f"{save_dir}/train.jsonl")
@@ -75,20 +77,27 @@ if __name__ == "__main__":
     random.seed(42)
 
     # Generate dataset
-    for k in range(2, 129):
+    for k in range(2, 11):
+        save_dir = f"context_numbers_{k}_10k"
+        os.makedirs(save_dir, exist_ok=True)
+        generate_number_dataset(n=12000, k=k, save_dir=save_dir)
+
+        print(f"Dataset generated and saved at {save_dir}")
+
+    for k in range(12, 129):
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
         generate_number_dataset(n=1200, k=k, save_dir=save_dir)
 
         print(f"Dataset generated and saved at {save_dir}")
 
-    for k in range(144,257,16):
+    for k in range(144, 257, 16):
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
         generate_number_dataset(n=12000, k=k, save_dir=save_dir)
 
         print(f"Dataset generated and saved at {save_dir}")
-        
+
     for k in [512, 1024, 2048]:
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
