@@ -35,26 +35,26 @@ target_modules:
 
 # data
 train_ds_names:
-- data/raw_datasets/context_numbers_2_10k
-- data/raw_datasets/context_numbers_3_10k
-- data/raw_datasets/context_numbers_4_10k
-- data/raw_datasets/context_numbers_5_10k
-- data/raw_datasets/context_numbers_6_10k
-- data/raw_datasets/context_numbers_7_10k
-- data/raw_datasets/context_numbers_8_10k
-- data/raw_datasets/context_numbers_9_10k
-- data/raw_datasets/context_numbers_10_10k
+- data/raw_datasets/context_numbers_2
+- data/raw_datasets/context_numbers_3
+- data/raw_datasets/context_numbers_4
+- data/raw_datasets/context_numbers_5
+- data/raw_datasets/context_numbers_6
+- data/raw_datasets/context_numbers_7
+- data/raw_datasets/context_numbers_8
+- data/raw_datasets/context_numbers_9
+- data/raw_datasets/context_numbers_10
 
 val_ds_names:
-- data/raw_datasets/context_numbers_2_10k
-- data/raw_datasets/context_numbers_3_10k
-- data/raw_datasets/context_numbers_4_10k
-- data/raw_datasets/context_numbers_5_10k
-- data/raw_datasets/context_numbers_6_10k
-- data/raw_datasets/context_numbers_7_10k
-- data/raw_datasets/context_numbers_8_10k
-- data/raw_datasets/context_numbers_9_10k
-- data/raw_datasets/context_numbers_10_10k
+- data/raw_datasets/context_numbers_2
+- data/raw_datasets/context_numbers_3
+- data/raw_datasets/context_numbers_4
+- data/raw_datasets/context_numbers_5
+- data/raw_datasets/context_numbers_6
+- data/raw_datasets/context_numbers_7
+- data/raw_datasets/context_numbers_8
+- data/raw_datasets/context_numbers_9
+- data/raw_datasets/context_numbers_10
 
 test_ds_names:
 - data/raw_datasets/context_numbers_11

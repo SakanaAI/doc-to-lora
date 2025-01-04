@@ -57,8 +57,8 @@ def generate_number_dataset(
 
     # Calculate split sizes
     total_size = len(dataset)
-    train_size = int(0.9 * total_size)
-    val_size = int(0.05 * total_size)
+    train_size = int(0.98 * total_size)
+    val_size = int(0.01 * total_size)
 
     # Split dataset
     train_data = dataset[:train_size]
@@ -77,30 +77,23 @@ if __name__ == "__main__":
     random.seed(42)
 
     # Generate dataset
-    for k in range(2, 11):
-        save_dir = f"context_numbers_{k}_10k"
-        os.makedirs(save_dir, exist_ok=True)
-        generate_number_dataset(n=12000, k=k, save_dir=save_dir)
-
-        print(f"Dataset generated and saved at {save_dir}")
-
-    for k in range(12, 129):
+    for k in range(2, 129):
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
-        generate_number_dataset(n=1200, k=k, save_dir=save_dir)
+        generate_number_dataset(n=12_000, k=k, save_dir=save_dir)
 
         print(f"Dataset generated and saved at {save_dir}")
 
     for k in range(144, 257, 16):
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
-        generate_number_dataset(n=12000, k=k, save_dir=save_dir)
+        generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
 
         print(f"Dataset generated and saved at {save_dir}")
 
     for k in [512, 1024, 2048]:
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
-        generate_number_dataset(n=12000, k=k, save_dir=save_dir)
+        generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
 
         print(f"Dataset generated and saved at {save_dir}")
