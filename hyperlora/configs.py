@@ -142,7 +142,7 @@ class TrainingArguments(TrainingArguments):
         metadata={"help": "Whether the metric is better when it is greater."},
     )
     load_best_model_at_end: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to load the best model at the end of training."},
     )
     save_total_limit: int = field(
