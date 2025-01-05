@@ -389,10 +389,10 @@ def main(output_dir):
         "train": tokenized_ds["train"].select(val_train_indices),
     }
     if "validation" in tokenized_ds:
-        val_ds["validation"] = tokenized_ds["validation"]
-        val_ds_size = len(val_ds["validation"])
+        val_ds["val"] = tokenized_ds["validation"]
+        val_ds_size = len(val_ds["val"])
         val_indices = np.random.permutation(val_ds_size)[: data_args.max_val_samples]
-        val_ds["validation"] = val_ds["validation"].select(val_indices)
+        val_ds["val"] = val_ds["val"].select(val_indices)
     test_ds = tokenized_ds.get("test", None)
 
     logger.info(f"train_ds: {train_ds}")
