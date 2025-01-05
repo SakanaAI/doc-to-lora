@@ -188,6 +188,13 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
     """
     f = lambda x: x
 
+    if ds_name == "sggetao/PwC":
+
+        def f(example):
+            example["context"] = example["input"]
+            example["response"] = example["answer"]
+            return example
+
     # if ds_name == "context_numbers":
 
     #     def f(example):

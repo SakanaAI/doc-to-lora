@@ -276,7 +276,7 @@ def main(output_dir):
         ["train", "validation", "test"],
         [data_args.train_ds_names, data_args.val_ds_names, data_args.test_ds_names],
     ):
-        if ds_names is None:
+        if not ds_names:
             continue
         if split == "train":
             tokenized_ds[split] = concatenate_datasets(
