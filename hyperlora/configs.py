@@ -133,18 +133,18 @@ class TrainingArguments(TrainingArguments):
         default=10_000,
         metadata={"help": "Evaluation steps."},
     )
-    metric_for_best_model: str = field(
-        default="val_loss",
-        metadata={"help": "Metric for best model."},
-    )
-    greater_is_better: bool = field(
-        default=False,
-        metadata={"help": "Whether the metric is better when it is greater."},
-    )
-    load_best_model_at_end: bool = field(
-        default=False,
-        metadata={"help": "Whether to load the best model at the end of training."},
-    )
+    # metric_for_best_model: str = field(
+    #     default="val_loss",
+    #     metadata={"help": "Metric for best model."},
+    # )
+    # greater_is_better: bool = field(
+    #     default=False,
+    #     metadata={"help": "Whether the metric is better when it is greater."},
+    # )
+    # load_best_model_at_end: bool = field(
+    #     default=False,
+    #     metadata={"help": "Whether to load the best model at the end of training."},
+    # )
     save_total_limit: int = field(
         default=1,
         metadata={"help": "Total number of checkpoints to save."},
