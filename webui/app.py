@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from glob import glob
 
 import torch
 import yaml
@@ -47,20 +48,23 @@ def get_run_data(run_path):
 
 def get_generated_text_data(run_path):
     """
-    Loads generated text data from test_generated_text.jsonl and val_generated_text.jsonl.
+    Loads generated text data from all *_generated_text.jsonl files.
 
     Args:
         run_path: Path to the directory containing the .jsonl files.
 
     Returns:
-        A dictionary containing the generated text data for "test" and "val".
+        A dictionary containing the generated text data for each split found.
     """
     generated_data = {}
-    for split in ["test", "val"]:
-        filename = f"{split}_generated_text.jsonl"
-        filepath = os.path.join(run_path, filename)
+    files = sorted(glob(f"{run_path}/*_generated_text.jsonl"))
+    print(files)
+    # Find all *_generated_text.jsonl files
+    for filename in files:
+        # Extract split name from filename (remove _generated_text.jsonl)
+        split = filename.split("/")[-1].split("_generated_text.jsonl")[0]
         try:
-            with open(filepath) as f:
+            with open(filename) as f:
                 lines = f.readlines()
                 data = [json.loads(line) for line in lines]
             generated_data[split] = data

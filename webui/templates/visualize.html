@@ -249,6 +249,7 @@
     </div>
 
     <div class="column">
+        {% if generated_data %}
         {% for split, data in generated_data.items() %}
         {% if data %}
         <div class="generated-text-container">
@@ -260,7 +261,6 @@
                 <p><strong>Input:</strong> <span id="{{ split }}-input"></span></p>
                 <p><strong>Generated:</strong> <span id="{{ split }}-generated"></span></p>
                 <p><strong>Label:</strong> <span id="{{ split }}-label"></span></p>
-
             </div>
             <div class="generated-text-controls">
                 <button onclick="prev('{{ split }}')">Prev</button>
@@ -273,6 +273,9 @@
         </div>
         {% endif %}
         {% endfor %}
+        {% else %}
+        <p>No generated text data found.</p>
+        {% endif %}
 
         <div id="load-chat-container">
             <button id="load-chat-button">Load Chat with {{ model_name }}</button>
