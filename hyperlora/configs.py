@@ -6,7 +6,7 @@ from enum import Enum, auto
 from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 
 import yaml
-from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser
+from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser, TrainingArguments
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -120,6 +120,64 @@ class ExperimentSetup(str, Enum):
 
 
 @dataclass
+class TrainingArguments(TrainingArguments):
+    eval_on_start: bool = field(
+        default=True,
+        metadata={"help": "Whether to evaluate on the start of training."},
+    )
+    eval_strategy: str = field(
+        default="steps",
+        metadata={"help": "Evaluation strategy."},
+    )
+    eval_steps: int = field(
+        default=10_000,
+        metadata={"help": "Evaluation steps."},
+    )
+    metric_for_best_model: str = field(
+        default="val_loss",
+        metadata={"help": "Metric for best model."},
+    )
+    greater_is_better: bool = field(
+        default=False,
+        metadata={"help": "Whether the metric is better when it is greater."},
+    )
+    load_best_model_at_end: bool = field(
+        default=True,
+        metadata={"help": "Whether to load the best model at the end of training."},
+    )
+    save_total_limit: int = field(
+        default=1,
+        metadata={"help": "Total number of checkpoints to save."},
+    )
+    save_strategy: str = field(
+        default="steps",
+    )
+    save_steps: int = field(
+        default=10_000,
+    )
+    save_safetensors: bool = field(
+        default=False,
+    )
+    logging_strategy: str = field(
+        default="steps",
+    )
+    logging_steps: int = field(
+        default=100,
+    )
+    use_liger_kernel: bool = field(
+        default=True,
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+    )
+    # needed to avoid OOM by compute the metrics batch by batch
+    # w/o this the trainer stores logits of all sample in memory...
+    batch_eval_metrics: bool = field(
+        default=True,
+    )
+
+
+@dataclass
 class ModelArguments:
     """
     Arguments for the base model.
@@ -160,6 +218,14 @@ class CtxTrainingArguments:
     max_base_len: Optional[int] = field(
         default=2**13,
         metadata={"help": "Maximum base length for training."},
+    )
+    max_new_tokens: Optional[int] = field(
+        default=2**13,
+        metadata={"help": "Maximum new tokens for generation-based evaluation."},
+    )
+    gen_per_device_eval_batch_size: Optional[int] = field(
+        default=1,
+        metadata={"help": "Per device evaluation batch size for generation."},
     )
 
 

@@ -36,7 +36,6 @@ from transformers import (
     DataCollatorForSeq2Seq,
     EvalPrediction,
     HfArgumentParser,
-    TrainingArguments,
 )
 from utils import (
     extract_cli_args,
@@ -51,6 +50,7 @@ from utils import (
 from configs import (
     ArgumentParser,
     CtxTrainingArguments,
+    TrainingArguments,
     DataArguments,
     ExperimentSetup,
     LoRAArguments,
@@ -221,7 +221,6 @@ def main(output_dir):
     training_args.run_name = run_name
     training_args.output_dir = output_dir
     training_args.logging_dir = output_dir
-    training_args.save_safetensors = False
     logger.debug(f"args: {args}")
     save_yaml(args, f"{output_dir}/args.yaml")
 
@@ -402,6 +401,8 @@ def main(output_dir):
                 [compute_per_token_acc, compute_prefix_matching, compute_entropy]
             ),
         ),
+        max_new_tokens=ctx_args.max_new_tokens,
+        gen_per_device_eval_batch_size=ctx_args.gen_per_device_eval_batch_size,
         # compute_metrics,
         # preprocess_logits_for_metrics,
     )

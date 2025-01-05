@@ -113,6 +113,8 @@ def train_model(
     compute_metrics=None,
     preprocess_logits_for_metrics=None,
     per_sample_loss_avg=False,
+    max_new_tokens=2**13,
+    gen_per_device_eval_batch_size=1,
 ):
 
     # last_checkpoint = None
@@ -171,7 +173,8 @@ def train_model(
 
     # print(f"Loaded from the checkpoint: {checkpoint}")
 
-    # TODO: save the best model based on eval loss?
+    # Trainer loads the best model after training
+    # is done when load_best_model_at_end=True (our default)
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
     trainer.log_metrics("train", train_result.metrics)
     metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
@@ -182,8 +185,6 @@ def train_model(
     clear_gpu()
 
     ############## Evaluation
-    # TODO: generalize gen_kwargs for validation
-    max_new_tokens = 100
     # max_input_len=2**13 # for input truncation
 
     gen_kwargs = dict(do_sample=False, max_new_tokens=max_new_tokens)
@@ -197,8 +198,11 @@ def train_model(
     for attr, value in training_args.to_dict().items():
         if attr in seq2seq_training_args_fields:
             eval_trainer_args[attr] = value
+
     eval_trainer_args["eval_strategy"] = "no"
+    eval_trainer_args["save_strategy"] = "no"
     eval_trainer_args["overwrite_output_dir"] = True
+    eval_trainer_args["per_device_eval_batch_size"] = gen_per_device_eval_batch_size
 
     # NOTE: could also set kv_cache implementation here
     eval_trainer_args = Seq2SeqTrainingArguments(
@@ -232,6 +236,6 @@ def train_model(
             val_dataset = val_dataset["val"]
         eval_generation(eval_trainer, tokenizer, val_dataset, "val", gen_kwargs)
         clear_gpu()
-        
+
     if test_dataset is not None:
         eval_generation(eval_trainer, tokenizer, test_dataset, "test", gen_kwargs)
