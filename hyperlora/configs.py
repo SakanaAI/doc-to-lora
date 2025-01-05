@@ -243,9 +243,9 @@ class DataArguments:
         default=None,
         metadata={"help": "Test dataset names."},
     )
-    max_val_samples: Optional[int] = field(
+    max_val_samples_per_ds: Optional[int] = field(
         default=5000,
-        metadata={"help": "Maximum number of validation samples."},
+        metadata={"help": "Maximum number of validation samples per dataset."},
     )
 
 

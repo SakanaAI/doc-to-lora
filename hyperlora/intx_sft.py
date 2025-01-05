@@ -278,9 +278,15 @@ def main(output_dir):
     ):
         if ds_names is None:
             continue
-        tokenized_ds[split] = concatenate_datasets(
-            [_get_tokenized_dataset(ds_name, split) for ds_name in ds_names]
-        )
+        if split == "train":
+            tokenized_ds[split] = concatenate_datasets(
+                [_get_tokenized_dataset(ds_name, split) for ds_name in ds_names]
+            )
+        else:
+            tokenized_ds[split] = {
+                os.path.basename(ds_name): _get_tokenized_dataset(ds_name, split)
+                for ds_name in ds_names
+            }
 
     train_ds = tokenized_ds["train"]
     val_train_indices = np.random.permutation(len(train_ds))[:500]
@@ -288,10 +294,13 @@ def main(output_dir):
         "train": tokenized_ds["train"].select(val_train_indices),
     }
     if "validation" in tokenized_ds:
-        val_ds["val"] = tokenized_ds["validation"]
-        val_ds_size = len(val_ds["val"])
-        val_indices = np.random.permutation(val_ds_size)[: data_args.max_val_samples]
-        val_ds["val"] = val_ds["val"].select(val_indices)
+        for ds_name, ds in tokenized_ds["validation"].items():
+            val_ds[ds_name] = ds
+            val_ds_size = len(val_ds[ds_name])
+            val_indices = np.random.permutation(val_ds_size)[
+                : data_args.max_val_samples_per_ds
+            ]
+            val_ds[ds_name] = val_ds[ds_name].select(val_indices)
     test_ds = tokenized_ds.get("test", None)
 
     logger.info(f"train_ds: {train_ds}")
@@ -406,6 +415,7 @@ def main(output_dir):
         # compute_metrics,
         # preprocess_logits_for_metrics,
     )
+    logger.info(f"Training run finished and saved to {output_dir}")
 
 
 if __name__ == "__main__":

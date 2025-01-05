@@ -74,27 +74,32 @@ def decode_test_result(test_dataset, test_result, tokenizer):
 
 
 def eval_generation(eval_trainer, tokenizer, dataset, split, gen_kwargs):
-    eval_result = eval_trainer.predict(
-        dataset,
-        metric_key_prefix=split,
-        **gen_kwargs,
-    )
+    if not isinstance(dataset, dict):
+        dataset = {"": dataset}
 
-    decoded_txts = decode_test_result(dataset, eval_result, tokenizer)
-    rouge_metrics = compute_rouge(
-        [txt["generated"] for txt in decoded_txts],
-        [txt["label"] for txt in decoded_txts],
-    )
-    for k, v in rouge_metrics.items():
-        eval_result.metrics[f"{split}_{k}"] = v
-    eval_trainer.log_metrics("eval" if split == "val" else split, eval_result.metrics)
-    eval_trainer.save_metrics("eval" if split == "val" else split, eval_result.metrics)
+    for ds_name, ds in dataset.items():
+        split_name = f"{split}_{ds_name}" if ds_name else split
+        eval_result = eval_trainer.predict(
+            ds,
+            metric_key_prefix=split_name,
+            **gen_kwargs,
+        )
+        decoded_txts = decode_test_result(ds, eval_result, tokenizer)
+        rouge_metrics = compute_rouge(
+            [txt["generated"] for txt in decoded_txts],
+            [txt["label"] for txt in decoded_txts],
+        )
+        for k, v in rouge_metrics.items():
+            eval_result.metrics[f"{split}_{k}"] = v
 
-    save_generated_text(
-        decoded_txts,
-        split=split,
-        output_dir=eval_trainer.args.output_dir,
-    )
+        save_generated_text(
+            decoded_txts,
+            split=split_name,
+            output_dir=eval_trainer.args.output_dir,
+        )
+        eval_trainer.log_metrics(split_name, eval_result.metrics)
+        eval_trainer.save_metrics(split_name, eval_result.metrics)
+        clear_gpu()
 
 
 # def per_sample_loss_avg_fn(outputs, labels, num_items_in_batch):
@@ -230,12 +235,11 @@ def train_model(
         data_collator=generation_collator,
     )
 
-    # TODO: log different datasets separately
-    if val_dataset is not None:
-        if isinstance(val_dataset, dict):
-            val_dataset = val_dataset["val"]
-        eval_generation(eval_trainer, tokenizer, val_dataset, "val", gen_kwargs)
+    for split, ds in zip(["eval", "test"], [val_dataset, test_dataset]):
+        if ds is None:
+            continue
+        eval_generation(eval_trainer, tokenizer, ds, split, gen_kwargs)
         clear_gpu()
 
-    if test_dataset is not None:
-        eval_generation(eval_trainer, tokenizer, test_dataset, "test", gen_kwargs)
+    # if test_dataset is not None:
+    #     eval_generation(eval_trainer, tokenizer, test_dataset, "test", gen_kwargs)
