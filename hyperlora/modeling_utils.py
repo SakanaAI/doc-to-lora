@@ -9,13 +9,13 @@ from typing import Any, Iterable, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 
-from configs import AggregatorArguments, HypernetArguments
+from configs import AggregatorArguments, HypernetArguments, CtxEncoderArguments
 from einops import rearrange, repeat, unpack
 from einops.layers.torch import EinMix as Mix
 from einops.layers.torch import Reduce
 from hooks import add_generated_lora_hook, remove_hook_handles
 from jaxtyping import Float, Integer
-from model_loading import get_lora_config, get_model_and_tokenizer
+from model_loading import get_lora_config, get_model, get_model_and_tokenizer
 from peft import get_peft_config, load_peft_weights, LoraConfig, PeftConfig, PeftModel
 from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
@@ -26,7 +26,12 @@ from transformers.models.perceiver.modeling_perceiver import (
     PerceiverBasicDecoder,
 )
 from transformers.modeling_outputs import ModelOutput
-from utils import get_lora_module_names, get_num_layers, get_peft_in_out_features
+from utils import (
+    get_lora_module_names,
+    get_num_layers,
+    get_peft_in_out_features,
+    get_base_model,
+)
 
 logger = logging.getLogger()
 
@@ -39,7 +44,7 @@ class AGGREGATOR_TYPE(str, Enum):
 @dataclass
 class AggregatorConfig:
     aggregator_type: AGGREGATOR_TYPE
-    
+
     # pooler
     pooling_type: POOL_FN
     feature_size: int
@@ -361,41 +366,32 @@ def get_init_peft_weights(model: PeftModel, peft_config: PeftConfig = None):
 
 
 class HyperLoRA(nn.Module):
-    def __init__(
-        self,
-        # latent_size: int,
-        # lora_config: LoraConfig,
-        # layer_indices: Integer[Tensor, "num_layers"],
-        # in_out_features: dict,
-        # aggregator_type: AGGREGATOR_TYPE,
-        # aggregator_kwargs: dict,
-        config: HypernetConfig,
-        base_model: Optional[PreTrainedModel] = None,
-    ):
+    def __init__(self, config: HypernetConfig):
         super().__init__()
 
         # aggregator output [bs, n_layers, n_modules, feature_dim]
         # by mixing the pooled features with layer embs and module embs (for pooling)
         # or via a perceiver w/ bottleneck size = n_modules * n_layers
-        agg_config = config.aggregator_config
-        self.aggregator = AG[agg_config.aggregator_type](**vars(agg_config))
+        self.config = config
+        self._init_model()
 
-        self.lora_config = config.lora_config
+    def _init_model(self):
+        self.agg_config = self.config.aggregator_config
+        self.aggregator = AG[self.agg_config.aggregator_type](**vars(self.agg_config))
+
+        self.lora_config = self.config.lora_config
 
         self.target_modules = self.lora_config.target_modules
-        self.layer_indices = config.layer_indices
+        self.layer_indices = self.config.layer_indices
 
-        self.in_d, self.out_d = config.feature_sizes
+        self.in_d, self.out_d = self.config.feature_sizes
 
         self.layers = MLPResidualBlock(
-            input_size=config.latent_size,
-            hidden_size=config.latent_size * 4,
-            output_size=config.latent_size,
+            input_size=self.config.latent_size,
+            hidden_size=self.config.latent_size * 4,
+            output_size=self.config.latent_size,
         )
 
-        # TODO: check initialization of the head
-        # default values are prob. way too big
-        #
         # each module processes d -> r out_d
         # TODO: could be even more efficient if we use lightweight LoRA
         # ie. project the input to a smaller subspace (w/ same size) for all modules
@@ -406,30 +402,10 @@ class HyperLoRA(nn.Module):
             # bias_shape=None,  # no bias
             bias_shape="n_modules r out_d",
             n_modules=len(self.target_modules),
-            d=config.latent_size,
-            r=config.lora_config.r,
+            d=self.config.latent_size,
+            r=self.config.lora_config.r,
             out_d=max(self.in_d[m] + self.out_d[m] for m in self.target_modules),
         )
-        if base_model is not None:
-            self._init_head(base_model)
-
-    @torch.no_grad()
-    def _init_head(self, base_model: PreTrainedModel):
-        peft_weights = get_init_peft_weights(base_model, self.lora_config)
-        logger.debug(f"peft_weights: {peft_weights}")
-        self.head.weight.data[:] = 0
-        self.head.bias.data[:] = 0
-        for i, m in enumerate(self.target_modules):
-            A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
-            B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
-            biases = [A, B.T]
-
-            # bias_hyper_init(self.head.bias[i], biases)
-            # bias-hyperinit
-            # init weights to zeros and bias to the base weights
-            bias_cat = torch.cat(biases, dim=1)
-            self.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
-        self.head.bias.requires_grad = False
 
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
@@ -489,16 +465,41 @@ class HyperLoRA(nn.Module):
 class ModulatedPretrainedModel(nn.Module):
     def __init__(
         self,
-        base_model: PreTrainedModel,  # TODO: maybe just use the name/config?
-        hypernet: HyperLoRA,
-        ctx_encoder: nn.Module,  # TODO: maybe just use the name/config?
+        base_model: PreTrainedModel,
+        hypernet_config: HypernetConfig,
+        ctx_encoder_args: CtxEncoderArguments,
     ):
         super().__init__()
         self.device = base_model.device
-        # register base_model as a submodule
+        self.hypernet_config = hypernet_config
+        self.ctx_encoder_args = ctx_encoder_args
+
         self.register_module("base_model", base_model)
-        self.register_module("hypernet", hypernet)
-        self.register_module("ctx_encoder", ctx_encoder)
+        self._init_model()
+        self._bias_hyper_init()
+        # self.register_module("hypernet", hypernet)
+        # self.register_module("ctx_encoder", ctx_encoder)
+
+    @classmethod
+    def from_state_dict(cls, state_dict: dict, train: bool = True):
+        lora_config = state_dict["hypernet_config"].lora_config
+        model_name_or_path = lora_config.base_model_name_or_path
+        base_model = get_model(
+            model_name_or_path,
+            train=train,
+            requires_grad=False,
+            peft_config=lora_config,
+        )
+        hypernet_config = state_dict.pop("hypernet_config")
+        ctx_encoder_args = state_dict.pop("ctx_encoder_args")
+        return cls(base_model, hypernet_config, ctx_encoder_args)
+
+    def _init_model(self):
+        self.hypernet = HyperLoRA(self.hypernet_config).to(self.device)
+        # TODO: allow ctx_encoder to be other models
+        self.ctx_encoder = EarlyExit(
+            get_base_model(self.base_model), self.ctx_encoder_args.layer_idx
+        )
 
     # Delegate to base_model
     @property
@@ -508,22 +509,44 @@ class ModulatedPretrainedModel(nn.Module):
     def get_input_embeddings(self):
         return self.base_model.get_input_embeddings()
 
+    @torch.no_grad()
+    def _bias_hyper_init(self):
+        peft_weights = get_init_peft_weights(self.base_model, self.hypernet.lora_config)
+        logger.debug(f"peft_weights: {peft_weights}")
+        self.hypernet.head.weight.data[:] = 0
+        self.hypernet.head.bias.data[:] = 0
+        for i, m in enumerate(self.hypernet.target_modules):
+            A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
+            B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
+            biases = [A, B.T]
+
+            # bias-hyperinit
+            # init weights to zeros and bias to the base weights
+            bias_cat = torch.cat(biases, dim=1)
+            self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
+        # self.hypernet.head.bias.requires_grad = False
+
     def state_dict(self, *args, **kwargs):
-        state_dict = super().state_dict(*args, **kwargs)
-        # remove non-trainable and base_model's params
-        for name, param in self.named_parameters():
-            if not param.requires_grad:
-                state_dict.pop(name, None)
-
-        for name in list(state_dict.keys()):
-            if name.startswith("base_model") or name.startswith("ctx_encoder"):
-                state_dict.pop(name, None)
-
+        state_dict = self.hypernet.state_dict(*args, **kwargs)
+        state_dict["hypernet_config"] = self.hypernet_config
+        state_dict["ctx_encoder_args"] = self.ctx_encoder_args
         return state_dict
 
     def load_state_dict(self, state_dict: dict, *args, **kwargs):
         # NOTE: might have to set `strict=False` as we don't save all the params
-        return super().load_state_dict(state_dict, *args, **kwargs)
+        self.hypernet_config = state_dict.pop("hypernet_config")
+        self.ctx_encoder_args = state_dict.pop("ctx_encoder_args")
+        if (
+            self.hypernet_config.lora_config.base_model_name_or_path
+            != self.base_model.name_or_path
+        ):
+            raise ValueError(
+                f"Base model name or path mismatch. "
+                f"The base model given is: {self.base_model.name_or_path}, "
+                f"but the hypernet config is for: {self.hypernet_config.lora_config.base_model_name_or_path}"
+            )
+        self._init_model()
+        return self.hypernet.load_state_dict(state_dict, *args, **kwargs)
 
     # @torch.no_grad()
     # def get_ctx_features(
@@ -658,7 +681,6 @@ def apply_generated_loras(
 
 
 if __name__ == "__main__":
-    from utils import get_base_model
 
     # set torch randomness seed
     torch.manual_seed(42)
@@ -669,38 +691,42 @@ if __name__ == "__main__":
         requires_grad=False,
         peft_config=get_lora_config(model_name),
     )
+    # TODO: base model shoul be init with target lora config
     print(base_model)
     device = base_model.device
     # lora_config = base_model.peft_config["default"]
     # in_d, out_d = get_peft_in_out_features(base_model, peft_config=lora_config)
 
+    hypernet_args = HypernetArguments(latent_size=512)
+    aggregator_args = AggregatorArguments(aggregator_type=AGGREGATOR_TYPE.PERCEIVER)
+    hypernet_config = get_hypernet_config(base_model, hypernet_args, aggregator_args)
+    ctx_encoder_args = CtxEncoderArguments(layer_idx=4)
+    # ctx_encoder = EarlyExit(get_base_model(base_model), 4)
     # hypernet = HyperLoRA(
-    #     lora_config,
-    #     torch.arange(get_num_layers(base_model), device=base_model.device),
-    #     in_out_features={"in": in_d, "out": out_d},
-    #     aggregator_type=AGGREGATOR_TYPE.POOLER,
-    #     aggregator_config=get_aggregator_config(base_model, POOL_FN.MEAN),
-    # ).to(base_model.device)
+    #     get_hypernet_config(base_model, hypernet_args, aggregator_args),
+    #     base_model,
+    # ).to(device)
 
-    ctx_encoder = EarlyExit(get_base_model(base_model), 4)
-    hypernet = HyperLoRA(get_hypernet_config(base_model), base_model).to(device)
-
-    model = ModulatedPretrainedModel(base_model, hypernet, ctx_encoder).to(device)
+    model = ModulatedPretrainedModel(base_model, hypernet_config, ctx_encoder_args).to(
+        device
+    )
     print(model)
 
     ctx_msg = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
     ctx_inputs = tokenizer(ctx_msg, return_tensors="pt").to(device)
     ctx_ids = ctx_inputs["input_ids"]
     ctx_attn_mask = ctx_inputs["attention_mask"]
-    ctx_features = model.ctx_encoder(input_ids=ctx_ids, attention_mask=ctx_attn_mask)
+    ctx_features = model.ctx_encoder(input_ids=ctx_ids, attention_mask=ctx_attn_mask).to(
+        torch.float32
+    )
     print(ctx_ids.shape)
 
     model.eval()
-    agg_features = hypernet.aggregator(ctx_features, ctx_attn_mask)
+    agg_features = model.hypernet.aggregator(ctx_features, ctx_attn_mask)
     print(agg_features)
     print(agg_features.shape)
 
-    hnetout = hypernet(ctx_features, ctx_attn_mask)
+    hnetout = model.hypernet(ctx_features, ctx_attn_mask)
     print(hnetout)
     print(hnetout.shape)
 

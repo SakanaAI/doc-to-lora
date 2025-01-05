@@ -57,6 +57,7 @@ from configs import (
     ModelArguments,
     HypernetArguments,
     AggregatorArguments,
+    CtxEncoderArguments,
 )
 
 logger = logging.getLogger()
@@ -177,6 +178,7 @@ def main(output_dir):
             TrainingArguments,
             HypernetArguments,
             AggregatorArguments,
+            CtxEncoderArguments,
         )
     )
     (
@@ -187,6 +189,7 @@ def main(output_dir):
         training_args,
         hypernet_args,
         aggregator_args,
+        ctx_encoder_args,
     ) = parser.parse()
 
     # there shouldn't be overlap between args
@@ -199,6 +202,7 @@ def main(output_dir):
             training_args,
             hypernet_args,
             aggregator_args,
+            ctx_encoder_args,
         ]
     )
 
@@ -210,13 +214,16 @@ def main(output_dir):
         **vars(training_args),
         **vars(hypernet_args),
         **vars(aggregator_args),
+        **vars(ctx_encoder_args),
     }
 
     run_name = os.path.basename(output_dir)
     training_args.run_name = run_name
     training_args.output_dir = output_dir
     training_args.logging_dir = output_dir
+    training_args.save_safetensors = False
     logger.debug(f"args: {args}")
+    save_yaml(args, f"{output_dir}/args.yaml")
 
     ############ Model setup
 
@@ -230,19 +237,14 @@ def main(output_dir):
 
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
-        hypernet = HyperLoRA(
-            get_hypernet_config(model, hypernet_args, aggregator_args),
-            model,
-        ).to(model.device)
-        # HACK: hardcode the embedding layer for now
-        # TODO: add ctx_encoder config
-        # ctx_encoder = torch.nn.Embedding.from_pretrained(
-        #     model.get_input_embeddings().weight.clone(),
-        #     freeze=True,
-        # )
-        # have to use at least 1 layer bc positional embeddings
-        ctx_encoder = EarlyExit(get_base_model(model), 4)
-        model = ModulatedPretrainedModel(model, hypernet, ctx_encoder).to(model.device)
+        hypernet_config = get_hypernet_config(model, hypernet_args, aggregator_args)
+        # hypernet = HyperLoRA(
+        #     get_hypernet_config(model, hypernet_args, aggregator_args),
+        #     model,
+        # ).to(model.device)
+
+        # ctx_encoder = EarlyExit(get_base_model(model), ctx_encoder_args.layer_idx)
+        model = ModulatedPretrainedModel(model, hypernet_config, ctx_encoder_args)
     else:
         # activate LoRA
         logger.info("Using LoRA")
@@ -280,108 +282,6 @@ def main(output_dir):
         tokenized_ds[split] = concatenate_datasets(
             [_get_tokenized_dataset(ds_name, split) for ds_name in ds_names]
         )
-
-    # for ds_name in data_args.train_ds_names:
-    #     ds = load_dataset(ds_name)
-    #     ds = ds.map(get_preprocessing_fn(ds_name))
-    #     if "test" in ds:
-    #         ds.pop("test")
-    #     # check if the dataset has only ["train", "validation"]
-    #     if ds.keys() > set(["train", "validation"]):
-    #         raise ValueError(
-    #             f"Dataset should only have 'train' and 'validation'. " f"Got {ds.keys()}"
-    #         )
-    #     # for sft + chat_model, we need to convert the dataset to chat format
-    #     # add "messages" field
-    #     ds = ds.map(
-    #         convert_ctx_prompt_response_to_messages,
-    #         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-    #     )
-    #     # add "chat" field
-    #     # ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
-
-    #     # apply chat template for chat model
-    #     ds = ds.map(prompt_formatting_fn)
-    #     # tokenize the chat + mask the assistant inputs
-    #     pre_tok_cols = copy(ds["train"].column_names)
-    #     tokenized_ds = ds.map(
-    #         tokenize_chat_messages,
-    #         fn_kwargs={
-    #             "tokenizer": tokenizer,
-    #             "mask_assistant_inputs": True,
-    #             "tokenizer_kwargs": {
-    #                 "max_length": ctx_args.max_base_len,
-    #             },
-    #         },
-    #     )
-
-    #     # computes ctx_features offline when using hyperlora
-    #     if need_ctx_features:
-    #         # TODO: can we batch this?
-    #         # TODO: can we cache this?
-    #         tokenized_ds = tokenized_ds.map(
-    #             tokenize_ctx_text, fn_kwargs={"tokenizer": tokenizer}
-    #         )
-    #         tokenized_ds = tokenized_ds.map(
-    #             # TODO: truncate the ctx_ids to the max_ctx_len
-    #             model.get_ctx_features,
-    #             remove_columns=["ctx_ids"],
-    #         )
-
-    #     tokenized_ds = tokenized_ds.remove_columns(pre_tok_cols)
-    #     tokenized_ds.set_format(type="pt")
-
-    #     validate_columns(tokenized_ds["train"])
-    #     validate_columns(tokenized_ds["validation"])
-
-    # TODO: add explicit validation set
-
-    # test_ds_names = [] if data_args.test_ds_names is None else data_args.test_ds_names
-    # for ds_name in test_ds_names:
-    #     ds = load_dataset(ds_name)
-    #     ds = ds.map(get_preprocessing_fn(ds_name))["test"]
-
-    #     # for sft + chat_model, we need to convert the dataset to chat format
-    #     # add "messages" field
-    #     ds = ds.map(
-    #         convert_ctx_prompt_response_to_messages,
-    #         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-    #     )
-    #     # add "chat" field
-    #     # ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
-
-    #     # apply chat template for chat model
-    #     ds = ds.map(prompt_formatting_fn)
-    #     # tokenize the chat + mask the assistant inputs
-    #     pre_tok_cols = copy(ds.column_names)
-    #     tokenized_ds["test"] = ds.map(
-    #         tokenize_chat_messages,
-    #         fn_kwargs={
-    #             "tokenizer": tokenizer,
-    #             "mask_assistant_inputs": True,
-    #             "tokenizer_kwargs": {
-    #                 "max_length": ctx_args.max_base_len,
-    #             },
-    #         },
-    #     )
-
-    #     # computes ctx_features offline when using hyperlora
-    #     if need_ctx_features:
-    #         # TODO: can we batch this?
-    #         # TODO: can we cache this?
-    #         tokenized_ds["test"] = tokenized_ds["test"].map(
-    #             tokenize_ctx_text, fn_kwargs={"tokenizer": tokenizer}
-    #         )
-    #         tokenized_ds["test"] = tokenized_ds["test"].map(
-    #             # TODO: truncate the ctx_ids to the max_ctx_len
-    #             model.get_ctx_features,
-    #             remove_columns=["ctx_ids"],
-    #         )
-
-    #     tokenized_ds["test"] = tokenized_ds["test"].remove_columns(pre_tok_cols)
-    #     tokenized_ds["test"].set_format(type="pt")
-
-    #     validate_columns(tokenized_ds["test"])
 
     train_ds = tokenized_ds["train"]
     val_train_indices = np.random.permutation(len(train_ds))[:500]
@@ -512,7 +412,7 @@ if __name__ == "__main__":
     output_dir = f"train_outputs/{run_name}"
     setup_logging(output_dir, debug=os.environ.get("DEBUG", False))
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
-    save_yaml(extract_cli_args(os.sys.argv), f"{output_dir}/config.yaml")
+    save_yaml(extract_cli_args(os.sys.argv), f"{output_dir}/cli_args.yaml")
 
     # disable_caching()
     main(output_dir)

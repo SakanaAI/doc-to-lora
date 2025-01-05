@@ -192,6 +192,14 @@ class HypernetArguments:
 
 
 @dataclass
+class CtxEncoderArguments:
+    layer_idx: int = field(
+        default=4,
+        metadata={"help": "Layer index for context encoder."},
+    )
+
+
+@dataclass
 class AggregatorArguments:
 
     aggregator_type: Literal["pooler", "perceiver"] = field(
