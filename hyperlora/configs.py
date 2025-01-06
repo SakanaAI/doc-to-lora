@@ -259,6 +259,14 @@ class HypernetArguments:
         default=512,
         metadata={"help": "Latent size for HyperLoRA."},
     )
+    use_light_weight_lora: bool = field(
+        default=False,
+        metadata={"help": "Whether to use light-weight LoRA."},
+    )
+    light_weight_latent_size: int = field(
+        default=128,
+        metadata={"help": "Latent size for light-weight LoRA."},
+    )
 
 
 @dataclass

@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from configs import AggregatorArguments, HypernetArguments, CtxEncoderArguments
-from einops import rearrange, repeat, unpack
+from einops import rearrange, repeat, unpack, einsum
 from einops.layers.torch import EinMix as Mix
 from einops.layers.torch import Reduce
 from hooks import add_generated_lora_hook, remove_hook_handles
@@ -20,7 +20,7 @@ from peft import get_peft_config, load_peft_weights, LoraConfig, PeftConfig, Pef
 from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
 from pooling import POOL_FN, get_pooling_fn
-from torch import Tensor, einsum, nn
+from torch import Tensor, nn
 from transformers import PerceiverConfig, PerceiverModel, PreTrainedModel
 from transformers.models.perceiver.modeling_perceiver import (
     PerceiverBasicDecoder,
@@ -76,6 +76,9 @@ def get_aggregator_config(
 @dataclass
 class HypernetConfig:
     latent_size: int
+    use_light_weight_lora: bool
+    light_weight_latent_size: int
+
     lora_config: LoraConfig
     module_names: dict[str, list[str]]
     layer_indices: Iterable[int]
@@ -91,7 +94,7 @@ def get_hypernet_config(
     lora_config = model.peft_config["default"]
     indices = torch.arange(get_num_layers(model), device=model.device)
     return HypernetConfig(
-        latent_size=hypernet_args.latent_size,
+        **vars(hypernet_args),
         lora_config=lora_config,
         module_names=get_lora_module_names(model, lora_config.target_modules, indices),
         layer_indices=indices,
@@ -384,7 +387,7 @@ class HyperLoRA(nn.Module):
         self.target_modules = self.lora_config.target_modules
         self.layer_indices = self.config.layer_indices
 
-        self.in_d, self.out_d = self.config.feature_sizes
+        self.d_in, self.d_out = self.config.feature_sizes
 
         self.layers = MLPResidualBlock(
             input_size=self.config.latent_size,
@@ -392,31 +395,56 @@ class HyperLoRA(nn.Module):
             output_size=self.config.latent_size,
         )
 
-        # each module processes d -> r out_d
-        # TODO: could be even more efficient if we use lightweight LoRA
-        # ie. project the input to a smaller subspace (w/ same size) for all modules
-        # have to also change in_d and out_d accordingly
+        if self.config.use_light_weight_lora:
+            # light-weight lora projection (per module)
+
+            self.pre_lora_projection = nn.ParameterDict(
+                {
+                    k: nn.Parameter(
+                        torch.randn(self.d_in[k], self.config.light_weight_latent_size)
+                    )
+                    for k in self.target_modules
+                }
+            )
+            for param in self.pre_lora_projection.values():
+                nn.init.orthogonal_(param)
+
+            self.post_lora_projection = nn.ParameterDict(
+                {
+                    k: nn.Parameter(
+                        torch.randn(self.d_out[k], self.config.light_weight_latent_size)
+                    )
+                    for k in self.target_modules
+                }
+            )
+            for param in self.post_lora_projection.values():
+                nn.init.orthogonal_(param)
+
+            d_lora = self.config.light_weight_latent_size * 2
+            self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
+            self.d_out = {k: self.config.light_weight_latent_size for k in self.d_out}
+
+            logger.info(f"Using light-weight LoRA with d_lora = {d_lora}.")
+        else:
+            d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
+
+        # each module processes d -> r d_out
         self.head = Mix(
-            "bs n_layers n_modules d -> bs n_layers n_modules r out_d",
-            weight_shape="n_modules d r out_d",
+            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+            weight_shape="d_latent r d_lora",
             # bias_shape=None,  # no bias
-            bias_shape="n_modules r out_d",
+            bias_shape="r d_lora",
             n_modules=len(self.target_modules),
-            d=self.config.latent_size,
+            d_latent=self.config.latent_size,
             r=self.config.lora_config.r,
-            out_d=max(self.in_d[m] + self.out_d[m] for m in self.target_modules),
+            d_lora=d_lora,
         )
 
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
     ) -> dict[str, dict[str, Float[Tensor, "bs n_layers r _"]]]:
-        # # list of [bs, n_layers, r, in_out_dim]
-        # # and in_out_dim might vary across modules
-        # loras = unpack(
-        #     flat_loras,
-        #     [[self.in_d[m] + self.out_d[m]] for m in self.target_modules],
-        #     "bs n_layers r *",
-        # )
+        # list of [bs, n_layers, r, in_d_outim]
+        # and in_d_outim might vary across modules
         loras = unpack(
             flat_loras,
             [[] for _ in range(len(self.target_modules))],
@@ -424,17 +452,29 @@ class HyperLoRA(nn.Module):
         )
 
         # dict of {module:
-        #   {A: [bs, n_layers, r, in_dim],
-        #    B: [bs, n_layers, r, out_dim]}}
+        #   {A: [bs, n_layers, r, d_inim],
+        #    B: [bs, n_layers, r, d_outim]}}
         lora_dict = dict()
         for module, lora in zip(self.target_modules, loras):
             A, B = unpack(
-                lora[..., : self.in_d[module] + self.out_d[module]],
-                [[self.in_d[module]], [self.out_d[module]]],
+                lora[..., : self.d_in[module] + self.d_out[module]],
+                [[self.d_in[module]], [self.d_out[module]]],
                 "bs n_layers r *",
             )
             # transpose B
             B = rearrange(B, "bs n_layers r d_out -> bs n_layers d_out r")
+            if self.config.use_light_weight_lora:
+                A = einsum(
+                    self.pre_lora_projection[module],
+                    A,
+                    "d_in d_latent, bs n_layers r d_latent -> bs n_layers r d_in",
+                )
+                B = einsum(
+                    self.post_lora_projection[module],
+                    B,
+                    "d_out d_latent, bs n_layers d_latent r -> bs n_layers d_out r",
+                )
+
             lora_dict[module] = dict(A=A, B=B)
 
         return lora_dict
@@ -448,7 +488,7 @@ class HyperLoRA(nn.Module):
         # [bs, n_layers, n_modules, feature_dim]
         emb = self.aggregator(features.to(torch.float32), attn_mask)
 
-        # [bs, n_layers, n_modules, r, max_in_out_dim]
+        # [bs, n_layers, n_modules, r, max_in_d_outim]
         flat_loras = self.head(self.layers(emb))
 
         return flat_loras
@@ -515,15 +555,18 @@ class ModulatedPretrainedModel(nn.Module):
         logger.debug(f"peft_weights: {peft_weights}")
         self.hypernet.head.weight.data[:] = 0
         self.hypernet.head.bias.data[:] = 0
-        for i, m in enumerate(self.hypernet.target_modules):
-            A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
-            B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
-            biases = [A, B.T]
+        d_in = self.hypernet.d_in
+        d_out = self.hypernet.d_out
+        m = max(self.hypernet.target_modules, key=lambda m: d_in[m] + d_out[m])
 
-            # bias-hyperinit
-            # init weights to zeros and bias to the base weights
-            bias_cat = torch.cat(biases, dim=1)
-            self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
+        A = peft_weights[m]["lora_A"].weight.clone()[:, : d_in[m]]  # [r, d_in]
+        B = peft_weights[m]["lora_B"].weight.clone()[: d_out[m]]  # [d_out, r]
+        biases = [A, B.T]
+
+        # bias-hyperinit
+        # init weights to zeros and bias to the base weights
+        bias_cat = torch.cat(biases, dim=1)
+        self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
         # self.hypernet.head.bias.requires_grad = False
 
     def state_dict(self, *args, **kwargs):
@@ -695,7 +738,7 @@ if __name__ == "__main__":
     print(base_model)
     device = base_model.device
     # lora_config = base_model.peft_config["default"]
-    # in_d, out_d = get_peft_in_out_features(base_model, peft_config=lora_config)
+    # d_in, d_out = get_peft_in_out_features(base_model, peft_config=lora_config)
 
     hypernet_args = HypernetArguments(latent_size=512)
     aggregator_args = AggregatorArguments(aggregator_type=AGGREGATOR_TYPE.PERCEIVER)
