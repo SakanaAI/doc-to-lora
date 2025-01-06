@@ -227,6 +227,10 @@ class CtxTrainingArguments:
         default=1,
         metadata={"help": "Per device evaluation batch size for generation."},
     )
+    notes: Optional[str] = field(
+        default=None,
+        metadata={"help": "Wandb notes for the experiment."},
+    )
 
 
 @dataclass

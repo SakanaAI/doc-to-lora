@@ -11,7 +11,9 @@ from typing import Callable, Optional
 
 import numpy as np
 import torch
+import wandb
 import yaml
+
 from data_utils import (
     convert_ctx_prompt_response_to_messages,
     get_preprocessing_fn,
@@ -85,14 +87,6 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
     return {"prefix_matching": perf.mean().item()}
 
 
-def compute_entropy(shift_logits, shift_labels, valid_masks):
-    indices = torch.where(valid_masks)
-    logits = shift_logits[indices]
-    probs = torch.softmax(logits, dim=-1)
-    entropy = -torch.sum(probs * torch.log(probs), dim=-1)
-    return {"entropy": entropy.mean().item()}
-
-
 class Evaluator:
     def __init__(self, metric_fns: list[Callable]):
         self.metric_fns = metric_fns
@@ -115,6 +109,7 @@ class Evaluator:
         return result
 
 
+@torch.no_grad()
 def compute_metrics(
     eval_pred: EvalPrediction,
     compute_result: bool,
@@ -392,8 +387,14 @@ def main(output_dir):
     # HACK: see transformers/trainer.py for liger-kernel patch
     # slows down training speed w/ short inputs
     # might improve/decrease training speed w/ longer inputs
-    # TODO: add wandb notes somewhere
-    # wandb.init(project="ctx_to_lora", name=run_name, notes=args.notes)
+
+    wandb.init(
+        project=os.environ["WANDB_PROJECT"],
+        name=run_name,
+        group=run_name,
+        config=args,
+        notes=ctx_args.notes,
+    )
 
     train_model(
         model,
@@ -406,19 +407,21 @@ def main(output_dir):
         partial(generation_collator, tokenizer=tokenizer),
         partial(
             compute_metrics,
-            evaluator=Evaluator(
-                [compute_per_token_acc, compute_prefix_matching, compute_entropy]
-            ),
+            evaluator=Evaluator([compute_per_token_acc, compute_prefix_matching]),
         ),
         max_new_tokens=ctx_args.max_new_tokens,
         gen_per_device_eval_batch_size=ctx_args.gen_per_device_eval_batch_size,
-        # compute_metrics,
-        # preprocess_logits_for_metrics,
     )
     logger.info(f"Training run finished and saved to {output_dir}")
 
 
 if __name__ == "__main__":
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["WANDB_PROJECT"] = "ctx_to_lora"
+    os.environ["WANDB_WATCH"] = "all"
+    os.environ["WANDB_CONSOLE"] = "off"
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
     run_name = get_run_name()
     output_dir = f"train_outputs/{run_name}"
     setup_logging(output_dir, debug=os.environ.get("DEBUG", False))
