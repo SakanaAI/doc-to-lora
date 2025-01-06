@@ -121,6 +121,10 @@ class ExperimentSetup(str, Enum):
 
 @dataclass
 class TrainingArguments(TrainingArguments):
+    optim: str = field(
+        default="adamw_torch_fused",
+        metadata={"help": "Optimizer."},
+    )
     eval_on_start: bool = field(
         default=True,
         metadata={"help": "Whether to evaluate on the start of training."},
