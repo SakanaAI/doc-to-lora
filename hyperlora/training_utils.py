@@ -182,11 +182,11 @@ def train_model(
     # is done when load_best_model_at_end=True (our default)
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
     trainer.log_metrics("train", train_result.metrics)
+    trainer.save_model()
     clear_gpu()
     metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
     trainer.log_metrics("eval", metrics)
     trainer.save_metrics("eval", metrics)
-    trainer.save_model()
 
     clear_gpu()
 
