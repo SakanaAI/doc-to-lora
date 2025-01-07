@@ -16,9 +16,9 @@ label_names: ["labels"]
 # w/o this the trainer stores logits of all sample in memory...
 # batch_eval_metrics: true
 
-per_device_train_batch_size: 64
+per_device_train_batch_size: 32
 per_device_eval_batch_size: 1
-max_val_samples_per_ds: 50
+max_val_samples_per_ds: 20
 # optim: schedule_free_adamw
 learning_rate: 0.00001
 # lr_scheduler_type: "constant_with_warmup"
@@ -36,132 +36,15 @@ target_modules:
 
 # data
 train_ds_names:
-- data/raw_datasets/context_numbers_2
-- data/raw_datasets/context_numbers_3
 - data/raw_datasets/context_numbers_4
-- data/raw_datasets/context_numbers_5
-- data/raw_datasets/context_numbers_6
-- data/raw_datasets/context_numbers_7
 - data/raw_datasets/context_numbers_8
-- data/raw_datasets/context_numbers_9
-- data/raw_datasets/context_numbers_10
-- data/raw_datasets/context_numbers_11
-- data/raw_datasets/context_numbers_12
-- data/raw_datasets/context_numbers_13
-- data/raw_datasets/context_numbers_14
-- data/raw_datasets/context_numbers_15
 - data/raw_datasets/context_numbers_16
-- data/raw_datasets/context_numbers_17
-- data/raw_datasets/context_numbers_18
-- data/raw_datasets/context_numbers_19
-- data/raw_datasets/context_numbers_20
-- data/raw_datasets/context_numbers_21
-- data/raw_datasets/context_numbers_22
-- data/raw_datasets/context_numbers_23
-- data/raw_datasets/context_numbers_24
-- data/raw_datasets/context_numbers_25
-- data/raw_datasets/context_numbers_26
-- data/raw_datasets/context_numbers_27
-- data/raw_datasets/context_numbers_28
-- data/raw_datasets/context_numbers_29
-- data/raw_datasets/context_numbers_30
-- data/raw_datasets/context_numbers_31
 - data/raw_datasets/context_numbers_32
-- data/raw_datasets/context_numbers_33
-- data/raw_datasets/context_numbers_34
-- data/raw_datasets/context_numbers_35
-- data/raw_datasets/context_numbers_36
-- data/raw_datasets/context_numbers_37
-- data/raw_datasets/context_numbers_38
-- data/raw_datasets/context_numbers_39
-- data/raw_datasets/context_numbers_40
-- data/raw_datasets/context_numbers_41
-- data/raw_datasets/context_numbers_42
-- data/raw_datasets/context_numbers_43
-- data/raw_datasets/context_numbers_44
-- data/raw_datasets/context_numbers_45
-- data/raw_datasets/context_numbers_46
-- data/raw_datasets/context_numbers_47
 - data/raw_datasets/context_numbers_48
-- data/raw_datasets/context_numbers_49
-- data/raw_datasets/context_numbers_50
-- data/raw_datasets/context_numbers_51
-- data/raw_datasets/context_numbers_52
-- data/raw_datasets/context_numbers_53
-- data/raw_datasets/context_numbers_54
-- data/raw_datasets/context_numbers_55
-- data/raw_datasets/context_numbers_56
-- data/raw_datasets/context_numbers_57
-- data/raw_datasets/context_numbers_58
-- data/raw_datasets/context_numbers_59
-- data/raw_datasets/context_numbers_60
-- data/raw_datasets/context_numbers_61
-- data/raw_datasets/context_numbers_62
-- data/raw_datasets/context_numbers_63
 - data/raw_datasets/context_numbers_64
-- data/raw_datasets/context_numbers_65
-- data/raw_datasets/context_numbers_66
-- data/raw_datasets/context_numbers_67
-- data/raw_datasets/context_numbers_68
-- data/raw_datasets/context_numbers_69
-- data/raw_datasets/context_numbers_70
-- data/raw_datasets/context_numbers_71
-- data/raw_datasets/context_numbers_72
-- data/raw_datasets/context_numbers_73
-- data/raw_datasets/context_numbers_74
-- data/raw_datasets/context_numbers_75
-- data/raw_datasets/context_numbers_76
-- data/raw_datasets/context_numbers_77
-- data/raw_datasets/context_numbers_78
-- data/raw_datasets/context_numbers_79
 - data/raw_datasets/context_numbers_80
-- data/raw_datasets/context_numbers_81
-- data/raw_datasets/context_numbers_82
-- data/raw_datasets/context_numbers_83
-- data/raw_datasets/context_numbers_84
-- data/raw_datasets/context_numbers_85
-- data/raw_datasets/context_numbers_86
-- data/raw_datasets/context_numbers_87
-- data/raw_datasets/context_numbers_88
-- data/raw_datasets/context_numbers_89
-- data/raw_datasets/context_numbers_90
-- data/raw_datasets/context_numbers_91
-- data/raw_datasets/context_numbers_92
-- data/raw_datasets/context_numbers_93
-- data/raw_datasets/context_numbers_94
-- data/raw_datasets/context_numbers_95
 - data/raw_datasets/context_numbers_96
-- data/raw_datasets/context_numbers_97
-- data/raw_datasets/context_numbers_98
-- data/raw_datasets/context_numbers_99
-- data/raw_datasets/context_numbers_100
-- data/raw_datasets/context_numbers_101
-- data/raw_datasets/context_numbers_102
-- data/raw_datasets/context_numbers_103
-- data/raw_datasets/context_numbers_104
-- data/raw_datasets/context_numbers_105
-- data/raw_datasets/context_numbers_106
-- data/raw_datasets/context_numbers_107
-- data/raw_datasets/context_numbers_108
-- data/raw_datasets/context_numbers_109
-- data/raw_datasets/context_numbers_110
-- data/raw_datasets/context_numbers_111
 - data/raw_datasets/context_numbers_112
-- data/raw_datasets/context_numbers_113
-- data/raw_datasets/context_numbers_114
-- data/raw_datasets/context_numbers_115
-- data/raw_datasets/context_numbers_116
-- data/raw_datasets/context_numbers_117
-- data/raw_datasets/context_numbers_118
-- data/raw_datasets/context_numbers_119
-- data/raw_datasets/context_numbers_120
-- data/raw_datasets/context_numbers_121
-- data/raw_datasets/context_numbers_122
-- data/raw_datasets/context_numbers_123
-- data/raw_datasets/context_numbers_124
-- data/raw_datasets/context_numbers_125
-- data/raw_datasets/context_numbers_126
-- data/raw_datasets/context_numbers_127
 - data/raw_datasets/context_numbers_128
 
 val_ds_names:
@@ -172,7 +55,8 @@ val_ds_names:
 - data/raw_datasets/context_numbers_256
 
 test_ds_names:
-- data/raw_datasets/context_numbers_512
-- data/raw_datasets/context_numbers_1024
-- data/raw_datasets/context_numbers_2048
-
+- data/raw_datasets/context_numbers_16
+- data/raw_datasets/context_numbers_32
+- data/raw_datasets/context_numbers_64
+- data/raw_datasets/context_numbers_128
+- data/raw_datasets/context_numbers_256
