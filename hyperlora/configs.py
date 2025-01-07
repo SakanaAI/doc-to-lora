@@ -304,6 +304,10 @@ class AggregatorArguments:
         default=0.0,
         metadata={"help": "Attention dropout probability for Perceiver."},
     )
+    num_latent_factor: int = field(
+        default=8,
+        metadata={"help": "Number of latent factors for Perceiver."},
+    )
     num_blocks: int = field(
         default=8,
         metadata={"help": "Number of blocks for Perceiver."},

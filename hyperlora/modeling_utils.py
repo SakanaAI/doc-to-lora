@@ -58,6 +58,7 @@ class AggregatorConfig:
     num_self_attends_per_block: int = 16
     self_attention_widening_factor: int = 4
     cross_attention_widening_factor: int = 1
+    num_latent_factor: int = 8
 
 
 def get_aggregator_config(
@@ -111,14 +112,21 @@ class Perceiver(nn.Module):
     """perceiver w/ bottleneck size = n_modules * n_layers"""
 
     def __init__(
-        self, feature_size, output_size, num_layers, num_modules, *args, **kwargs
+        self,
+        feature_size,
+        output_size,
+        num_layers,
+        num_modules,
+        num_latent_factor,
+        *args,
+        **kwargs,
     ):
         super().__init__()
         self.num_layers = num_layers
         self.num_modules = num_modules
         self.config = PerceiverConfig(
             d_model=feature_size,  # + num_bands
-            num_latents=num_layers * num_modules * 8,
+            num_latents=num_layers * num_modules * num_latent_factor,
             d_latents=output_size,
             # attention_probs_dropout_prob=0.0,
             # num_blocks=8,
