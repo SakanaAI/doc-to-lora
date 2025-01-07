@@ -17,7 +17,7 @@ label_names: ["labels"]
 # batch_eval_metrics: true
 
 per_device_train_batch_size: 64
-per_device_eval_batch_size: 64
+per_device_eval_batch_size: 1
 max_val_samples_per_ds: 50
 # optim: schedule_free_adamw
 learning_rate: 0.00001
