@@ -226,5 +226,28 @@ def get_command(run):
         return jsonify({"command": "debug.log not found."})
 
 
+@app.route("/get_config/<run>")
+def get_config(run):
+    """
+    Extracts the config file name from cli_args.yaml.
+
+    Args:
+        run: The name of the training run.
+
+    Returns:
+        A JSON response containing the config file name or an error message.
+    """
+    logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
+    cli_args_path = os.path.join(logdir, "cli_args.yaml")
+
+    try:
+        with open(cli_args_path) as f:
+            cli_args = yaml.safe_load(f)
+            config_file = cli_args.get("config", "Config file not found.")
+            return jsonify({"config": config_file})
+    except FileNotFoundError:
+        return jsonify({"config": "cli_args.yaml not found."})
+
+
 if __name__ == "__main__":
     app.run(debug=True)

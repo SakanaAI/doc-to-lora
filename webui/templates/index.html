@@ -3,10 +3,35 @@
 {% block title %}Training Run Visualizer{% endblock %}
 
 {% block content %}
-<h1>Select a Training Run</h1>
-<ul>
-    {% for run in runs %}
-    <li><a href="{{ url_for('visualize', run=run) }}">{{ run }}</a></li>
-    {% endfor %}
-</ul>
+<h1>Training Runs</h1>
+<table class="table table-striped table-bordered">
+    <thead>
+        <tr>
+            <th>Run Name</th>
+            <th>Command</th>
+            <th>Config File</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for run in runs %}
+        <tr>
+            <td><a href="{{ url_for('visualize', run=run) }}">{{ run }}</a></td>
+            <td id="command-{{ run }}">Loading...</td>
+            <td id="config-{{ run }}">Loading...</td>
+        </tr>
+        <script>
+            fetch("{{ url_for('get_command', run=run) }}")
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById("command-{{ run }}").textContent = data.command;
+                });
+            fetch("{{ url_for('get_config', run=run) }}")
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById("config-{{ run }}").textContent = data.config;
+                });
+        </script>
+        {% endfor %}
+    </tbody>
+</table>
 {% endblock %}
