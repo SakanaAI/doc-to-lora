@@ -301,7 +301,16 @@ def main(output_dir):
 
     val_train_indices = np.random.permutation(len(train_ds))[:500]
     val_ds["train"] = train_ds.select(val_train_indices)
-    test_ds = tokenized_ds.get("test", None)
+
+    test_ds = dict()
+    if "test" in tokenized_ds:
+        for ds_name, ds in tokenized_ds["test"].items():
+            test_ds[ds_name] = ds
+            test_ds_size = len(test_ds[ds_name])
+            test_indices = np.random.permutation(test_ds_size)[
+                : data_args.max_test_samples_per_ds
+            ]
+            test_ds[ds_name] = test_ds[ds_name].select(test_indices)
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")

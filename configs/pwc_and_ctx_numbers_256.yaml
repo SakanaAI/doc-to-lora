@@ -64,7 +64,9 @@ val_ds_names:
 - data/raw_datasets/context_numbers_256
 
 test_ds_names:
-- data/raw_datasets/context_numbers_512
-- data/raw_datasets/context_numbers_1024
-- data/raw_datasets/context_numbers_2048
+- data/raw_datasets/context_numbers_16
+- data/raw_datasets/context_numbers_32
+- data/raw_datasets/context_numbers_64
+- data/raw_datasets/context_numbers_128
+- data/raw_datasets/context_numbers_256
 - sggetao/PwC

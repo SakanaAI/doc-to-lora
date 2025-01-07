@@ -224,7 +224,7 @@ class CtxTrainingArguments:
         metadata={"help": "Maximum base length for training."},
     )
     max_new_tokens: Optional[int] = field(
-        default=2**13,
+        default=2**10,
         metadata={"help": "Maximum new tokens for generation-based evaluation."},
     )
     gen_per_device_eval_batch_size: Optional[int] = field(
@@ -254,6 +254,10 @@ class DataArguments:
     max_val_samples_per_ds: Optional[int] = field(
         default=5000,
         metadata={"help": "Maximum number of validation samples per dataset."},
+    )
+    max_test_samples_per_ds: Optional[int] = field(
+        default=1000,
+        metadata={"help": "Maximum number of test samples per dataset."},
     )
 
 
