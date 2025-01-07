@@ -321,6 +321,7 @@ class EarlyExit(nn.Module):
         self.base_model = base_model
         self.exit_layer = exit_layer
 
+    @torch.no_grad()
     def forward(self, **kwargs):
         # if len(kwargs["input_ids"].shape) == 1:
         #     kwargs["input_ids"] = kwargs["input_ids"].unsqueeze(0)
