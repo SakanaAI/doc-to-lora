@@ -266,6 +266,7 @@ def main(output_dir):
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
+        add_repeat_prompt=ctx_args.add_repeat_prompt,
         # get_ctx_features_fn=get_ctx_features_fn,
     )
     tokenized_ds = {}

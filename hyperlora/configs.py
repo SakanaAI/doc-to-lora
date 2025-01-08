@@ -235,6 +235,10 @@ class CtxTrainingArguments:
         default=None,
         metadata={"help": "Wandb notes for the experiment."},
     )
+    add_repeat_prompt: bool = field(
+        default=True,
+        metadata={"help": "Whether to add repeat prompt to the dataset."},
+    )
 
 
 @dataclass

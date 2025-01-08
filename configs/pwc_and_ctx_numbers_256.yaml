@@ -2,6 +2,7 @@ output_dir: "" # just a placeholder
 bf16: true
 model_name_or_path: meta-llama/Llama-3.2-1B-Instruct
 label_names: ["labels"]
+add_repeat_prompt: false
 # eval_on_start: True
 # eval_strategy: "steps"
 # eval_steps: 500
@@ -18,7 +19,7 @@ label_names: ["labels"]
 
 per_device_train_batch_size: 32
 per_device_eval_batch_size: 1
-max_val_samples_per_ds: 20
+max_val_samples_per_ds: 1000
 # optim: schedule_free_adamw
 learning_rate: 0.00001
 # lr_scheduler_type: "constant_with_warmup"

@@ -19,17 +19,34 @@ def validate_columns(tokenized_ds):
     ), f"Columns mismatch: {set(tokenized_ds.column_names)} != {ref_cols}"
 
 
+def filter_long_samples(samples):
+    return [len(ctx) < 10000 for ctx in samples["context"]]
+
+
+def add_repeat_prompt_fn(samples):
+    ctxs = samples["context"] * 2
+    responses = samples["answer"] * 2
+    prompts = samples["prompt"]
+    prompts += ["Repeat the text above."] * len(prompts)
+
+    return {"context": ctxs, "response": responses, "prompt": prompts}
+
+
 def get_tokenized_dataset(
     ds_name: str,
     split: str,
     tokenizer: PreTrainedTokenizerBase,
     tokenizer_kwargs: dict[str, Any],
     add_ctx_to_chat: bool,
+    add_repeat_prompt: bool,
 ) -> dict[str, Any]:
 
     need_ctx_ids = not add_ctx_to_chat
     ds = load_dataset(ds_name, split=split)
     ds = ds.map(get_preprocessing_fn(ds_name))
+    ds = ds.filter(filter_long_samples, batched=True)
+    if add_repeat_prompt and "context_numbers" not in ds_name:
+        ds = ds.map(add_repeat_prompt_fn, batched=True, remove_columns=ds.column_names)
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
     ds = ds.map(
