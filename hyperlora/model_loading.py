@@ -18,7 +18,7 @@ def get_model_and_tokenizer(
     peft_config=None,
     model_kwargs=None,
     tokenizer_kwargs=None,
-    device="cuda:0",
+    device="cuda",
     dtype=torch.bfloat16,
 ):
     model = get_model(
@@ -106,7 +106,7 @@ def get_model(
     use_flash_attn=True,
     peft_config=None,
     model_kwargs=None,
-    device="cuda:0",
+    device="cuda",
     dtype=torch.bfloat16,
 ):
     model_init_kwargs = dict(

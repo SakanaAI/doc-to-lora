@@ -404,6 +404,8 @@ def main(output_dir):
     # HACK: see transformers/trainer.py for liger-kernel patch
     # slows down training speed w/ short inputs
     # might improve/decrease training speed w/ longer inputs
+    # HACK: see transformers/trainer_seq2seq.py for supressing
+    # "Trainer.tokenizer is now deprecated. You should use Trainer.processing_class instead."
 
     wandb.init(
         project=os.getenv("WANDB_PROJECT"),

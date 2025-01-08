@@ -153,7 +153,7 @@ class Perceiver(nn.Module):
         ctx_features: Float[Tensor, "bs seq_len feature_dim"],
         ctx_attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
-        x = self.perceiver(ctx_features, ctx_attn_mask).logits  # .last_hidden_state
+        x = self.perceiver(ctx_features, ctx_attn_mask).logits
         x = rearrange(
             x,
             "bs (n_layers n_modules) d -> bs n_layers n_modules d",
@@ -549,6 +549,14 @@ class ModulatedPretrainedModel(nn.Module):
         self.ctx_encoder = EarlyExit(
             get_base_model(self.base_model), self.ctx_encoder_args.layer_idx
         )
+
+    def to(self, *args, **kwargs):
+        # workaround to avoid the hypernet being wrapped by DeepSpeed
+        self.base_model = self.base_model.to(*args, **kwargs)
+        self.ctx_encoder = self.ctx_encoder.to(*args, **kwargs)
+        # self.hypernet = self.hypernet.to(*args, **kwargs)
+        self.hypernet.to(torch.float32)
+        return self
 
     # Delegate to base_model
     @property
