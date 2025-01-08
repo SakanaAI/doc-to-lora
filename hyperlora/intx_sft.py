@@ -38,6 +38,7 @@ from transformers import (
     DataCollatorForSeq2Seq,
     EvalPrediction,
     HfArgumentParser,
+    set_seed,
 )
 from utils import (
     extract_cli_args,
@@ -218,6 +219,7 @@ def main(output_dir):
     training_args.logging_dir = output_dir
     logger.debug(f"args: {args}")
     save_yaml(args, f"{output_dir}/args.yaml")
+    set_seed(training_args.seed)
 
     ############ Model setup
 
@@ -446,6 +448,5 @@ if __name__ == "__main__":
     if "config" in cli_args:
         config_name = os.path.basename(cli_args["config"]).split(".yaml")[0]
         os.environ["WANDB_TAGS"] = config_name
-
     # disable_caching()
     main(output_dir)
