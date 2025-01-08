@@ -20,8 +20,8 @@ def get_random_combinations(numbers: list[int], n: int, k: int) -> list[list[int
     """Get n random combinations of k numbers from the list."""
     # using itertools.combinations hangs with large numbers
     # so we explicitly generate the n indices
-    indices = [random.choices(range(len(numbers)), k=n) for _ in range(k)]
-    return zip(*[[numbers[i] for i in ind] for ind in indices])
+    indices = [random.sample(range(len(numbers)), k=k) for _ in range(n)]
+    return [[numbers[i] for i in ind] for ind in indices]
 
 
 def generate_number_dataset(
@@ -41,8 +41,7 @@ def generate_number_dataset(
 
     # Create dataset entries
     dataset = []
-    ctx_prefix = "Your top-{k} favourite numbers are: "
-    query = f"What's your top-{k} favourite numbers in [0-999]? Answer with only the numbers separated by commas."
+    query = f"Repeat the text above."
 
     # Generate all unique combinations of k numbers
     combinations = get_random_combinations(numbers, n, k)
@@ -50,7 +49,7 @@ def generate_number_dataset(
 
     for combination in combinations:
         entry = {
-            "context": ctx_prefix.format(k=k) + ", ".join(map(str, combination)),
+            "context": ", ".join(map(str, combination)),
             "prompt": query,
             "response": ", ".join(map(str, combination)),
         }
@@ -90,9 +89,9 @@ if __name__ == "__main__":
     #     os.makedirs(save_dir, exist_ok=True)
     #     generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
 
-        # print(f"Dataset generated and saved at {save_dir}")
+    # print(f"Dataset generated and saved at {save_dir}")
 
-    for k in [512, 1024, 2048]:
+    for k in [512]:
         save_dir = f"context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
         generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
