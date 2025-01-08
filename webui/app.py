@@ -19,29 +19,72 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def get_run_data(run_path):
     """
-    Loads and processes data from all_results.json for a given run.
+    Loads and processes data from all_results.json and *_results.json for a given run.
 
     Args:
-        run_path: Path to the directory containing the all_results.json file.
+        run_path: Path to the directory containing the results files.
 
     Returns:
-        A dictionary containing the grouped results data.
+        A dictionary containing the grouped and processed results data.
     """
     results_file = os.path.join(run_path, "all_results.json")
     try:
         with open(results_file) as f:
             data = json.load(f)
     except FileNotFoundError:
-        return None
+        data = {}
+
+    # Load data from *_results.json files
+    for results_json_file in glob(os.path.join(run_path, "*_results.json")):
+        try:
+            with open(results_json_file) as f:
+                split_data = json.load(f)
+                # Use the filename as a prefix for the keys
+                file_prefix = os.path.basename(results_json_file).replace(
+                    "_results.json", ""
+                )
+                for key, value in split_data.items():
+                    if isinstance(value, float):
+                        value = round(value, 4)
+                    new_key = f"{file_prefix}_{key}"
+                    data[new_key] = value
+        except FileNotFoundError:
+            print(f"Warning: {results_json_file} not found.")
 
     grouped_data = {}
     for key, value in data.items():
-        if isinstance(value, float):
-            value = round(value, 4)
-        prefix = key.split("_")[0]
-        if prefix not in grouped_data:
-            grouped_data[prefix] = {}
-        grouped_data[prefix][key] = value
+        if isinstance(value, dict):
+            # Handle nested dictionaries
+            for subkey, subvalue in value.items():
+                if isinstance(subvalue, float):
+                    subvalue = round(subvalue, 4)
+
+                # Determine prefix based on whether the key is from a split file or all_results
+                if "_" in key:
+                    prefix = key.split("_")[0]
+                else:
+                    prefix = "all"
+
+                if prefix not in grouped_data:
+                    grouped_data[prefix] = {}
+                if key not in grouped_data[prefix]:
+                    grouped_data[prefix][key] = {}
+
+                grouped_data[prefix][key][subkey] = subvalue
+        else:
+            if isinstance(value, float):
+                value = round(value, 4)
+
+            # Determine prefix based on whether the key is from a split file or all_results
+            if "_" in key:
+                prefix = key.split("_")[0]
+            else:
+                prefix = "all"
+
+            if prefix not in grouped_data:
+                grouped_data[prefix] = {}
+
+            grouped_data[prefix][key] = value
 
     return grouped_data
 

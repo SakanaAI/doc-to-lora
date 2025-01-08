@@ -240,7 +240,28 @@
                 {% for metric, value in results.items() %}
                 <tr>
                     <td>{{ metric }}</td>
+                    {% if value is mapping %}
+                    <td>
+                        <table class="performance-table">
+                            <thead>
+                                <tr>
+                                    <th>Sub-Metric</th>
+                                    <th>Value</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for submetric, subvalue in value.items() %}
+                                <tr>
+                                    <td>{{ submetric }}</td>
+                                    <td>{{ subvalue }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </td>
+                    {% else %}
                     <td>{{ value }}</td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
