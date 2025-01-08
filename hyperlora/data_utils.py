@@ -24,8 +24,8 @@ def filter_long_samples(samples):
 
 
 def add_repeat_prompt_fn(samples):
+    responses = samples["answer"] + samples["context"]
     ctxs = samples["context"] * 2
-    responses = samples["answer"] * 2
     prompts = samples["prompt"]
     prompts += ["Repeat the text above."] * len(prompts)
 
