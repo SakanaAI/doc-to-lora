@@ -255,19 +255,13 @@ def main(output_dir):
     logger.info("Loading dataset...")
 
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
-    need_ctx_features = isinstance(model, ModulatedPretrainedModel)
-    prompt_formatting_fn = get_sft_prompt_formatting_fn(
-        TRAINING_TASK.COMPLETION, tokenizer
-    )
     tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
-    # get_ctx_features_fn = model.get_ctx_features if need_ctx_features else None
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
-        # get_ctx_features_fn=get_ctx_features_fn,
     )
     tokenized_ds = {}
     for split, ds_names in zip(
@@ -276,32 +270,27 @@ def main(output_dir):
     ):
         if not ds_names:
             continue
-        if split == "train":
-            tokenized_ds[split] = concatenate_datasets(
-                [_get_tokenized_dataset(ds_name, split) for ds_name in ds_names]
-            )
-        else:
-            tokenized_ds[split] = {
-                os.path.basename(ds_name): _get_tokenized_dataset(ds_name, split)
-                for ds_name in ds_names
-            }
+        tokenized_ds[split] = {
+            os.path.basename(ds_name): _get_tokenized_dataset(ds_name, split)
+            for ds_name in ds_names
+        }
 
     train_ds = tokenized_ds["train"]
     val_ds = dict()
     if "validation" in tokenized_ds:
+        n_val_samples = data_args.max_val_samples_per_ds
         for ds_name, ds in tokenized_ds["validation"].items():
+            if ds is None:
+                # take some samples from train_ds
+                ds = train_ds[ds_name].take(n_val_samples)
+                train_ds[ds_name] = train_ds[ds_name].skip(n_val_samples)
+
             val_ds[ds_name] = ds
             val_ds_size = len(val_ds[ds_name])
-            val_indices = np.random.permutation(val_ds_size)[
-                : data_args.max_val_samples_per_ds
-            ]
+            val_indices = np.random.permutation(val_ds_size)[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
-    else:
-        # take some samples from train_ds
-        n_val_samples = data_args.max_val_samples_per_ds
-        val_ds["train_unseen"] = train_ds.take(n_val_samples)
-        train_ds = train_ds.skip(n_val_samples)
 
+    train_ds = concatenate_datasets(list(train_ds.values()))
     val_train_indices = np.random.permutation(len(train_ds))[:500]
     val_ds["train"] = train_ds.select(val_train_indices)
 
@@ -318,10 +307,10 @@ def main(output_dir):
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
     logger.info(f"test_ds: {test_ds}")
+
     # TODO: change to a faster collator? e.g.,
     # https://huggingface.co/blog/packing-with-FA2
     # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
-
     def train_collator(inp_list, tokenizer):
         # input is a list of tokenized sequences
         padding_kwargs = dict(

@@ -1,3 +1,4 @@
+import logging
 from copy import copy
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
@@ -7,6 +8,8 @@ from training_utils import TRAINING_TASK
 from transformers import PreTrainedTokenizerBase
 
 IGNORE_INDEX = -100
+
+logger = logging.getLogger()
 
 
 def validate_columns(tokenized_ds):
@@ -42,7 +45,13 @@ def get_tokenized_dataset(
 ) -> dict[str, Any]:
 
     need_ctx_ids = not add_ctx_to_chat
-    ds = load_dataset(ds_name, split=split)
+    try:
+        ds = load_dataset(ds_name, split=split)
+    except ValueError as e:
+        logger.info(
+            f"Failed to load dataset {ds_name} with split {split}. Error: {e}\nSkipping..."
+        )
+        return None
     ds = ds.map(get_preprocessing_fn(ds_name))
     ds = ds.filter(filter_long_samples, batched=True)
     if add_repeat_prompt and "context_numbers" not in ds_name:
