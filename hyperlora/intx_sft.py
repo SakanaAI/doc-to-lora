@@ -262,6 +262,7 @@ def main(output_dir):
         tokenizer_kwargs=tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
+        add_negative_prompt=ctx_args.add_negative_prompt,
     )
     tokenized_ds = {}
     for split, ds_names in zip(

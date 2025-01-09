@@ -1,4 +1,6 @@
 import logging
+import random
+import numpy as np
 from copy import copy
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
@@ -27,12 +29,77 @@ def filter_long_samples(samples):
 
 
 def add_repeat_prompt_fn(samples):
-    responses = samples["answer"] + samples["context"]
-    ctxs = samples["context"] * 2
-    prompts = samples["prompt"]
-    prompts += ["Repeat the text above."] * len(prompts)
+    unique_contexts = set()
+    ctxs, prompts, responses = [], [], []
+    for ctx, prompt, response in zip(
+        samples["context"], samples["prompt"], samples["response"]
+    ):
+        # Only process if the context is not already in the set
+        if ctx in unique_contexts:
+            continue
 
-    return {"context": ctxs, "response": responses, "prompt": prompts}
+        unique_contexts.add(ctx)
+        ctxs.append(ctx)
+        responses.append(ctx)
+        prompts.append("Repeat the text above.")
+
+    return dict(
+        context=ctxs + samples["context"],
+        response=responses + samples["response"],
+        prompt=prompts + samples["prompt"],
+    )
+
+
+def add_negative_prompt_fn(samples):
+    unique_contexts = set()
+    ctxs, prompts, responses = [], [], []
+    keywords = [
+        "repeat",
+        "rephrase",
+        "summarize",
+        "rewrite",
+        "title",
+        "keyword",
+        "continuation",
+    ]
+
+    for ctx, prompt, response in zip(
+        samples["context"], samples["prompt"], samples["response"]
+    ):
+        if ctx in unique_contexts:
+            continue
+        if any(keyword in prompt for keyword in keywords):
+            # Skip samples where the prompt contains any of the specified keywords
+            continue
+
+        unique_contexts.add(ctx)
+        ctxs.append(ctx)
+        prompts.append(prompt)
+        responses.append(response)
+
+    # remove one last sample if the number of samples is odd
+    if len(ctxs) % 2 != 0:
+        ctxs.pop()
+        prompts.pop()
+        responses.pop()
+
+    # to make sure that the negative prompt/response is not the same as the original
+    indices = list(np.random.permutation(len(ctxs))) + list(
+        np.random.permutation(len(ctxs))
+    )
+    neg_ctxs, neg_prompts, neg_responses = [], [], []
+    for idx in range(0, len(indices), 2):
+        i = indices[idx]
+        j = indices[idx + 1]
+        neg_ctxs.append(ctxs[i])
+        neg_prompts.append(ctxs[j] + "\n\n" + prompts[j])
+        neg_responses.append(responses[j])
+
+    return dict(
+        context=neg_ctxs + samples["context"],
+        prompt=neg_prompts + samples["prompt"],
+        response=neg_responses + samples["response"],
+    )
 
 
 def get_tokenized_dataset(
@@ -42,6 +109,7 @@ def get_tokenized_dataset(
     tokenizer_kwargs: dict[str, Any],
     add_ctx_to_chat: bool,
     add_repeat_prompt: bool,
+    add_negative_prompt: bool,
 ) -> dict[str, Any]:
 
     need_ctx_ids = not add_ctx_to_chat
@@ -54,8 +122,20 @@ def get_tokenized_dataset(
         return None
     ds = ds.map(get_preprocessing_fn(ds_name))
     ds = ds.filter(filter_long_samples, batched=True)
+    if add_negative_prompt:
+        cols_to_remove = [
+            col
+            for col in ds.column_names
+            if col not in ["context", "prompt", "response"]
+        ]
+        ds = ds.map(add_negative_prompt_fn, batched=True, remove_columns=cols_to_remove)
     if add_repeat_prompt and "context_numbers" not in ds_name:
-        ds = ds.map(add_repeat_prompt_fn, batched=True, remove_columns=ds.column_names)
+        cols_to_remove = [
+            col
+            for col in ds.column_names
+            if col not in ["context", "prompt", "response"]
+        ]
+        ds = ds.map(add_repeat_prompt_fn, batched=True, remove_columns=cols_to_remove)
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
     ds = ds.map(

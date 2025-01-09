@@ -239,6 +239,10 @@ class CtxTrainingArguments:
         default=True,
         metadata={"help": "Whether to add repeat prompt to the dataset."},
     )
+    add_negative_prompt: bool = field(
+        default=True,
+        metadata={"help": "Whether to add negative prompt to the dataset."},
+    )
 
 
 @dataclass
