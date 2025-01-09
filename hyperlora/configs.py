@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
 
+import torch
 import yaml
 from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser, TrainingArguments
 
@@ -336,6 +337,22 @@ class AggregatorArguments:
         default=1,
         metadata={"help": "Cross-attention widening factor for Perceiver."},
     )
+
+
+# needed for loading model from checkpoint
+# see https://github.com/huggingface/transformers/pull/34632
+torch.serialization.add_safe_globals(
+    [
+        DataArguments,
+        CtxTrainingArguments,
+        ModelArguments,
+        LoRAArguments,
+        TrainingArguments,
+        HypernetArguments,
+        AggregatorArguments,
+        CtxEncoderArguments,
+    ]
+)
 
 
 if __name__ == "__main__":

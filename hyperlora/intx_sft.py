@@ -163,7 +163,7 @@ def compute_metrics(
 #     return pred_ids
 
 
-def main(output_dir):
+def main():
     ############ Argument parsing
     parser = ArgumentParser(
         (
@@ -212,6 +212,20 @@ def main(output_dir):
         **vars(aggregator_args),
         **vars(ctx_encoder_args),
     }
+
+    checkpoint_dir = training_args.resume_from_checkpoint
+    if checkpoint_dir and not os.path.isdir(checkpoint_dir):
+        raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
+
+    run_name = get_run_name() if not checkpoint_dir else checkpoint_dir.split("/")[-2]
+    output_dir = f"train_outputs/{run_name}"
+    setup_logging(output_dir, debug=os.getenv("DEBUG", False))
+    logger.debug(f"CMD: {' '.join(os.sys.argv)}")
+    cli_args = extract_cli_args(os.sys.argv)
+    save_yaml(cli_args, f"{output_dir}/cli_args.yaml")
+    if "config" in cli_args:
+        config_name = os.path.basename(cli_args["config"]).split(".yaml")[0]
+        os.environ["WANDB_TAGS"] = config_name
 
     run_name = os.path.basename(output_dir)
     training_args.run_name = run_name
@@ -431,15 +445,5 @@ if __name__ == "__main__":
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-    run_name = get_run_name()
-    output_dir = f"train_outputs/{run_name}"
-    setup_logging(output_dir, debug=os.getenv("DEBUG", False))
-    logger.debug(f"CMD: {' '.join(os.sys.argv)}")
-    cli_args = extract_cli_args(os.sys.argv)
-    save_yaml(cli_args, f"{output_dir}/cli_args.yaml")
-    if "config" in cli_args:
-        config_name = os.path.basename(cli_args["config"]).split(".yaml")[0]
-        os.environ["WANDB_TAGS"] = config_name
     # disable_caching()
-    main(output_dir)
+    main()

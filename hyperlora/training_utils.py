@@ -117,47 +117,13 @@ def train_model(
     generation_collator=None,
     compute_metrics=None,
     preprocess_logits_for_metrics=None,
-    per_sample_loss_avg=False,
     max_new_tokens=2**13,
     gen_per_device_eval_batch_size=1,
 ):
-
-    # last_checkpoint = None
-    # if (
-    #     os.path.isdir(training_args.output_dir)
-    #     and not training_args.overwrite_output_dir
-    # ):
-    #     last_checkpoint = get_last_checkpoint(training_args.output_dir)
-    #     if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-    #         raise ValueError(
-    #             f"Output directory ({training_args.output_dir})"
-    #             " already exists and is not empty. "
-    #             "Use --overwrite_output_dir to overcome."
-    #         )
-    #     elif (
-    #         last_checkpoint is not None and training_args.resume_from_checkpoint is None
-    #     ):
-    #         print(
-    #             f"Checkpoint detected, resuming training at {last_checkpoint}. "
-    #             "To avoid this behavior, change "
-    #             "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-    #         )
-
-    # if (
-    #     max(
-    #         training_args.per_device_train_batch_size,
-    #         training_args.per_device_eval_batch_size,
-    #     )
-    #     == 1
-    # ):
-    #     data_collator = None
-
-    # # print training_args at local_rank 0
-    # local_rank = int(os.getenv("LOCAL_RANK", "0"))
-    # if local_rank == 0:
-    #     print(training_args)
-
-    compute_loss_func = per_sample_loss_avg_fn if per_sample_loss_avg else None
+    checkpoint = None
+    if training_args.resume_from_checkpoint is not None:
+        checkpoint = training_args.resume_from_checkpoint
+        logger.info(f"Resuming from the checkpoint: {checkpoint}")
 
     trainer = Trainer(
         model=model,
@@ -169,28 +135,22 @@ def train_model(
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 
-    checkpoint = None
-
-    # if training_args.resume_from_checkpoint is not None:
-    #     checkpoint = training_args.resume_from_checkpoint
-    # elif last_checkpoint is not None:
-    #     checkpoint = last_checkpoint
-
-    # print(f"Loaded from the checkpoint: {checkpoint}")
-
     # Trainer loads the best model after training
-    # is done when load_best_model_at_end=True (our default)
+    # is done when load_best_model_at_end=True
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
     trainer.log_metrics("train", train_result.metrics)
-    trainer.save_model()
+    trainer.save_model()  # just in case OOM when run trainer.evaluate()
     clear_gpu()
     metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
     trainer.log_metrics("eval", metrics)
     trainer.save_metrics("eval", metrics)
-
+    trainer.save_model()
     clear_gpu()
 
     ############## Evaluation
+    # TODO: eval does not work when using with deepspeed
+    # make a separate eval script
+
     # max_input_len=2**13 # for input truncation
 
     gen_kwargs = dict(do_sample=False, max_new_tokens=max_new_tokens)

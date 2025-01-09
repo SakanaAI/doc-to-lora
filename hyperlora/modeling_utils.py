@@ -16,7 +16,15 @@ from einops.layers.torch import Reduce
 from hooks import add_generated_lora_hook, remove_hook_handles
 from jaxtyping import Float, Integer
 from model_loading import get_lora_config, get_model, get_model_and_tokenizer
-from peft import get_peft_config, load_peft_weights, LoraConfig, PeftConfig, PeftModel
+from peft import (
+    get_peft_config,
+    load_peft_weights,
+    LoraConfig,
+    PeftConfig,
+    PeftModel,
+    LoraRuntimeConfig,
+)
+from peft.utils import PeftType, TaskType
 from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
 from pooling import POOL_FN, get_pooling_fn
@@ -740,6 +748,20 @@ def apply_generated_loras(
         remove_hook_handles(hooks)
 
 
+# needed for loading model from checkpoint
+# see https://github.com/huggingface/transformers/pull/34632
+torch.serialization.add_safe_globals(
+    [
+        AggregatorConfig,
+        LoraConfig,
+        HypernetConfig,
+        PeftType,
+        TaskType,
+        LoraRuntimeConfig,
+        set,  # for real?
+    ]
+)
+
 if __name__ == "__main__":
 
     # set torch randomness seed
@@ -798,5 +820,13 @@ if __name__ == "__main__":
 
     modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
     print(modelout)
+
+    # model.load_state_dict(
+    #     torch.load(
+    #         open("train_outputs/20250108-193257_BB1p30QQ/pytorch_model.bin", "rb")
+    #     )
+    # )
+    # modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
+    # print(modelout)
 
     breakpoint()
