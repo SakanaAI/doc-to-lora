@@ -18,6 +18,8 @@ def validate_columns(tokenized_ds):
     cols = ["input_ids", "attention_mask", "labels"]
     if "ctx_ids" in tokenized_ds.column_names:
         cols += ["ctx_ids", "ctx_attn_mask"]
+    if "chat_ids" in tokenized_ds.column_names:
+        cols += ["chat_ids", "chat_attn_mask", "chat_labels"]
     ref_cols = set(cols)
     assert (
         set(tokenized_ds.column_names) == ref_cols
@@ -110,6 +112,7 @@ def get_tokenized_dataset(
     add_ctx_to_chat: bool,
     add_repeat_prompt: bool,
     add_negative_prompt: bool,
+    use_kl_loss: bool,
 ) -> dict[str, Any]:
 
     need_ctx_ids = not add_ctx_to_chat
@@ -123,19 +126,10 @@ def get_tokenized_dataset(
     ds = ds.map(get_preprocessing_fn(ds_name))
     ds = ds.filter(filter_long_samples, batched=True)
     if add_negative_prompt:
-        cols_to_remove = [
-            col
-            for col in ds.column_names
-            if col not in ["context", "prompt", "response"]
-        ]
-        ds = ds.map(add_negative_prompt_fn, batched=True, remove_columns=cols_to_remove)
+        ds = ds.map(add_negative_prompt_fn, batched=True)
     if add_repeat_prompt and "context_numbers" not in ds_name:
-        cols_to_remove = [
-            col
-            for col in ds.column_names
-            if col not in ["context", "prompt", "response"]
-        ]
-        ds = ds.map(add_repeat_prompt_fn, batched=True, remove_columns=cols_to_remove)
+        ds = ds.map(add_repeat_prompt_fn, batched=True)
+
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
     ds = ds.map(
@@ -146,6 +140,7 @@ def get_tokenized_dataset(
     ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
     # tokenize the chat + mask the assistant inputs
 
+    # add "input_ids", "attention_mask", "labels"
     tokenized_ds = ds.map(
         tokenize_chat_messages,
         fn_kwargs={
@@ -153,7 +148,6 @@ def get_tokenized_dataset(
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": tokenizer_kwargs,
         },
-        remove_columns=["messages", "prompt", "response", "chat"],
     )
 
     other_cols = [
@@ -162,7 +156,25 @@ def get_tokenized_dataset(
         if col not in ["input_ids", "attention_mask", "labels"]
     ]
 
-    # computes ctx_features offline when using hyperlora
+    # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
+    if use_kl_loss:
+        tokenized_ds = tokenized_ds.map(
+            convert_ctx_prompt_response_to_messages,
+            fn_kwargs={"add_ctx_to_chat": True},
+        )
+        tokenized_ds = tokenized_ds.map(
+            get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer)
+        )
+        tokenized_ds = tokenized_ds.map(
+            tokenize_chat_messages,
+            fn_kwargs={
+                "tokenizer": tokenizer,
+                "mask_assistant_inputs": True,
+                "tokenizer_kwargs": tokenizer_kwargs,
+                "for_kl_loss": True,
+            },
+        )
+
     if need_ctx_ids:
         # TODO: can we batch this?
         # TODO: can we cache this?
@@ -171,14 +183,6 @@ def get_tokenized_dataset(
             tokenize_ctx_text,
             fn_kwargs={"tokenizer": tokenizer},
         )
-
-        # # FIXME: arrow cant consturct this for very long ctx_len (>1k tokens)
-        # # might have to really do this online
-        # tokenized_ds = tokenized_ds.map(
-        #     # TODO: truncate the ctx_ids to the max_ctx_len
-        #     get_ctx_features_fn,
-        #     remove_columns=["ctx_ids"],
-        # )
 
     tokenized_ds = tokenized_ds.remove_columns(other_cols)
 
@@ -413,6 +417,7 @@ def tokenize_chat_messages(
     example: dict[str, Any],
     tokenizer: PreTrainedTokenizerBase,
     mask_assistant_inputs: bool = True,
+    for_kl_loss: bool = False,
     tokenizer_kwargs: Optional[dict[str, Any]] = None,
 ) -> dict[str, list[int]]:
     """
@@ -422,6 +427,7 @@ def tokenize_chat_messages(
         example: Dictionary containing 'chat' and 'messages' keys
         tokenizer: Tokenizer to use
         mask_assistant_inputs: Whether to mask non-assistant tokens
+        for_kl_loss: change the column names to "chat_ids" and "chat_attn_mask"
         tokenizer_kwargs: Additional arguments to pass to tokenizer
 
     Returns:
@@ -447,6 +453,10 @@ def tokenize_chat_messages(
         del conversation_ids["offset_mapping"]
     else:
         conversation_ids["labels"] = conversation_ids["input_ids"]
+    if for_kl_loss:
+        conversation_ids["chat_ids"] = conversation_ids.pop("input_ids")
+        conversation_ids["chat_attn_mask"] = conversation_ids.pop("attention_mask")
+        conversation_ids["chat_labels"] = conversation_ids.pop("labels")
     return conversation_ids
 
 

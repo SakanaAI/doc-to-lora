@@ -254,7 +254,12 @@ def main():
         # ).to(model.device)
 
         # ctx_encoder = EarlyExit(get_base_model(model), ctx_encoder_args.layer_idx)
-        model = ModulatedPretrainedModel(model, hypernet_config, ctx_encoder_args)
+        model = ModulatedPretrainedModel(
+            model,
+            hypernet_config,
+            ctx_encoder_args,
+            ctx_args.use_kl_loss,
+        )
     else:
         # activate LoRA
         logger.info("Using LoRA")
@@ -277,6 +282,7 @@ def main():
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
         add_negative_prompt=ctx_args.add_negative_prompt,
+        use_kl_loss=ctx_args.use_kl_loss,
     )
     tokenized_ds = {}
     for split, ds_names in zip(
@@ -354,6 +360,29 @@ def main():
                 batch_first=True,
                 padding_value=0,
             )
+
+        chat_ids = None
+        if "chat_ids" in inp_list[0]:
+            chat_ids = [x.pop("chat_ids") for x in inp_list]
+            chat_ids = torch.nn.utils.rnn.pad_sequence(
+                chat_ids,
+                batch_first=True,
+                padding_value=0,
+            )
+            chat_attn_mask = [x.pop("chat_attn_mask") for x in inp_list]
+            chat_attn_mask = torch.nn.utils.rnn.pad_sequence(
+                chat_attn_mask,
+                batch_first=True,
+                padding_value=0,
+            )
+            chat_labels = [x.pop("chat_labels") for x in inp_list]
+            chat_labels = torch.nn.utils.rnn.pad_sequence(
+                chat_labels,
+                batch_first=True,
+                padding_value=-100,
+            )
+            chat_labels = torch.where(chat_attn_mask == 0, -100, chat_labels)
+
         labels = [x.pop("labels") for x in inp_list]
         padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
 
@@ -364,6 +393,10 @@ def main():
         if ctx_ids is not None:
             out["ctx_ids"] = ctx_ids
             out["ctx_attn_mask"] = ctx_attn_mask
+        if chat_ids is not None:
+            out["chat_ids"] = chat_ids
+            out["chat_attn_mask"] = chat_attn_mask
+            out["chat_labels"] = chat_labels
         return out
 
     def generation_collator(inp_list, tokenizer):

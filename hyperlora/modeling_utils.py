@@ -441,7 +441,7 @@ class HyperLoRA(nn.Module):
             self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
             self.d_out = {k: self.config.light_weight_latent_size for k in self.d_out}
 
-            logger.info(f"Using light-weight LoRA with d_lora = {d_lora}.")
+            logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
         else:
             d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
@@ -525,11 +525,14 @@ class ModulatedPretrainedModel(nn.Module):
         base_model: PreTrainedModel,
         hypernet_config: HypernetConfig,
         ctx_encoder_args: CtxEncoderArguments,
+        # use_kl_loss is only used for training
+        use_kl_loss: bool = False,
     ):
         super().__init__()
         self.device = base_model.device
         self.hypernet_config = hypernet_config
         self.ctx_encoder_args = ctx_encoder_args
+        self.use_kl_loss = use_kl_loss
 
         self.register_module("base_model", base_model)
         self._init_model()
@@ -641,8 +644,11 @@ class ModulatedPretrainedModel(nn.Module):
     def forward(
         self,
         # ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
-        ctx_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
-        ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
+        ctx_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
+        ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_len"]] = None,
+        chat_ids: Optional[Integer[Tensor, "bs chat_len"]] = None,
+        chat_attn_mask: Optional[Integer[Tensor, "bs chat_len"]] = None,
+        chat_labels: Optional[Integer[Tensor, "bs chat_len"]] = None,
         **model_inputs_kwargs: dict[str, Any],
     ) -> Union[tuple, ModelOutput]:
         """Forward pass of the modulated model."""
@@ -667,16 +673,55 @@ class ModulatedPretrainedModel(nn.Module):
                 )
             generated_loras = self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
-        # apply lora hook to the base model
-        # self.apply_generated_loras(generated_loras)
-        with apply_generated_loras(
-            self.base_model,
-            generated_loras,
-            self.hypernet.layer_indices,
-            self.training,
-        ):
-            model_outputs = self.base_model(**model_inputs_kwargs)
-        # model_outputs.generated_loras = generated_loras
+        # compute kl loss
+        # - compute logits from the base model from tokenized chat [bs, chat_len, vocab_size]
+        # - compute logits from model w/ generated loras [bs, answer_len, vocab_size]
+        # - select only the position of the label tokens (but we're actually not using the labels themselves)
+        # - compute kl loss between the two logits
+        if self.use_kl_loss and "labels" in model_inputs_kwargs:
+            bs = chat_ids.shape[0]
+            labels = model_inputs_kwargs.pop("labels")  # [bs, prompt_res_len]
+            first_label_pos = torch.argmax((labels != -100).float(), dim=-1)
+            # just a place holder, we dont use labels as groundtruth anyway
+            labels[torch.arange(bs), first_label_pos - 1] = 1
+            # same for chat_labels
+            first_label_pos = torch.argmax((chat_labels != -100).float(), dim=-1)
+            chat_labels[torch.arange(bs), first_label_pos - 1] = 1
+
+            chat_outputs = self.base_model(
+                input_ids=chat_ids, attention_mask=chat_attn_mask
+            )
+            with apply_generated_loras(
+                self.base_model,
+                generated_loras,
+                self.hypernet.layer_indices,
+                self.training,
+            ):
+                model_outputs = self.base_model(**model_inputs_kwargs)
+                pred_logits = model_outputs.logits  # [bs, prompt_res_len, vocab_size]
+
+            # [bs, ctx_prompt_res_len, vocab_size]
+            base_chat_logits = chat_outputs.logits
+            base_chat_logits = base_chat_logits[torch.where(chat_labels != -100)]
+            pred_logits = pred_logits[torch.where(labels != -100)]
+            kl_loss = F.kl_div(
+                F.log_softmax(pred_logits, dim=-1),
+                F.softmax(base_chat_logits, dim=-1),
+                reduction="none",
+            )
+            # only compute kl loss on tokens where labels != -100
+            kl_loss = kl_loss.sum(dim=-1).mean()
+            model_outputs = ModelOutput(loss=kl_loss, **model_outputs)
+        else:
+            # input_ids in model_inputs_kwargs contains only
+            # prompt + response (for hypernet training)
+            with apply_generated_loras(
+                self.base_model,
+                generated_loras,
+                self.hypernet.layer_indices,
+                self.training,
+            ):
+                model_outputs = self.base_model(**model_inputs_kwargs)
 
         return model_outputs
 

@@ -244,6 +244,10 @@ class CtxTrainingArguments:
         default=True,
         metadata={"help": "Whether to add negative prompt to the dataset."},
     )
+    use_kl_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use KL loss."},
+    )
 
 
 @dataclass
