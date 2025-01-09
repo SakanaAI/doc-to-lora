@@ -688,9 +688,11 @@ class ModulatedPretrainedModel(nn.Module):
             first_label_pos = torch.argmax((chat_labels != -100).float(), dim=-1)
             chat_labels[torch.arange(bs), first_label_pos - 1] = 1
 
-            chat_outputs = self.base_model(
-                input_ids=chat_ids, attention_mask=chat_attn_mask
-            )
+            with torch.no_grad():
+                chat_outputs = self.base_model(
+                    input_ids=chat_ids, attention_mask=chat_attn_mask
+                )
+
             with apply_generated_loras(
                 self.base_model,
                 generated_loras,

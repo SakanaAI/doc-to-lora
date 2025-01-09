@@ -126,9 +126,19 @@ def get_tokenized_dataset(
     ds = ds.map(get_preprocessing_fn(ds_name))
     ds = ds.filter(filter_long_samples, batched=True)
     if add_negative_prompt:
-        ds = ds.map(add_negative_prompt_fn, batched=True)
+        cols_to_remove = [
+            col
+            for col in ds.column_names
+            if col not in ["context", "prompt", "response"]
+        ]
+        ds = ds.map(add_negative_prompt_fn, batched=True, remove_columns=cols_to_remove)
     if add_repeat_prompt and "context_numbers" not in ds_name:
-        ds = ds.map(add_repeat_prompt_fn, batched=True)
+        cols_to_remove = [
+            col
+            for col in ds.column_names
+            if col not in ["context", "prompt", "response"]
+        ]
+        ds = ds.map(add_repeat_prompt_fn, batched=True, remove_columns=cols_to_remove)
 
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
