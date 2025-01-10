@@ -341,16 +341,16 @@ def convert_ctx_prompt_response_to_messages(
 
     system_msg = ""
     if "system_message" in example:
-        system_msg = example["system_message"]
+        system_msg = example["system_message"].strip()
 
-    user_msg = example["prompt"]
+    user_msg = example["prompt"].strip()
     if add_ctx_to_chat:
-        user_msg = example["context"] + "\n" + user_msg
+        user_msg = example["context"].strip() + "\n\n" + user_msg.strip()
 
     messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-        {"role": "assistant", "content": example["response"]},
+        {"role": "system", "content": system_msg.strip()},
+        {"role": "user", "content": user_msg.strip()},
+        {"role": "assistant", "content": example["response"].strip()},
     ]
 
     return dict(messages=messages)
