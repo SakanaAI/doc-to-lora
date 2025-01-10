@@ -87,6 +87,14 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
     perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
     return {"prefix_matching": perf.mean().item()}
 
+@torch.no_grad()
+def compute_perplexity(shift_logits, shift_labels, valid_masks):
+    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+    loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
+    loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
+    perplexity = torch.exp(loss).mean().item()
+    return {"per_token_ppl": perplexity}
+
 
 class Evaluator:
     def __init__(self, metric_fns: list[Callable]):
@@ -464,7 +472,9 @@ def main():
         partial(generation_collator, tokenizer=tokenizer),
         partial(
             compute_metrics,
-            evaluator=Evaluator([compute_per_token_acc, compute_prefix_matching]),
+            evaluator=Evaluator(
+                [compute_per_token_acc, compute_prefix_matching, compute_perplexity]
+            ),
         ),
         max_new_tokens=ctx_args.max_new_tokens,
         gen_per_device_eval_batch_size=ctx_args.gen_per_device_eval_batch_size,
