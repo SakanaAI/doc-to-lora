@@ -13,6 +13,29 @@ IGNORE_INDEX = -100
 
 logger = logging.getLogger()
 
+DS_KWARGS = {
+    "hotpotqa/hotpot_qa": dict(
+        train=dict(name="fullwiki", split="train[1000:2000]"),
+        validation=dict(name="fullwiki", split="train[:1000]"),
+        test=dict(name="fullwiki", split="validation"),
+    ),
+    "sggetao/PwC": dict(
+        train=dict(split="train[1000:]"),
+        validation=dict(split="train[:1000]"),
+        test=dict(split="test"),
+    ),
+}
+
+
+def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
+    if (ds_name not in DS_KWARGS) or (split not in DS_KWARGS[ds_name]):
+        logger.warning(
+            f"No dataset kwargs found for '{ds_name}' with split '{split}'.\n"
+            f"Using default kwargs: path={ds_name}, split={split}"
+        )
+        return dict(split=split)
+    return DS_KWARGS[ds_name][split]
+
 
 def validate_columns(tokenized_ds):
     cols = ["input_ids", "attention_mask", "labels"]
@@ -44,6 +67,9 @@ def add_repeat_prompt_fn(samples):
         ctxs.append(ctx)
         responses.append(ctx)
         prompts.append("Repeat the text above.")
+
+    logger.debug(f"Adding repeat prompt...")
+    logger.debug(f"# unique contexts: {len(unique_contexts)}")
 
     return dict(
         context=ctxs + samples["context"],
@@ -79,6 +105,9 @@ def add_negative_prompt_fn(samples):
         prompts.append(prompt)
         responses.append(response)
 
+    logger.debug(f"Adding negative prompt...")
+    logger.debug(f"# unique contexts: {len(unique_contexts)}")
+
     # remove one last sample if the number of samples is odd
     if len(ctxs) % 2 != 0:
         ctxs.pop()
@@ -104,6 +133,15 @@ def add_negative_prompt_fn(samples):
     )
 
 
+def filter_none(samples):
+    out = [True] * len(samples["context"])
+    for k in samples:
+        for i, sample in enumerate(samples[k]):
+            if not bool(sample):
+                out[i] = False
+    return out
+
+
 def get_tokenized_dataset(
     ds_name: str,
     split: str,
@@ -115,30 +153,23 @@ def get_tokenized_dataset(
     use_kl_loss: bool,
 ) -> dict[str, Any]:
 
+    logger.debug(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat
     try:
-        ds = load_dataset(ds_name, split=split)
+        ds = load_dataset(ds_name, **get_ds_kwargs(ds_name, split))
     except ValueError as e:
         logger.info(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}\nSkipping..."
         )
         return None
-    ds = ds.map(get_preprocessing_fn(ds_name))
+    ds = ds.map(get_preprocessing_fn(ds_name), remove_columns=ds.column_names)
+    ds = ds.filter(filter_none, batched=True)
     ds = ds.filter(filter_long_samples, batched=True)
-    if add_negative_prompt:
-        cols_to_remove = [
-            col
-            for col in ds.column_names
-            if col not in ["context", "prompt", "response"]
-        ]
-        ds = ds.map(add_negative_prompt_fn, batched=True, remove_columns=cols_to_remove)
-    if add_repeat_prompt and "context_numbers" not in ds_name:
-        cols_to_remove = [
-            col
-            for col in ds.column_names
-            if col not in ["context", "prompt", "response"]
-        ]
-        ds = ds.map(add_repeat_prompt_fn, batched=True, remove_columns=cols_to_remove)
+    if split != "test":
+        if add_negative_prompt:
+            ds = ds.map(add_negative_prompt_fn, batched=True, batch_size=None)
+        if add_repeat_prompt and "context_numbers" not in ds_name:
+            ds = ds.map(add_repeat_prompt_fn, batched=True, batch_size=None)
 
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
@@ -195,9 +226,7 @@ def get_tokenized_dataset(
         )
 
     tokenized_ds = tokenized_ds.remove_columns(other_cols)
-
     tokenized_ds.set_format(type="pt")
-
     validate_columns(tokenized_ds)
     return tokenized_ds
 
@@ -310,54 +339,25 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
 
     if ds_name == "sggetao/PwC":
 
-        def f(example):
-            example["context"] = example["input"]
-            example["response"] = example["answer"]
-            return example
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["prompt"],
+                "response": sample["answer"],
+            }
 
-    # if ds_name == "context_numbers":
+    elif ds_name == "hotpotqa/hotpot_qa":
 
-    #     def f(example):
-    #         example["messages"] = [
-    #             {"role": "user", "content": example["prompt"]},
-    #             {"role": "assistant", "content": example["response"]},
-    #         ]
-    #         return example
+        def f(sample):
+            txt = ""
+            for p in sample["context"]["sentences"]:
+                txt += " " + "".join(p)
 
-    # if ds_name.startswith("lol_"):
-
-    #     def f(example):
-    #         txt = example["input"]
-    #         task_def = txt.split("Definition: ")[1].split("\n\nPositive Example")[0]
-    #         task_def += " Please complete the task without any explanation."
-    #         if len(example["output"]) > 1:
-    #             task_def += "\nThe answer should be a comma-separated list of possible completions."
-    #         problem = txt.split("Now complete the following example -")[1].split("Input: ")[1].split("\nOutput:")[0]
-    #         answer = ", ".join(example["output"])
-    #         return dict(task_def=task_def, problem=problem, answer=answer)
-
-    # if ds_name.startswith("arc_"):
-    #     ABCD = ["A", "B", "C", "D"]
-
-    #     def f(example):
-    #         choices = example["choices"]
-    #         assert len(choices["text"]) == len(choices["label"])
-    #         n_to_fill = 4 - len(choices["text"])
-    #         if len(choices["text"]) < 4:
-    #             choices["text"] += ["N/A"] * n_to_fill
-    #         if len(choices["label"]) < 4:
-    #             if choices["label"][0].isdigit():
-    #                 choices["label"] += [str(len(choices["label"]) + i + 1) for i in range(n_to_fill)]
-    #             else:
-    #                 choices["label"] += [ABCD[len(choices["label"]) + i] for i in range(n_to_fill)]
-    #         example["choices"] = choices
-    #         return example
-
-    # if ds_name.startswith("mbpp"):
-    #     # for training an oracle lora on mbpp
-    #     def f(example):
-    #         example["assertions"] = "\n".join(example["test_list"])
-    #         return example
+            return {
+                "context": txt,
+                "prompt": sample["question"],
+                "response": sample["answer"],
+            }
 
     return f
 

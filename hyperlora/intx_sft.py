@@ -87,6 +87,7 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
     perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
     return {"prefix_matching": perf.mean().item()}
 
+
 @torch.no_grad()
 def compute_perplexity(shift_logits, shift_labels, valid_masks):
     loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
@@ -488,5 +489,5 @@ if __name__ == "__main__":
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    # disable_caching()
+    disable_caching()
     main()
