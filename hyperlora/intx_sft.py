@@ -489,5 +489,6 @@ if __name__ == "__main__":
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    disable_caching()
+    if os.getenv("DEBUG", False):
+        disable_caching()
     main()

@@ -36,7 +36,7 @@ target_modules:
 
 # data
 train_ds_names:
-- sggetao/PwC
+- pwc
 - data/raw_datasets/context_numbers_4
 - data/raw_datasets/context_numbers_8
 - data/raw_datasets/context_numbers_16
@@ -57,7 +57,7 @@ train_ds_names:
 
 
 val_ds_names:
-- sggetao/PwC
+- pwc
 - data/raw_datasets/context_numbers_16
 - data/raw_datasets/context_numbers_32
 - data/raw_datasets/context_numbers_64
@@ -70,4 +70,4 @@ test_ds_names:
 - data/raw_datasets/context_numbers_64
 - data/raw_datasets/context_numbers_128
 - data/raw_datasets/context_numbers_256
-- sggetao/PwC
+- pwc

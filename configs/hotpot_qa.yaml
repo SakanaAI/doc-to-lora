@@ -36,10 +36,10 @@ target_modules:
 
 # data
 train_ds_names:
-- hotpotqa/hotpot_qa
+- hotpot_qa
 
 val_ds_names:
-- hotpotqa/hotpot_qa
+- hotpot_qa
 
 test_ds_names:
-- hotpotqa/hotpot_qa
+- hotpot_qa

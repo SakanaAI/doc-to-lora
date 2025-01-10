@@ -36,10 +36,10 @@ target_modules:
 
 # data
 train_ds_names:
-- sggetao/PwC
+- pwc
 
 val_ds_names:
-- sggetao/PwC
+- pwc
 
 test_ds_names:
-- sggetao/PwC
+- pwc
