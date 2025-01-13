@@ -138,6 +138,7 @@ def get_model(
         model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
     else:
         model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
+        model = model.language_model
     if peft_config is not None:
         model = PeftModel(model, peft_config)
     model.train(train)
