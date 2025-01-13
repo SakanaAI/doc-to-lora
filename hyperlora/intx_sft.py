@@ -22,7 +22,13 @@ from data_utils import (
     tokenize_chat_messages,
     tokenize_ctx_text,
 )
-from datasets import concatenate_datasets, disable_caching, load_dataset
+from datasets import (
+    concatenate_datasets,
+    interleave_datasets,
+    disable_caching,
+    load_dataset,
+    IterableDataset,
+)
 from model_loading import get_lora_config, get_model_and_tokenizer
 from modeling_utils import (
     EarlyExit,
@@ -40,6 +46,7 @@ from transformers import (
     HfArgumentParser,
     set_seed,
 )
+from torch.utils.data import DataLoader
 from utils import (
     extract_cli_args,
     get_base_model,
@@ -292,6 +299,7 @@ def main():
         add_repeat_prompt=ctx_args.add_repeat_prompt,
         add_negative_prompt=ctx_args.add_negative_prompt,
         use_kl_loss=ctx_args.use_kl_loss,
+        # streaming=data_args.streaming,
     )
     tokenized_ds = {}
     for split, ds_names in zip(
@@ -316,22 +324,28 @@ def main():
                 train_ds[ds_name] = train_ds[ds_name].skip(n_val_samples)
 
             val_ds[ds_name] = ds
-            val_ds_size = len(val_ds[ds_name])
-            val_indices = np.random.permutation(val_ds_size)[:n_val_samples]
+            val_indices = np.random.permutation(len(ds))[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
-    train_ds = concatenate_datasets(list(train_ds.values()))
+    # train_ds = concatenate_datasets(list(train_ds.values()))
+
+    # total_len = sum(len(ds) for ds in train_ds.values())
+    train_ds_len = [len(ds) for ds in train_ds.values()]
+    total_len = sum(train_ds_len)
+    train_ds = interleave_datasets(
+        list(train_ds.values()),
+        probabilities=[l / total_len for l in train_ds_len],
+    )
+
     val_train_indices = np.random.permutation(len(train_ds))[:500]
     val_ds["train"] = train_ds.select(val_train_indices)
 
     test_ds = dict()
     if "test" in tokenized_ds:
+        n_test_samples = data_args.max_test_samples_per_ds
         for ds_name, ds in tokenized_ds["test"].items():
             test_ds[ds_name] = ds
-            test_ds_size = len(test_ds[ds_name])
-            test_indices = np.random.permutation(test_ds_size)[
-                : data_args.max_test_samples_per_ds
-            ]
+            test_indices = np.random.permutation(len(ds))[:n_test_samples]
             test_ds[ds_name] = test_ds[ds_name].select(test_indices)
 
     logger.info(f"train_ds: {train_ds}")
@@ -471,7 +485,7 @@ def main():
         test_ds,
         partial(train_collator, tokenizer=tokenizer),
         partial(generation_collator, tokenizer=tokenizer),
-        partial(
+        compute_metrics=partial(
             compute_metrics,
             evaluator=Evaluator(
                 [compute_per_token_acc, compute_prefix_matching, compute_perplexity]
@@ -484,6 +498,7 @@ def main():
 
 
 if __name__ == "__main__":
+    os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     os.environ["WANDB_PROJECT"] = "ctx_to_lora"
     os.environ["WANDB_WATCH"] = ""  # "all"

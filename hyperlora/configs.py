@@ -81,7 +81,9 @@ class ArgumentParser(HfArgumentParser):
 
             obj = data_class(**inputs)
             outputs.append(obj)
-
+        for arg in other_args:
+            if arg not in used_args:
+                raise ValueError(f"Argument provided not found in dataclass: {arg}")
         return outputs
 
     def parse(self) -> DataClassType | tuple[DataClassType]:
@@ -122,9 +124,35 @@ class ExperimentSetup(str, Enum):
 
 @dataclass
 class TrainingArguments(TrainingArguments):
+    dataloader_pin_memory: bool = field(
+        default=True,
+        metadata={"help": "Whether to pin memory in data loaders or not."},
+    )
+    dataloader_persistent_workers: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to keep the workers alive after a dataset has been consumed once."
+        },
+    )
+    dataloader_prefetch_factor: int = field(
+        default=2,
+        metadata={"help": "Number of batches loaded in advance by each worker."},
+    )
+    dataloader_num_workers: int = field(
+        default=4,
+        metadata={"help": "Number of subprocesses to use for data loading."},
+    )
     optim: str = field(
         default="adamw_torch_fused",
         metadata={"help": "Optimizer."},
+    )
+    adam_beta1: float = field(
+        default=0.9,
+        metadata={"help": "Adam beta 1."},
+    )
+    adam_beta2: float = field(
+        default=0.95,
+        metadata={"help": "Adam beta 2."},
     )
     eval_on_start: bool = field(
         default=True,

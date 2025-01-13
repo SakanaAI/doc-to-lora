@@ -2,7 +2,7 @@ import logging
 import numpy as np
 from typing import Any, Callable, Iterator, Optional
 
-from datasets import load_dataset
+from datasets import load_dataset, IterableDataset
 from training_utils import TRAINING_TASK
 from transformers import PreTrainedTokenizerBase
 
@@ -35,22 +35,16 @@ DS_KWARGS = {
         validation=dict(path="sggetao/PwC", split="train[:1000]"),
         test=dict(path="sggetao/PwC", split="test"),
     ),
-    "fineweb_tiny": dict(
+    "fw_qa_tiny": dict(
         train=dict(
             path="parquet",
-            data_files="data/raw_datasets/fineweb_sharded/00000.parquet",
-            split="train[2000:]",
-            streaming=True,
+            data_files="data/raw_datasets/fw_qa/00000.parquet",
+            split="train",
         ),
         validation=dict(
             path="parquet",
-            data_files="data/raw_datasets/fineweb_sharded/00000.parquet",
-            split="train[1000:2000]",
-        ),
-        test=dict(
-            path="parquet",
-            data_files="data/raw_datasets/fineweb_sharded/00000.parquet",
-            split="train[:1000]",
+            data_files="data/raw_datasets/fw_qa/00000_val.parquet",
+            split="train",
         ),
     ),
 }
@@ -58,11 +52,12 @@ DS_KWARGS = {
 
 def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
     if (ds_name not in DS_KWARGS) or (split not in DS_KWARGS[ds_name]):
+        kwargs = dict(path=ds_name, split=split)
         logger.warning(
             f"No dataset kwargs found for '{ds_name}' with split '{split}'.\n"
-            f"Using default kwargs: path={ds_name}, split={split}"
+            f"Using default kwargs: {kwargs}"
         )
-        return dict(split=split)
+        return kwargs
     return DS_KWARGS[ds_name][split]
 
 
@@ -191,15 +186,27 @@ def get_tokenized_dataset(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}\nSkipping..."
         )
         return None
-    ds = ds.map(get_preprocessing_fn(ds_name), remove_columns=ds.column_names)
+    cols_to_remove = [
+        col for col in ds.column_names if col not in ["context", "prompt", "response"]
+    ]
+    ds = ds.map(get_preprocessing_fn(ds_name))
+    ds = ds.remove_columns(cols_to_remove)
     ds = ds.filter(filter_none, batched=True)
     ds = ds.filter(filter_long_samples, batched=True)
-    if split != "test":
+    if split == "train":
         if add_negative_prompt:
             ds = ds.map(add_negative_prompt_fn, batched=True, batch_size=None)
         if add_repeat_prompt and "context_numbers" not in ds_name:
             ds = ds.map(add_repeat_prompt_fn, batched=True, batch_size=None)
+    tokenized_ds = construct_and_tokenize_ctx_qa(
+        tokenizer, tokenizer_kwargs, add_ctx_to_chat, use_kl_loss, need_ctx_ids, ds
+    )
+    return tokenized_ds
 
+
+def construct_and_tokenize_ctx_qa(
+    tokenizer, tokenizer_kwargs, add_ctx_to_chat, use_kl_loss, need_ctx_ids, ds
+):
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
     ds = ds.map(
@@ -220,12 +227,6 @@ def get_tokenized_dataset(
         },
     )
 
-    other_cols = [
-        col
-        for col in tokenized_ds.column_names
-        if col not in ["input_ids", "attention_mask", "labels"]
-    ]
-
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
     if use_kl_loss:
         tokenized_ds = tokenized_ds.map(
@@ -245,6 +246,7 @@ def get_tokenized_dataset(
                 "tokenizer_kwargs": tokenizer_kwargs,
                 "for_kl_loss": True,
             },
+            num_proc=16,
         )
 
     if need_ctx_ids:
@@ -254,9 +256,13 @@ def get_tokenized_dataset(
         tokenized_ds = tokenized_ds.map(
             tokenize_ctx_text,
             fn_kwargs={"tokenizer": tokenizer},
+            batched=True,
+            num_proc=16,
         )
 
-    tokenized_ds = tokenized_ds.remove_columns(other_cols)
+    tokenized_ds = tokenized_ds.remove_columns(
+        ["messages", "chat", "context", "prompt", "response"]
+    )
     tokenized_ds.set_format(type="pt")
     validate_columns(tokenized_ds)
     return tokenized_ds

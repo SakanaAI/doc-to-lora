@@ -1,5 +1,6 @@
 .cursorrules
 tmp/
+openai_batches/
 models/
 results/
 datasets/

@@ -15,3 +15,11 @@ WANDB_MODE=disabled run python hyperlora/intx_sft.py configs/context_numbers_10.
 ```bash
 WANDB_MODE=disabled run python hyperlora/intx_sft.py configs/context_numbers_128.yaml --model_name_or_path=meta-llama/Llama-3.2-1B-Instruct --num_train_epochs=10 --per_device_train_batch_size=64 --per_device_eval_batch_size=8 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj
 ```
+
+### Generate fineweb qa
+```bash
+# this might take several days...
+python process_fineweb.py
+python generate_fw_qa.py
+python post_process_fw_qa.py
+```
