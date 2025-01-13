@@ -142,8 +142,9 @@ def get_model(
     if peft_config is not None:
         model = PeftModel(model, peft_config)
     model.train(train)
-    for param in model.parameters():
-        param.requires_grad = requires_grad
+    for name, param in model.named_parameters():
+        if "modules_to_save" not in name:
+            param.requires_grad = requires_grad
     return model
 
 
