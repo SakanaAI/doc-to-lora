@@ -445,17 +445,37 @@ class HyperLoRA(nn.Module):
         else:
             d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
-        # each module processes d -> r d_out
-        self.head = Mix(
-            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-            weight_shape="d_latent r d_lora",
-            # bias_shape=None,  # no bias
-            bias_shape="r d_lora",
-            n_modules=len(self.target_modules),
-            d_latent=self.config.latent_size,
-            r=self.config.lora_config.r,
-            d_lora=d_lora,
-        )
+        n_modules = len(self.target_modules)
+        # have to do this otherwise doesnt work with adamw_torch_fused
+        # has something to do with the bias shape (n_modules r d_lora)
+        # when n_modules == 1, adamw_torch_fused complains about device/layout
+        # but when n_modules > 1, it works fine
+        if n_modules == 1:
+            self.head = Mix(
+                "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                weight_shape="d_latent r d_lora",
+                # bias_shape=None,  # no bias
+                bias_shape="r d_lora",
+                d_latent=self.config.latent_size,
+                r=self.config.lora_config.r,
+                d_lora=d_lora,
+            )
+        else:
+            # each module processes d -> r d_out independently
+            self.head = Mix(
+                "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                weight_shape="n_modules d_latent r d_lora",
+                # bias_shape=None,  # no bias
+                bias_shape="n_modules r d_lora",
+                n_modules=len(self.target_modules),
+                d_latent=self.config.latent_size,
+                r=self.config.lora_config.r,
+                d_lora=d_lora,
+            )
+            # print(self.head)
+            # print(self.head.weight.shape)
+            # print(self.head.bias.shape)
+            # breakpoint()
 
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
@@ -583,18 +603,34 @@ class ModulatedPretrainedModel(nn.Module):
         logger.debug(f"peft_weights: {peft_weights}")
         self.hypernet.head.weight.data[:] = 0
         self.hypernet.head.bias.data[:] = 0
-        d_in = self.hypernet.d_in
-        d_out = self.hypernet.d_out
-        m = max(self.hypernet.target_modules, key=lambda m: d_in[m] + d_out[m])
+        # d_in = self.hypernet.d_in
+        # d_out = self.hypernet.d_out
+        # m = max(self.hypernet.target_modules, key=lambda m: d_in[m] + d_out[m])
 
-        A = peft_weights[m]["lora_A"].weight.clone()[:, : d_in[m]]  # [r, d_in]
-        B = peft_weights[m]["lora_B"].weight.clone()[: d_out[m]]  # [d_out, r]
-        biases = [A, B.T]
+        # A = peft_weights[m]["lora_A"].weight.clone()[:, : d_in[m]]  # [r, d_in]
+        # B = peft_weights[m]["lora_B"].weight.clone()[: d_out[m]]  # [d_out, r]
+        # biases = [A, B.T]
 
-        # bias-hyperinit
-        # init weights to zeros and bias to the base weights
-        bias_cat = torch.cat(biases, dim=1)
-        self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
+        # # bias-hyperinit
+        # # init weights to zeros and bias to the base weights
+        # bias_cat = torch.cat(biases, dim=1)
+        # self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
+        for i, m in enumerate(self.hypernet.target_modules):
+            A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
+            B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
+            if self.hypernet.config.use_light_weight_lora:
+                A = A[:, : self.hypernet.config.light_weight_latent_size]
+                B = B[: self.hypernet.config.light_weight_latent_size]
+            biases = [A, B.T]
+
+            # bias-hyperinit
+            # init weights to zeros and bias to the base weights
+            bias_cat = torch.cat(biases, dim=1)
+            self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
+            # if len(self.hypernet.target_modules) > 1:
+            #     self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
+            # else:
+            #     self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
         # self.hypernet.head.bias.requires_grad = False
 
     def state_dict(self, *args, **kwargs):
