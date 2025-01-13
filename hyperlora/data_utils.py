@@ -171,6 +171,8 @@ def get_tokenized_dataset(
     split: str,
     tokenizer: PreTrainedTokenizerBase,
     tokenizer_kwargs: dict[str, Any],
+    ctx_tokenizer: PreTrainedTokenizerBase,
+    ctx_tokenizer_kwargs: dict[str, Any],
     add_ctx_to_chat: bool,
     add_repeat_prompt: bool,
     add_negative_prompt: bool,
@@ -199,13 +201,27 @@ def get_tokenized_dataset(
         if add_repeat_prompt and "context_numbers" not in ds_name:
             ds = ds.map(add_repeat_prompt_fn, batched=True, batch_size=None)
     tokenized_ds = construct_and_tokenize_ctx_qa(
-        tokenizer, tokenizer_kwargs, add_ctx_to_chat, use_kl_loss, need_ctx_ids, ds
+        tokenizer,
+        tokenizer_kwargs,
+        ctx_tokenizer,
+        ctx_tokenizer_kwargs,
+        add_ctx_to_chat,
+        use_kl_loss,
+        need_ctx_ids,
+        ds,
     )
     return tokenized_ds
 
 
 def construct_and_tokenize_ctx_qa(
-    tokenizer, tokenizer_kwargs, add_ctx_to_chat, use_kl_loss, need_ctx_ids, ds
+    tokenizer,
+    tokenizer_kwargs,
+    ctx_tokenizer,
+    ctx_tokenizer_kwargs,
+    add_ctx_to_chat,
+    use_kl_loss,
+    need_ctx_ids,
+    ds,
 ):
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
@@ -229,6 +245,7 @@ def construct_and_tokenize_ctx_qa(
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
     if use_kl_loss:
+        raise NotImplementedError("KL loss deprecated")
         tokenized_ds = tokenized_ds.map(
             convert_ctx_prompt_response_to_messages,
             fn_kwargs={"add_ctx_to_chat": True},
@@ -255,7 +272,7 @@ def construct_and_tokenize_ctx_qa(
         # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
         tokenized_ds = tokenized_ds.map(
             tokenize_ctx_text,
-            fn_kwargs={"tokenizer": tokenizer},
+            fn_kwargs={"tokenizer": ctx_tokenizer},
             batched=True,
             num_proc=16,
         )

@@ -252,6 +252,10 @@ class CtxTrainingArguments:
         default=2**13,
         metadata={"help": "Maximum base length for training."},
     )
+    max_ctx_len: Optional[int] = field(
+        default=2**13,
+        metadata={"help": "Maximum context length for training."},
+    )
     max_new_tokens: Optional[int] = field(
         default=2**10,
         metadata={"help": "Maximum new tokens for generation-based evaluation."},
@@ -320,9 +324,16 @@ class HypernetArguments:
 
 @dataclass
 class CtxEncoderArguments:
-    layer_idx: int = field(
-        default=4,
-        metadata={"help": "Layer index for context encoder."},
+    ctx_encoder_model_name_or_path: str = field(
+        default=None,
+        metadata={"help": "Context encoder model name or path."},
+    )
+    layer_idx: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Layer index for context encoder. "
+            "Default to L//4 where L is the number of layers of the ctx model"
+        },
     )
 
 

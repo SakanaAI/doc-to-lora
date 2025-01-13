@@ -70,11 +70,14 @@ class AggregatorConfig:
 
 
 def get_aggregator_config(
-    model: PreTrainedModel, output_size: int, aggregator_args: AggregatorArguments
+    model: PreTrainedModel,
+    ctx_encoder_model: PreTrainedModel,
+    output_size: int,
+    aggregator_args: AggregatorArguments,
 ):
     lora_config = model.peft_config["default"]
     return AggregatorConfig(
-        feature_size=model.config.hidden_size,
+        feature_size=ctx_encoder_model.config.hidden_size,
         output_size=output_size,
         num_layers=get_num_layers(model),
         num_modules=len(lora_config.target_modules),
@@ -97,6 +100,7 @@ class HypernetConfig:
 
 def get_hypernet_config(
     model: PreTrainedModel,
+    ctx_encoder_model: PreTrainedModel,
     hypernet_args: HypernetArguments,
     aggregator_args: AggregatorArguments,
 ):
@@ -110,6 +114,7 @@ def get_hypernet_config(
         feature_sizes=get_peft_in_out_features(model, peft_config=lora_config),
         aggregator_config=get_aggregator_config(
             model,
+            ctx_encoder_model,
             hypernet_args.latent_size,
             aggregator_args,
         ),
@@ -577,8 +582,16 @@ class ModulatedPretrainedModel(nn.Module):
     def _init_model(self):
         self.hypernet = HyperLoRA(self.hypernet_config).to(self.device)
         # TODO: allow ctx_encoder to be other models
+        if self.ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
+            encoder_model = get_model(
+                self.ctx_encoder_args.ctx_encoder_model_name_or_path,
+                train=True,
+                requires_grad=False,
+            )
+        else:
+            encoder_model = self.base_model
         self.ctx_encoder = EarlyExit(
-            get_base_model(self.base_model), self.ctx_encoder_args.layer_idx
+            get_base_model(encoder_model), self.ctx_encoder_args.layer_idx
         )
 
     def to(self, *args, **kwargs):

@@ -262,16 +262,33 @@ def main():
         requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
         peft_config=get_lora_config(model_name, **vars(lora_args)),
     )
+    if ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
+        ctx_encoder_model, ctx_tokenizer = get_model_and_tokenizer(
+            ctx_encoder_args.ctx_encoder_model_name_or_path,
+            train=False,
+            requires_grad=False,
+        )
+    else:
+        ctx_encoder_model = model
+        ctx_tokenizer = tokenizer
 
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
-        hypernet_config = get_hypernet_config(model, hypernet_args, aggregator_args)
+        hypernet_config = get_hypernet_config(
+            model, ctx_encoder_model, hypernet_args, aggregator_args
+        )
         # hypernet = HyperLoRA(
         #     get_hypernet_config(model, hypernet_args, aggregator_args),
         #     model,
         # ).to(model.device)
 
         # ctx_encoder = EarlyExit(get_base_model(model), ctx_encoder_args.layer_idx)
+        if ctx_encoder_args.layer_idx is None:
+            ctx_encoder_args.layer_idx = ctx_encoder_model.config.num_hidden_layers // 4
+            logger.info(
+                f"Using the first {ctx_encoder_args.layer_idx} layers"
+                " as the context encoder"
+            )
         model = ModulatedPretrainedModel(
             model,
             hypernet_config,
@@ -293,10 +310,13 @@ def main():
 
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
     tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
+    ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,
+        ctx_tokenizer=ctx_tokenizer,
+        ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
         add_negative_prompt=ctx_args.add_negative_prompt,
@@ -471,6 +491,9 @@ def main():
         if isinstance(model, ModulatedPretrainedModel):
             logger.info("Applying liger-kernel to ModulatedPretrainedModel")
             _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
+            if ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
+                logger.info("Applying liger-kernel to ctx_encoder_model")
+                _apply_liger_kernel_to_instance(model=ctx_encoder_model)
         elif isinstance(model, PeftModel):
             logger.info("Applying liger-kernel to PeftModel")
             _apply_liger_kernel_to_instance(model=model.base_model.model)
@@ -485,21 +508,21 @@ def main():
 
     train_model(
         model,
-        tokenizer,
+        # tokenizer,
         training_args,
         train_ds,
         val_ds,
         test_ds,
         partial(train_collator, tokenizer=tokenizer),
-        partial(generation_collator, tokenizer=tokenizer),
+        # partial(generation_collator, tokenizer=tokenizer),
         compute_metrics=partial(
             compute_metrics,
             evaluator=Evaluator(
                 [compute_per_token_acc, compute_prefix_matching, compute_perplexity]
             ),
         ),
-        max_new_tokens=ctx_args.max_new_tokens,
-        gen_per_device_eval_batch_size=ctx_args.gen_per_device_eval_batch_size,
+        # max_new_tokens=ctx_args.max_new_tokens,
+        # gen_per_device_eval_batch_size=ctx_args.gen_per_device_eval_batch_size,
     )
     logger.info(f"Training run finished and saved to {output_dir}")
 

@@ -108,17 +108,17 @@ def eval_generation(eval_trainer, tokenizer, dataset, split, gen_kwargs):
 
 def train_model(
     model,
-    tokenizer,
+    # tokenizer,
     training_args,
     train_dataset=None,
     val_dataset=None,
     test_dataset=None,
     train_collator=None,
-    generation_collator=None,
+    # generation_collator=None,
     compute_metrics=None,
-    preprocess_logits_for_metrics=None,
-    max_new_tokens=2**13,
-    gen_per_device_eval_batch_size=1,
+    # preprocess_logits_for_metrics=None,
+    # max_new_tokens=2**13,
+    # gen_per_device_eval_batch_size=1,
 ):
     checkpoint = None
     if training_args.resume_from_checkpoint is not None:
@@ -132,7 +132,7 @@ def train_model(
         eval_dataset=val_dataset,
         data_collator=train_collator,
         compute_metrics=compute_metrics,
-        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        # preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 
     # Trainer loads the best model after training

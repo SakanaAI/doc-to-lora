@@ -5,7 +5,12 @@ import torch
 from peft import LoraConfig, PeftConfig, PeftModel, VeraConfig
 from peft import get_peft_config as _get_peft_config
 from peft.utils import PeftType
-from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    MllamaForConditionalGeneration,
+)
 
 logger = logging.getLogger()
 
@@ -118,15 +123,21 @@ def get_model(
         # load_in_4bit=True,
         # load_in_8bit=True,
     )
+    is_vision_model = "Llama" in model_name_or_path and "Vision" in model_name_or_path
     if model_kwargs is not None:
         model_init_kwargs.update(model_kwargs)
     if use_flash_attn:
         model_init_kwargs["attn_implementation"] = "flash_attention_2"
+        if is_vision_model:
+            model_init_kwargs["attn_implementation"] = "sdpa"
         # for training disable cache
-    if train:
+    if train and not is_vision_model:
         model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
-    model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
+    if not is_vision_model:
+        model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
+    else:
+        model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
     if peft_config is not None:
         model = PeftModel(model, peft_config)
     model.train(train)
