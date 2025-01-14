@@ -15,12 +15,13 @@ FW_QA_PATHS = [
 ]
 DS_KWARGS = {
     "hotpot_qa": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train"),
-        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
+        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:]"),
+        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:900]"),
+        test=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
     ),
     "hotpot_qa_tiny": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:1000]"),
-        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
+        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:2000]"),
+        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:900]"),
     ),
     "pwc": dict(
         train=dict(path="sggetao/PwC", split="train[900:]"),
@@ -28,9 +29,8 @@ DS_KWARGS = {
         test=dict(path="sggetao/PwC", split="test"),
     ),
     "pwc_tiny": dict(
-        train=dict(path="sggetao/PwC", split="train[1000:2000]"),
-        validation=dict(path="sggetao/PwC", split="train[:1000]"),
-        test=dict(path="sggetao/PwC", split="test"),
+        train=dict(path="sggetao/PwC", split="train[900:2000]"),
+        validation=dict(path="sggetao/PwC", split="train[:900]"),
     ),
     "fw_qa_tiny": dict(
         train=dict(
