@@ -153,7 +153,7 @@ def decode_test_result(test_dataset, test_result, tokenizer):
 def eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs):
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
-
+    out = {}
     for ds_name, ds in datasets.items():
         split_name = f"{split}_{ds_name}" if ds_name else split
         eval_result = eval_trainer.predict(
@@ -173,22 +173,26 @@ def eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs):
             split=split_name,
             output_dir=eval_trainer.args.output_dir,
         )
+        out[split_name] = eval_result.metrics
         eval_trainer.log_metrics(split_name, eval_result.metrics)
         eval_trainer.save_metrics(split_name, eval_result.metrics)
         clear_gpu()
+    return out
 
 
 @torch.no_grad()
 def eval_teacher_forcing(eval_trainer, datasets, split):
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
-
+    out = {}
     for ds_name, ds in datasets.items():
         split_name = f"{split}_{ds_name}" if ds_name else split
         metrics = eval_trainer.evaluate(ds, metric_key_prefix=split_name)
+        out[split_name] = metrics
         eval_trainer.log_metrics(split_name, metrics)
         eval_trainer.save_metrics(split_name, metrics)
         clear_gpu()
+    return out
 
 
 def train_collator(inp_list, tokenizer):
@@ -376,6 +380,7 @@ def evaluate(checkpoint_path, args, split, generative):
         "args": eval_trainer_args,
         "data_collator": partial(collator, tokenizer=tokenizer),
     }
+    out = {}
     if not generative:
 
         trainer_kwargs["compute_metrics"] = partial(
@@ -390,12 +395,15 @@ def evaluate(checkpoint_path, args, split, generative):
         # spents a few hours on this but couldn't find the reason
         for ds_name, ds in datasets.items():
             eval_trainer = Trainer(**trainer_kwargs)
-            eval_teacher_forcing(eval_trainer, {ds_name: ds}, split)
+            metrics = eval_teacher_forcing(eval_trainer, {ds_name: ds}, split)
+            out.update(metrics)
     else:
         eval_trainer = Seq2SeqTrainer(**trainer_kwargs)
-        eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs)
+        metrics = eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs)
+        out.update(metrics)
 
     clear_gpu()
+    return out
 
 
 if __name__ == "__main__":
