@@ -16,14 +16,14 @@ label_names: ["labels"]
 # w/o this the trainer stores logits of all sample in memory...
 # batch_eval_metrics: true
 
-per_device_train_batch_size: 16
-per_device_eval_batch_size: 16
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 8
 max_val_samples_per_ds: 1000
 # optim: schedule_free_adamw
 
 learning_rate: 0.00002
 # lr_scheduler_type: "constant_with_warmup"
-neftune_noise_alpha: 1
+neftune_noise_alpha: 5
 weight_decay: 0.01
 warmup_ratio: 0.1
 
@@ -35,7 +35,6 @@ lora_dropout: 0.05
 target_modules:
   - down_proj
   - up_proj
-  - gate_proj
 
 # data
 train_ds_names:

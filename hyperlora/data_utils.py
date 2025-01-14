@@ -99,8 +99,6 @@ def filter_long_samples(samples):
 
 
 def add_repeat_prompt_fn(samples):
-    # TODO: maybe repeat only short context (<5K chars)
-    # TODO: also check batch size and mem util
     unique_contexts = set()
     ctxs, prompts, responses = [], [], []
     for ctx, prompt, response in zip(
@@ -109,8 +107,10 @@ def add_repeat_prompt_fn(samples):
         # Only process if the context is not already in the set
         if ctx in unique_contexts:
             continue
-
         unique_contexts.add(ctx)
+        # remove too long contexts
+        if len(ctx) > 3000:
+            continue
         ctxs.append(ctx)
         responses.append(ctx)
         prompts.append("Repeat the text above.")
@@ -143,11 +143,11 @@ def add_negative_prompt_fn(samples):
     ):
         if ctx in unique_contexts:
             continue
+        unique_contexts.add(ctx)
         if any(keyword in prompt for keyword in keywords):
             # Skip samples where the prompt contains any of the specified keywords
             continue
 
-        unique_contexts.add(ctx)
         ctxs.append(ctx)
         prompts.append(prompt)
         responses.append(response)

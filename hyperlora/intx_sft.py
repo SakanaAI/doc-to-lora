@@ -80,7 +80,7 @@ LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
     indices = torch.where(valid_masks)
     acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
-    return {"perplexity": acc}
+    return {"per_token_acc": acc}
 
 
 def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
@@ -105,7 +105,7 @@ def compute_perplexity(shift_logits, shift_labels, valid_masks):
     loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
     loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
     perplexity = torch.exp(loss).mean().item()
-    return {"per_token_ppl": perplexity}
+    return {"perplexity": perplexity}
 
 
 class Evaluator:
@@ -369,8 +369,8 @@ def main():
         probabilities=[l / total_len for l in train_ds_len],
     )
 
-    val_train_indices = np.random.permutation(len(train_ds))[:500]
-    val_ds["train"] = train_ds.select(val_train_indices)
+    # val_train_indices = np.random.permutation(len(train_ds))[:500]
+    # val_ds["train"] = train_ds.select(val_train_indices)
 
     test_ds = dict()
     if "test" in tokenized_ds:
