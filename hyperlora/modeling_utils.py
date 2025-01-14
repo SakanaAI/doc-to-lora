@@ -575,9 +575,11 @@ class ModulatedPretrainedModel(nn.Module):
             requires_grad=False,
             peft_config=lora_config,
         )
-        hypernet_config = state_dict.pop("hypernet_config")
-        ctx_encoder_args = state_dict.pop("ctx_encoder_args")
-        return cls(base_model, hypernet_config, ctx_encoder_args)
+        hypernet_config = state_dict["hypernet_config"]
+        ctx_encoder_args = state_dict["ctx_encoder_args"]
+        model = cls(base_model, hypernet_config, ctx_encoder_args)
+        model.load_state_dict(state_dict)
+        return model
 
     def _init_model(self):
         self.hypernet = HyperLoRA(self.hypernet_config).to(self.device)
@@ -862,7 +864,7 @@ if __name__ == "__main__":
 
     # set torch randomness seed
     torch.manual_seed(42)
-    model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     base_model, tokenizer = get_model_and_tokenizer(
         model_name,
         train=True,
@@ -871,13 +873,16 @@ if __name__ == "__main__":
     )
     # TODO: base model shoul be init with target lora config
     print(base_model)
+    ctx_model = base_model
     device = base_model.device
     # lora_config = base_model.peft_config["default"]
     # d_in, d_out = get_peft_in_out_features(base_model, peft_config=lora_config)
 
     hypernet_args = HypernetArguments(latent_size=512)
     aggregator_args = AggregatorArguments(aggregator_type=AGGREGATOR_TYPE.PERCEIVER)
-    hypernet_config = get_hypernet_config(base_model, hypernet_args, aggregator_args)
+    hypernet_config = get_hypernet_config(
+        base_model, ctx_model, hypernet_args, aggregator_args
+    )
     ctx_encoder_args = CtxEncoderArguments(layer_idx=4)
     # ctx_encoder = EarlyExit(get_base_model(base_model), 4)
     # hypernet = HyperLoRA(
@@ -919,7 +924,10 @@ if __name__ == "__main__":
 
     # model.load_state_dict(
     #     torch.load(
-    #         open("train_outputs/20250108-193257_BB1p30QQ/pytorch_model.bin", "rb")
+    #         open(
+    #             "train_outputs/runs/Jan14_11-10-56_slurm0-a3nodeset-1_30c9e93d/checkpoint-1720/pytorch_model.bin",
+    #             "rb",
+    #         )
     #     )
     # )
     # modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)

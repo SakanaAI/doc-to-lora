@@ -80,7 +80,7 @@ LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
     indices = torch.where(valid_masks)
     acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
-    return {"per_token_acc": acc}
+    return {"perplexity": acc}
 
 
 def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
@@ -222,18 +222,6 @@ def main():
         ]
     )
 
-    args = {
-        **vars(deepcopy(data_args)),
-        **vars(deepcopy(ctx_args)),
-        **vars(deepcopy(model_args)),
-        **vars(deepcopy(lora_args)),
-        **vars(deepcopy(training_args)),
-        **vars(deepcopy(hypernet_args)),
-        **vars(deepcopy(aggregator_args)),
-        **vars(deepcopy(ctx_encoder_args)),
-    }
-    args["deepspeed_plugin"] = None
-
     checkpoint_dir = training_args.resume_from_checkpoint
     if checkpoint_dir and not os.path.isdir(checkpoint_dir):
         raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
@@ -242,12 +230,12 @@ def main():
     # still possible to have a name crash though
     # logging_dir is just "runs/DATE_TIME_HOSTNAME"
     run_name = (
-        get_run_name(seed_str=training_args.logging_dir)
+        get_run_name(seed_str=training_args.logging_dir.strip("runs/"))
         if not checkpoint_dir
         else checkpoint_dir.split("/")[-2]
     )
 
-    output_dir = f"train_outputs/{run_name}"
+    output_dir = f"train_outputs/runs/{run_name}"
     setup_logging(output_dir, debug=os.getenv("DEBUG", False))
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
     cli_args = extract_cli_args(os.sys.argv)
@@ -266,6 +254,17 @@ def main():
         and training_args.lr_scheduler_kwargs is None
     ):
         training_args.lr_scheduler_kwargs = {"min_lr": 1e-7}
+    args = {
+        **vars(deepcopy(data_args)),
+        **vars(deepcopy(ctx_args)),
+        **vars(deepcopy(model_args)),
+        **vars(deepcopy(lora_args)),
+        **vars(deepcopy(training_args)),
+        **vars(deepcopy(hypernet_args)),
+        **vars(deepcopy(aggregator_args)),
+        **vars(deepcopy(ctx_encoder_args)),
+    }
+    args["deepspeed_plugin"] = None
     logger.debug(f"args: {args}")
     save_yaml(args, f"{output_dir}/args.yaml")
     set_seed(training_args.seed)
@@ -453,42 +452,6 @@ def main():
             out["chat_ids"] = chat_ids
             out["chat_attn_mask"] = chat_attn_mask
             out["chat_labels"] = chat_labels
-        return out
-
-    def generation_collator(inp_list, tokenizer):
-        padding_kwargs = dict(padding=True, padding_side="left", return_tensors="pt")
-        input_ids = [x.pop("input_ids") for x in inp_list]
-        attn_mask = [x.pop("attention_mask") for x in inp_list]
-        labels = [x.pop("labels") for x in inp_list]
-        for i, label in enumerate(labels):
-            # remove the response tokens
-            idx = np.argmax(label != -100)
-            input_ids[i] = input_ids[i][:idx]
-            attn_mask[i] = attn_mask[i][:idx]
-        out = tokenizer.pad(
-            {"input_ids": input_ids, "attention_mask": attn_mask}, **padding_kwargs
-        )
-        out["labels"] = labels
-
-        if "ctx_ids" in inp_list[0]:
-            # have to be manual since it has [ctx_len, features] shape
-            # pad to the longest ctx_len in the batch
-            # which can have a different length from the input_ids, attn_mask, labels
-            ctx_ids = [example.pop("ctx_ids") for example in inp_list]
-            ctx_ids = torch.nn.utils.rnn.pad_sequence(
-                ctx_ids,
-                batch_first=True,
-                padding_value=0,
-            )
-            # exotic keys won't be padded, so we need to pad them as well
-            ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
-            ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
-                ctx_attn_mask,
-                batch_first=True,
-                padding_value=0,
-            )
-            out["ctx_ids"] = ctx_ids
-            out["ctx_attn_mask"] = ctx_attn_mask
         return out
 
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer

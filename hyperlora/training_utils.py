@@ -28,84 +28,6 @@ def clear_gpu():
     torch.cuda.reset_max_memory_cached()
 
 
-def compute_rouge(pred_texts, label_texts):
-    out = defaultdict(list)
-    scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=False)
-    for pred_text, label_text in zip(pred_texts, label_texts):
-        scores = scorer.score(pred_text, label_text)
-        for k, v in scores.items():
-            out[f"{k}.f1"].append(v.fmeasure)
-    for k in out:
-        out[k] = np.mean(out[k])
-    return out
-
-
-def save_generated_text(samples, output_dir, split):
-    with open(f"{output_dir}/{split}_generated_text.jsonl", "w") as f:
-        for sample in samples:
-            f.write(json.dumps(sample) + "\n")
-
-
-def decode_test_result(test_dataset, test_result, tokenizer):
-    out = []
-    for sample, pred_toks in zip(test_dataset, test_result.predictions):
-        d = dict()
-        if "labels" in sample:
-            start_idx = np.argmax(sample["labels"] != -100)
-            label_toks = sample["labels"][start_idx:]
-            # labels are padded with -100, so we need to
-            # replace them with the pad token id
-            label_toks = np.where(label_toks == -100, tokenizer.pad_token_id, label_toks)
-            label_text = tokenizer.decode(label_toks, skip_special_tokens=True)
-            d["label"] = label_text
-
-        # remove the label part
-        input_toks = sample["input_ids"][:start_idx]
-        gen_toks = pred_toks[len(input_toks) :]
-        gen_toks = np.where(gen_toks == -100, tokenizer.pad_token_id, gen_toks)
-
-        d["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
-        d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True)
-        if "ctx_ids" in sample:
-            d["context"] = tokenizer.decode(sample["ctx_ids"], skip_special_tokens=True)
-        out.append(d)
-
-    return out
-
-
-def eval_generation(eval_trainer, tokenizer, dataset, split, gen_kwargs):
-    if not isinstance(dataset, dict):
-        dataset = {"": dataset}
-
-    for ds_name, ds in dataset.items():
-        split_name = f"{split}_{ds_name}" if ds_name else split
-        eval_result = eval_trainer.predict(
-            ds,
-            metric_key_prefix=split_name,
-            **gen_kwargs,
-        )
-        decoded_txts = decode_test_result(ds, eval_result, tokenizer)
-        rouge_metrics = compute_rouge(
-            [txt["generated"] for txt in decoded_txts],
-            [txt["label"] for txt in decoded_txts],
-        )
-        for k, v in rouge_metrics.items():
-            eval_result.metrics[f"{split}_{k}"] = v
-
-        save_generated_text(
-            decoded_txts,
-            split=split_name,
-            output_dir=eval_trainer.args.output_dir,
-        )
-        eval_trainer.log_metrics(split_name, eval_result.metrics)
-        eval_trainer.save_metrics(split_name, eval_result.metrics)
-        clear_gpu()
-
-
-# def per_sample_loss_avg_fn(outputs, labels, num_items_in_batch):
-#     ...
-
-
 def train_model(
     model,
     # tokenizer,
@@ -138,8 +60,8 @@ def train_model(
     # Trainer loads the best model after training
     # is done when load_best_model_at_end=True
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
-    trainer.log_metrics("train", train_result.metrics)
     trainer.save_model()  # just in case OOM when run trainer.evaluate()
+    trainer.log_metrics("train", train_result.metrics)
     clear_gpu()
     metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
     trainer.log_metrics("eval", metrics)
