@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from glob import glob
 from typing import Any, Callable, Iterator, Optional
 
 from datasets import load_dataset, IterableDataset
@@ -9,25 +10,21 @@ from transformers import PreTrainedTokenizerBase
 IGNORE_INDEX = -100
 
 logger = logging.getLogger()
-
+FW_QA_PATHS = [
+    f"data/raw_datasets/fw_qa/{i:05d}.parquet" for i in [0, 1, 6, 7, 8, 10, 22, 30, 35]
+]
 DS_KWARGS = {
     "hotpot_qa": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[1000:]"),
-        validation=dict(
-            path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:1000]"
-        ),
-        test=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
+        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train"),
+        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
     ),
     "hotpot_qa_tiny": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[1000:2000]"),
-        validation=dict(
-            path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:1000]"
-        ),
-        test=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
+        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:1000]"),
+        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
     ),
     "pwc": dict(
-        train=dict(path="sggetao/PwC", split="train[1000:]"),
-        validation=dict(path="sggetao/PwC", split="train[:1000]"),
+        train=dict(path="sggetao/PwC", split="train[900:]"),
+        validation=dict(path="sggetao/PwC", split="train[:900]"),
         test=dict(path="sggetao/PwC", split="test"),
     ),
     "pwc_tiny": dict(
@@ -44,6 +41,30 @@ DS_KWARGS = {
         validation=dict(
             path="parquet",
             data_files="data/raw_datasets/fw_qa/00000_val.parquet",
+            split="train",
+        ),
+    ),
+    "fw_qa": dict(
+        train=dict(
+            path="parquet",
+            data_files=FW_QA_PATHS,
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files="data/raw_datasets/fw_qa/*_val.parquet",
+            split="train",
+        ),
+    ),
+    "ctx_qa": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/ctx_qa/*res.parquet"),
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/ctx_qa/*val.parquet"),
             split="train",
         ),
     ),
@@ -78,6 +99,8 @@ def filter_long_samples(samples):
 
 
 def add_repeat_prompt_fn(samples):
+    # TODO: maybe repeat only short context (<5K chars)
+    # TODO: also check batch size and mem util
     unique_contexts = set()
     ctxs, prompts, responses = [], [], []
     for ctx, prompt, response in zip(
@@ -191,10 +214,10 @@ def get_tokenized_dataset(
     cols_to_remove = [
         col for col in ds.column_names if col not in ["context", "prompt", "response"]
     ]
-    ds = ds.map(get_preprocessing_fn(ds_name))
+    ds = ds.map(get_preprocessing_fn(ds_name), num_proc=16)
     ds = ds.remove_columns(cols_to_remove)
-    ds = ds.filter(filter_none, batched=True)
-    ds = ds.filter(filter_long_samples, batched=True)
+    ds = ds.filter(filter_none, batched=True, num_proc=16)
+    ds = ds.filter(filter_long_samples, batched=True, num_proc=16)
     if split == "train":
         if add_negative_prompt:
             ds = ds.map(add_negative_prompt_fn, batched=True, batch_size=None)
@@ -228,9 +251,12 @@ def construct_and_tokenize_ctx_qa(
     ds = ds.map(
         convert_ctx_prompt_response_to_messages,
         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+        num_proc=16,
     )
     # add "chat" field
-    ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
+    ds = ds.map(
+        get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer), num_proc=16
+    )
     # tokenize the chat + mask the assistant inputs
 
     # add "input_ids", "attention_mask", "labels"
@@ -241,6 +267,7 @@ def construct_and_tokenize_ctx_qa(
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": tokenizer_kwargs,
         },
+        num_proc=16,
     )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"

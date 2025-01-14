@@ -4,7 +4,7 @@ import random
 import string
 import time
 from collections import defaultdict
-from copy import copy
+from copy import copy, deepcopy
 from functools import partial
 from importlib.resources import read_binary
 from typing import Callable, Optional
@@ -73,6 +73,8 @@ from configs import (
 )
 
 logger = logging.getLogger()
+
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 
 
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
@@ -221,21 +223,30 @@ def main():
     )
 
     args = {
-        **vars(data_args),
-        **vars(ctx_args),
-        **vars(model_args),
-        **vars(lora_args),
-        **vars(training_args),
-        **vars(hypernet_args),
-        **vars(aggregator_args),
-        **vars(ctx_encoder_args),
+        **vars(deepcopy(data_args)),
+        **vars(deepcopy(ctx_args)),
+        **vars(deepcopy(model_args)),
+        **vars(deepcopy(lora_args)),
+        **vars(deepcopy(training_args)),
+        **vars(deepcopy(hypernet_args)),
+        **vars(deepcopy(aggregator_args)),
+        **vars(deepcopy(ctx_encoder_args)),
     }
+    args["deepspeed_plugin"] = None
 
     checkpoint_dir = training_args.resume_from_checkpoint
     if checkpoint_dir and not os.path.isdir(checkpoint_dir):
         raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
 
-    run_name = get_run_name() if not checkpoint_dir else checkpoint_dir.split("/")[-2]
+    # should be the same across processes
+    # still possible to have a name crash though
+    # logging_dir is just "runs/DATE_TIME_HOSTNAME"
+    run_name = (
+        get_run_name(seed_str=training_args.logging_dir)
+        if not checkpoint_dir
+        else checkpoint_dir.split("/")[-2]
+    )
+
     output_dir = f"train_outputs/{run_name}"
     setup_logging(output_dir, debug=os.getenv("DEBUG", False))
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
@@ -249,6 +260,12 @@ def main():
     training_args.run_name = run_name
     training_args.output_dir = output_dir
     training_args.logging_dir = output_dir
+
+    if (
+        training_args.lr_scheduler_type == "cosine_with_min_lr"
+        and training_args.lr_scheduler_kwargs is None
+    ):
+        training_args.lr_scheduler_kwargs = {"min_lr": 1e-7}
     logger.debug(f"args: {args}")
     save_yaml(args, f"{output_dir}/args.yaml")
     set_seed(training_args.seed)
@@ -277,12 +294,6 @@ def main():
         hypernet_config = get_hypernet_config(
             model, ctx_encoder_model, hypernet_args, aggregator_args
         )
-        # hypernet = HyperLoRA(
-        #     get_hypernet_config(model, hypernet_args, aggregator_args),
-        #     model,
-        # ).to(model.device)
-
-        # ctx_encoder = EarlyExit(get_base_model(model), ctx_encoder_args.layer_idx)
         if ctx_encoder_args.layer_idx is None:
             ctx_encoder_args.layer_idx = ctx_encoder_model.config.num_hidden_layers // 4
             logger.info(
@@ -497,14 +508,18 @@ def main():
         elif isinstance(model, PeftModel):
             logger.info("Applying liger-kernel to PeftModel")
             _apply_liger_kernel_to_instance(model=model.base_model.model)
-    wandb.init(
-        project=os.getenv("WANDB_PROJECT"),
-        name=run_name,
-        group=run_name,
-        config=args,
-        tags=os.getenv("WANDB_TAGS").split(","),
-        notes=ctx_args.notes,
-    )
+
+    if LOCAL_RANK == 0:
+        wandb.init(
+            project=os.getenv("WANDB_PROJECT"),
+            name=run_name,
+            group=run_name,
+            config=args,
+            tags=os.getenv("WANDB_TAGS").split(","),
+            notes=ctx_args.notes,
+        )
+    else:
+        wandb.init(mode="disabled")
 
     train_model(
         model,

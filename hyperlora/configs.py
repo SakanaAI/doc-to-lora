@@ -154,6 +154,14 @@ class TrainingArguments(TrainingArguments):
         default=0.95,
         metadata={"help": "Adam beta 2."},
     )
+    lr_scheduler_type: str = field(
+        default="cosine_with_min_lr",
+        metadata={"help": "Learning rate scheduler type."},
+    )
+    lr_scheduler_kwargs: dict = field(
+        default=None,
+        metadata={"help": "Learning rate scheduler kwargs."},
+    )
     eval_on_start: bool = field(
         default=True,
         metadata={"help": "Whether to evaluate on the start of training."},

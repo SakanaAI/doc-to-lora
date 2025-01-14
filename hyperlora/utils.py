@@ -4,6 +4,7 @@ import os
 import random
 import string
 import time
+import hashlib
 from contextlib import contextmanager
 from typing import Iterable, Optional
 
@@ -73,11 +74,17 @@ def log_num_train_params(model):
     )
 
 
-def get_run_name():
-    uuid = "".join(
-        [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
-    )
-    run_name = time.strftime("%Y%m%d-%H%M%S") + f"_{uuid}"
+def get_run_name(seed_str: Optional[str] = None):
+    if not seed_str:
+        uuid = "".join(
+            [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
+        )
+        run_name = time.strftime("%Y%m%d-%H%M%S") + f"_{uuid}"
+    else:
+        # Generate a UUID from the seed string
+        hash_object = hashlib.sha256(seed_str.encode())
+        uuid = hash_object.hexdigest()[:8]  # Take the first 8 characters of the hash
+        run_name = seed_str + f"_{uuid}"
     return run_name
 
 
