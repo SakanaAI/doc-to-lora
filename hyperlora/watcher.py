@@ -84,7 +84,7 @@ if __name__ == "__main__":
             run_dir = file.split("/checkpoint")[0]
             checkpoint_dir = os.path.dirname(file)
             args = argparse.Namespace(
-                **yaml.safe_load(open(f"{run_dir}/args.yaml", "r"))
+                **yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r"))
             )
             args.output_dir = checkpoint_dir
             args.logging_dir = checkpoint_dir
