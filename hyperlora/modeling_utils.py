@@ -23,13 +23,20 @@ from peft import (
     PeftConfig,
     PeftModel,
     LoraRuntimeConfig,
+    get_peft_model_state_dict,
+    set_peft_model_state_dict,
 )
 from peft.utils import PeftType, TaskType
 from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
 from pooling import POOL_FN, get_pooling_fn
 from torch import Tensor, nn
-from transformers import PerceiverConfig, PerceiverModel, PreTrainedModel
+from transformers import (
+    PerceiverConfig,
+    PerceiverModel,
+    PreTrainedModel,
+    PretrainedConfig,
+)
 from transformers.models.perceiver.modeling_perceiver import (
     PerceiverBasicDecoder,
 )
@@ -71,13 +78,13 @@ class AggregatorConfig:
 
 def get_aggregator_config(
     model: PreTrainedModel,
-    ctx_encoder_model: PreTrainedModel,
+    ctx_encoder_model_config: PretrainedConfig,
     output_size: int,
     aggregator_args: AggregatorArguments,
 ):
     lora_config = model.peft_config["default"]
     return AggregatorConfig(
-        feature_size=ctx_encoder_model.config.hidden_size,
+        feature_size=ctx_encoder_model_config.hidden_size,
         output_size=output_size,
         num_layers=get_num_layers(model),
         num_modules=len(lora_config.target_modules),
@@ -100,7 +107,7 @@ class HypernetConfig:
 
 def get_hypernet_config(
     model: PreTrainedModel,
-    ctx_encoder_model: PreTrainedModel,
+    ctx_encoder_model_config: PretrainedConfig,
     hypernet_args: HypernetArguments,
     aggregator_args: AggregatorArguments,
 ):
@@ -114,7 +121,7 @@ def get_hypernet_config(
         feature_sizes=get_peft_in_out_features(model, peft_config=lora_config),
         aggregator_config=get_aggregator_config(
             model,
-            ctx_encoder_model,
+            ctx_encoder_model_config,
             hypernet_args.latent_size,
             aggregator_args,
         ),
@@ -332,7 +339,8 @@ class EarlyExit(nn.Module):
     def __init__(self, base_model: PreTrainedModel, exit_layer: int):
         super().__init__()
         self.base_model = base_model
-        self.exit_layer = exit_layer
+        self.base_model.layers = base_model.layers[:exit_layer]
+        # self.exit_layer = exit_layer
 
     @torch.no_grad()
     def forward(self, **kwargs):
@@ -342,7 +350,7 @@ class EarlyExit(nn.Module):
         #     kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
 
         with (
-            early_exit(self.base_model, self.exit_layer),
+            # early_exit(self.base_model, self.exit_layer),
             maybe_add_batch_dim(kwargs) as (batched_input, batched_attn_mask),
         ):
             model_outputs = self.base_model(**kwargs)
@@ -583,15 +591,25 @@ class ModulatedPretrainedModel(nn.Module):
 
     def _init_model(self):
         self.hypernet = HyperLoRA(self.hypernet_config).to(self.device)
-        # TODO: allow ctx_encoder to be other models
-        if self.ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
-            encoder_model = get_model(
-                self.ctx_encoder_args.ctx_encoder_model_name_or_path,
-                train=True,
-                requires_grad=False,
-            )
-        else:
-            encoder_model = self.base_model
+        # ctx_encoder_name =
+        # if self.ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
+        #     encoder_model = get_model(
+        #         self.ctx_encoder_args.ctx_encoder_model_name_or_path,
+        #         train=True,
+        #         requires_grad=False,
+        #     )
+        # else:
+        #     encoder_model = self.base_model
+        ctx_model_name = self.ctx_encoder_args.ctx_encoder_model_name_or_path
+        if ctx_model_name is None:
+            ctx_model_name = self.base_model.config.name_or_path
+        # use an explicit copy of the base model
+        # for using with "modules_to_save"
+        encoder_model = get_model(
+            ctx_model_name,
+            train=True,
+            requires_grad=False,
+        )
         self.ctx_encoder = EarlyExit(
             get_base_model(encoder_model), self.ctx_encoder_args.layer_idx
         )
@@ -649,7 +667,20 @@ class ModulatedPretrainedModel(nn.Module):
         # self.hypernet.head.bias.requires_grad = False
 
     def state_dict(self, *args, **kwargs):
+        # we assume ctx_encoder and base model is frozen here
+        if len([p for p in self.ctx_encoder.parameters() if p.requires_grad]):
+            raise ValueError("ctx_encoder contains trainable parameters")
+        if len([p for p in self.base_model.parameters() if p.requires_grad]):
+            raise ValueError("base model contains trainable parameters")
+
         state_dict = self.hypernet.state_dict(*args, **kwargs)
+        # base_state_dict = dict()
+        # if self.base_model.modules_to_save:
+        #     for k, v in get_peft_model_state_dict(self.base_model).items():
+        #         if any(module in k for module in self.base_model.modules_to_save):
+        #             # save only "modules_to_save"
+        #             base_state_dict[k] = v
+        # state_dict["base_model"] = base_state_dict
         state_dict["hypernet_config"] = self.hypernet_config
         state_dict["ctx_encoder_args"] = self.ctx_encoder_args
         return state_dict
@@ -668,6 +699,16 @@ class ModulatedPretrainedModel(nn.Module):
                 f"but the hypernet config is for: {self.hypernet_config.lora_config.base_model_name_or_path}"
             )
         self._init_model()
+        # base_state_dict = state_dict.pop("base_model", None)
+        # if base_state_dict:
+        #     logging.info("Loading base model state dict")
+        #     peft_load_result = set_peft_model_state_dict(
+        #         self.base_model,
+        #         base_state_dict,
+        #         *args,
+        #         **kwargs,
+        #     )
+        #     logging.info(f"peft_load_result: {peft_load_result}")
         return self.hypernet.load_state_dict(state_dict, *args, **kwargs)
 
     # @torch.no_grad()
@@ -869,11 +910,12 @@ if __name__ == "__main__":
         model_name,
         train=True,
         requires_grad=False,
-        peft_config=get_lora_config(model_name),
+        peft_config=get_lora_config(
+            model_name, modules_to_save=["input_layernorm", "post_attention_layernorm"]
+        ),
     )
-    # TODO: base model shoul be init with target lora config
-    print(base_model)
-    ctx_model = base_model
+    print(base_model.modules_to_save)
+    ctx_model_config = base_model.config
     device = base_model.device
     # lora_config = base_model.peft_config["default"]
     # d_in, d_out = get_peft_in_out_features(base_model, peft_config=lora_config)
@@ -881,7 +923,7 @@ if __name__ == "__main__":
     hypernet_args = HypernetArguments(latent_size=512)
     aggregator_args = AggregatorArguments(aggregator_type=AGGREGATOR_TYPE.PERCEIVER)
     hypernet_config = get_hypernet_config(
-        base_model, ctx_model, hypernet_args, aggregator_args
+        base_model, ctx_model_config, hypernet_args, aggregator_args
     )
     ctx_encoder_args = CtxEncoderArguments(layer_idx=4)
     # ctx_encoder = EarlyExit(get_base_model(base_model), 4)
@@ -922,15 +964,15 @@ if __name__ == "__main__":
     modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
     print(modelout)
 
-    # model.load_state_dict(
-    #     torch.load(
-    #         open(
-    #             "train_outputs/runs/Jan14_11-10-56_slurm0-a3nodeset-1_30c9e93d/checkpoint-1720/pytorch_model.bin",
-    #             "rb",
-    #         )
-    #     )
-    # )
-    # modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
-    # print(modelout)
+    state_dict = torch.load(
+        open(
+            "train_outputs/runs/Jan15_17-40-28_slurm0-a3nodeset-0_fd03d041/checkpoint-1000/pytorch_model.bin",
+            "rb",
+        )
+    )
+    breakpoint()
+    model.load_state_dict(state_dict)
+    modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
+    print(modelout)
 
     breakpoint()

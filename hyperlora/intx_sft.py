@@ -29,7 +29,7 @@ from datasets import (
     load_dataset,
     IterableDataset,
 )
-from model_loading import get_lora_config, get_model_and_tokenizer
+from model_loading import get_lora_config, get_model_and_tokenizer, get_tokenizer
 from modeling_utils import (
     EarlyExit,
     HyperLoRA,
@@ -41,6 +41,7 @@ from training_utils import TRAINING_TASK, train_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    AutoConfig,
     DataCollatorForSeq2Seq,
     EvalPrediction,
     HfArgumentParser,
@@ -279,22 +280,21 @@ def main():
         peft_config=get_lora_config(model_name, **vars(lora_args)),
     )
     if ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
-        ctx_encoder_model, ctx_tokenizer = get_model_and_tokenizer(
-            ctx_encoder_args.ctx_encoder_model_name_or_path,
-            train=False,
-            requires_grad=False,
+        ctx_encoder_model_config = AutoConfig.from_pretrained(
+            ctx_encoder_args.ctx_encoder_model_name_or_path
         )
+        ctx_tokenizer = get_tokenizer(ctx_encoder_args.ctx_encoder_model_name_or_path)
     else:
-        ctx_encoder_model = model
+        ctx_encoder_model_config = model.config
         ctx_tokenizer = tokenizer
 
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
         hypernet_config = get_hypernet_config(
-            model, ctx_encoder_model, hypernet_args, aggregator_args
+            model, ctx_encoder_model_config, hypernet_args, aggregator_args
         )
         if ctx_encoder_args.layer_idx is None:
-            ctx_encoder_args.layer_idx = ctx_encoder_model.config.num_hidden_layers // 4
+            ctx_encoder_args.layer_idx = ctx_encoder_model_config.num_hidden_layers // 4
             logger.info(
                 f"Using the first {ctx_encoder_args.layer_idx} layers"
                 " as the context encoder"
@@ -305,6 +305,10 @@ def main():
             ctx_encoder_args,
             ctx_args.use_kl_loss,
         )
+        if len([p for p in model.ctx_encoder.parameters() if p.requires_grad]):
+            raise ValueError("ctx_encoder contains trainable parameters")
+        if len([p for p in model.base_model.parameters() if p.requires_grad]):
+            raise ValueError("base model contains trainable parameters")
     else:
         # activate LoRA
         logger.info("Using LoRA")
@@ -467,7 +471,7 @@ def main():
             _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
             if ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
                 logger.info("Applying liger-kernel to ctx_encoder_model")
-                _apply_liger_kernel_to_instance(model=ctx_encoder_model)
+                _apply_liger_kernel_to_instance(model=model.ctx_encoder)
         elif isinstance(model, PeftModel):
             logger.info("Applying liger-kernel to PeftModel")
             _apply_liger_kernel_to_instance(model=model.base_model.model)

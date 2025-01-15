@@ -187,7 +187,7 @@ class TrainingArguments(TrainingArguments):
     #     metadata={"help": "Whether to load the best model at the end of training."},
     # )
     save_total_limit: int = field(
-        default=1,
+        default=5,
         metadata={"help": "Total number of checkpoints to save."},
     )
     save_strategy: str = field(
@@ -248,10 +248,10 @@ class LoRAArguments:
         default=None,
         metadata={"help": ("LoRA target modules.")},
     )
-    modules_to_save: Optional[list[str]] = field(
-        default=None,
-        metadata={"help": ("Modules to save.")},
-    )
+    # modules_to_save: Optional[list[str]] = field(
+    #     default=None,
+    #     metadata={"help": ("Modules to save.")},
+    # )
 
 
 @dataclass

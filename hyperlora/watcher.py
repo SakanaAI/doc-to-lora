@@ -7,12 +7,14 @@ import shutil
 import time
 import os
 import argparse
+import gc
 from glob import glob
 
 import numpy as np
 import pandas as pd
 import wandb
 import yaml
+import torch
 
 from eval import evaluate
 
@@ -22,6 +24,13 @@ CP_PATTERN = "train_outputs/runs/*/checkpoint*/pytorch_model.bin"
 
 def flatten(l):
     return itertools.chain.from_iterable(l)
+
+
+def clear_gpu():
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_max_memory_allocated()
+    torch.cuda.reset_max_memory_cached()
 
 
 class Watcher:
@@ -53,7 +62,6 @@ class Watcher:
 
 if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
     os.environ["WANDB_PROJECT"] = "ctx_to_lora"
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
@@ -82,12 +90,13 @@ if __name__ == "__main__":
                 # cp is delete before we can read it
                 continue
             run_dir = file.split("/checkpoint")[0]
+            cur_it = int(file.split("checkpoint-")[1].split("/")[0])
             checkpoint_dir = os.path.dirname(file)
             args = argparse.Namespace(
                 **yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r"))
             )
-            args.output_dir = checkpoint_dir
-            args.logging_dir = checkpoint_dir
+            args.output_dir = f"{run_dir}/eval-results-{cur_it}"
+            args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
             args.run_name = run_dir.split("/")[-1]
             print("Evaluating...")
             print(f"checkpoint_dir: {checkpoint_dir}")
@@ -101,9 +110,12 @@ if __name__ == "__main__":
             }
             wandb.init(**wandb_kwargs)
             metrics = evaluate(file, args, split="validation", generative=False)
-            gen_metrics = evaluate(file, args, split="validation", generative=True)
-            metrics.update(gen_metrics)
+            # gen_metrics = evaluate(file, args, split="validation", generative=True)
+            # metrics.update(gen_metrics)
             wandb.log(metrics, step=curstep)
             wandb.finish()
+            print(f"Logged metrics: {metrics}")
+            print("=" * 80)
+            clear_gpu()
 
         watcher.save_state()

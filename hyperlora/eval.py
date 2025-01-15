@@ -113,6 +113,7 @@ def compute_metrics(
 
 
 def save_generated_text(samples, output_dir, split):
+    os.makedirs(output_dir, exist_ok=True)
     with open(f"{output_dir}/{split}_generated_text.jsonl", "w") as f:
         for sample in samples:
             f.write(json.dumps(sample) + "\n")
@@ -408,16 +409,18 @@ def evaluate(checkpoint_path, args, split, generative):
 
 if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
+    os.environ["WANDB_MODE"] = "disabled"
     checkpoint_path = sys.argv[1]
     checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
     run_dir = "/".join(checkpoint_path.split("/")[:-2])
+    cur_it = int(checkpoint_path.split("checkpoint-")[1].split("/")[0])
     args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r")))
     print(f"checkpoint_path: {checkpoint_path}")
     print(f"run_dir: {run_dir}")
     # print(f"args: {args}")
 
-    args.output_dir = checkpoint_dir
-    args.logging_dir = checkpoint_dir
+    args.output_dir = f"{run_dir}/eval-results-{cur_it}"
+    args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
     args.run_name = run_dir.split("/")[-1]
 
     evaluate(checkpoint_path, args, split="validation", generative=False)

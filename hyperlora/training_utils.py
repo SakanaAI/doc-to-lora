@@ -60,14 +60,15 @@ def train_model(
     # Trainer loads the best model after training
     # is done when load_best_model_at_end=True
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
-    trainer.save_model()  # just in case OOM when run trainer.evaluate()
     trainer.log_metrics("train", train_result.metrics)
-    clear_gpu()
-    metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
-    trainer.log_metrics("eval", metrics)
-    trainer.save_metrics("eval", metrics)
     trainer.save_model()
     clear_gpu()
+
+    # metrics = trainer.evaluate(dict(**val_dataset, test=test_dataset))
+    # trainer.log_metrics("eval", metrics)
+    # trainer.save_metrics("eval", metrics)
+    # trainer.save_model()
+    # clear_gpu()
 
     # ############## Evaluation
     # # TODO: eval does not work when using with deepspeed
