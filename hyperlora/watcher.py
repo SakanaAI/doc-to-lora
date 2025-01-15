@@ -110,8 +110,8 @@ if __name__ == "__main__":
             }
             wandb.init(**wandb_kwargs)
             metrics = evaluate(file, args, split="validation", generative=False)
-            # gen_metrics = evaluate(file, args, split="validation", generative=True)
-            # metrics.update(gen_metrics)
+            gen_metrics = evaluate(file, args, split="validation", generative=True)
+            metrics.update(gen_metrics)
             wandb.log(metrics, step=curstep)
             wandb.finish()
             print(f"Logged metrics: {metrics}")
