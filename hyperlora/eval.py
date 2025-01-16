@@ -3,6 +3,7 @@ import sys
 import gc
 import json
 import os
+import random
 from argparse import Namespace
 from dataclasses import fields
 from functools import partial
@@ -18,6 +19,7 @@ from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     EvalPrediction,
+    set_seed,
 )
 
 from data_utils import get_tokenized_dataset
@@ -46,8 +48,13 @@ def compute_rouge(pred_texts, label_texts):
 
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
     indices = torch.where(valid_masks)
-    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
-    return {"per_token_acc": acc}
+    # acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
+    # return {"per_token_acc": acc}
+    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float()
+    return {
+        "per_token_accs": acc.flatten().tolist(),
+        "n_per_token_accs": valid_masks.sum().item(),
+    }
 
 
 def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
@@ -63,7 +70,11 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
 
     # if all tokens are correct, set to 1
     perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
-    return {"prefix_matching": perf.mean().item()}
+    # return {"prefix_matching": perf.mean().item()}
+    return {
+        "prefix_matchings": perf.tolist(),
+        "n_prefix_matchings": valid_masks.shape[0],
+    }
 
 
 @torch.no_grad()
@@ -71,8 +82,13 @@ def compute_perplexity(shift_logits, shift_labels, valid_masks):
     loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
     loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
     loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
-    perplexity = torch.exp(loss).mean().item()
-    return {"perplexity": perplexity}
+    # perplexity = torch.exp(loss).mean().item()
+    # return {"perplexity": perplexity}
+    preplexities = torch.exp(loss)
+    return {
+        "perplexities": preplexities.tolist(),
+        "n_perplexities": valid_masks.shape[0],
+    }
 
 
 class Evaluator:
@@ -82,16 +98,22 @@ class Evaluator:
 
     def reset(self):
         self.accum_metrics = defaultdict(list)
+        self.count = defaultdict(list)
 
     def update(self, shift_logits, shift_labels, valid_masks):
         for metric_fn in self.metric_fns:
             metric = metric_fn(shift_logits, shift_labels, valid_masks)
             for k, v in metric.items():
-                self.accum_metrics[k].append(v)
+                if k.startswith("n_"):
+                    self.count[k[2:]].append(v)
+                else:
+                    self.accum_metrics[k] += v
 
     def compute(self):
         # Get result across entire eval set
-        result = {k: np.mean(v) for k, v in self.accum_metrics.items()}
+        result = {
+            k: np.sum(v) / np.sum(self.count[k]) for k, v in self.accum_metrics.items()
+        }
         # Reset batch statistics
         self.reset()
         return result
@@ -304,9 +326,18 @@ def generation_collator(inp_list, tokenizer):
 
 def evaluate(checkpoint_path, args, split, generative):
     assert split in ["validation", "test"]
+    set_seed(42)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     model = ModulatedPretrainedModel.from_state_dict(
-        torch.load(open(checkpoint_path, "rb")), train=False
+        torch.load(open(checkpoint_path, "rb")),
+        train=False,
+        use_flash_attn=False,
     )
+    # NOTE: there is still some randomness in the eval result
+    # despite all the deterministic settings
 
     tokenizer = get_tokenizer(args.model_name_or_path, train=False)
     if tokenizer.pad_token_id is None:
@@ -408,7 +439,9 @@ def evaluate(checkpoint_path, args, split, generative):
 
 
 if __name__ == "__main__":
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
+    os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
     os.environ["WANDB_MODE"] = "disabled"
     checkpoint_path = sys.argv[1]
     checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])

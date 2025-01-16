@@ -332,6 +332,10 @@ class HypernetArguments:
         default=128,
         metadata={"help": "Latent size for light-weight LoRA."},
     )
+    # trainable_base_modules: Optional[list[str]] = field(
+    #     default=None,
+    #     metadata={"help": ("Modules to train of the base model.")},
+    # )
 
 
 @dataclass

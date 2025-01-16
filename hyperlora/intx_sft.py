@@ -80,8 +80,13 @@ LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
     indices = torch.where(valid_masks)
-    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
-    return {"per_token_acc": acc}
+    # acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
+    # return {"per_token_acc": acc}
+    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float()
+    return {
+        "per_token_accs": acc.flatten().tolist(),
+        "n_per_token_accs": valid_masks.sum().item(),
+    }
 
 
 def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
@@ -97,7 +102,11 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
 
     # if all tokens are correct, set to 1
     perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
-    return {"prefix_matching": perf.mean().item()}
+    # return {"prefix_matching": perf.mean().item()}
+    return {
+        "prefix_matchings": perf.tolist(),
+        "n_prefix_matchings": valid_masks.shape[0],
+    }
 
 
 @torch.no_grad()
@@ -105,8 +114,13 @@ def compute_perplexity(shift_logits, shift_labels, valid_masks):
     loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
     loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
     loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
-    perplexity = torch.exp(loss).mean().item()
-    return {"perplexity": perplexity}
+    # perplexity = torch.exp(loss).mean().item()
+    # return {"perplexity": perplexity}
+    preplexities = torch.exp(loss)
+    return {
+        "perplexities": preplexities.tolist(),
+        "n_perplexities": valid_masks.shape[0],
+    }
 
 
 class Evaluator:
@@ -116,16 +130,22 @@ class Evaluator:
 
     def reset(self):
         self.accum_metrics = defaultdict(list)
+        self.count = defaultdict(list)
 
     def update(self, shift_logits, shift_labels, valid_masks):
         for metric_fn in self.metric_fns:
             metric = metric_fn(shift_logits, shift_labels, valid_masks)
             for k, v in metric.items():
-                self.accum_metrics[k].append(v)
+                if k.startswith("n_"):
+                    self.count[k[2:]].append(v)
+                else:
+                    self.accum_metrics[k] += v
 
     def compute(self):
         # Get result across entire eval set
-        result = {k: np.mean(v) for k, v in self.accum_metrics.items()}
+        result = {
+            k: np.sum(v) / np.sum(self.count[k]) for k, v in self.accum_metrics.items()
+        }
         # Reset batch statistics
         self.reset()
         return result
@@ -279,11 +299,12 @@ def main():
         requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
         peft_config=get_lora_config(model_name, **vars(lora_args)),
     )
-    if ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
-        ctx_encoder_model_config = AutoConfig.from_pretrained(
-            ctx_encoder_args.ctx_encoder_model_name_or_path
-        )
-        ctx_tokenizer = get_tokenizer(ctx_encoder_args.ctx_encoder_model_name_or_path)
+    ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
+    if ctx_name is not None:
+        ctx_encoder_model_config = AutoConfig.from_pretrained(ctx_name)
+        if "Llama" in ctx_name and "Vision" in ctx_name:
+            ctx_encoder_model_config = ctx_encoder_model_config.text_config
+        ctx_tokenizer = get_tokenizer(ctx_name)
     else:
         ctx_encoder_model_config = model.config
         ctx_tokenizer = tokenizer
@@ -371,6 +392,7 @@ def main():
     train_ds = interleave_datasets(
         list(train_ds.values()),
         probabilities=[l / total_len for l in train_ds_len],
+        seed=training_args.seed,
     )
 
     # val_train_indices = np.random.permutation(len(train_ds))[:500]
@@ -469,7 +491,7 @@ def main():
         if isinstance(model, ModulatedPretrainedModel):
             logger.info("Applying liger-kernel to ModulatedPretrainedModel")
             _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
-            if ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
+            if ctx_name is not None:
                 logger.info("Applying liger-kernel to ctx_encoder_model")
                 _apply_liger_kernel_to_instance(model=model.ctx_encoder)
         elif isinstance(model, PeftModel):

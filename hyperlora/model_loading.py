@@ -143,16 +143,17 @@ def get_model(
         model = PeftModel(model, peft_config)
     model.train(train)
     for name, param in model.named_parameters():
-        if "modules_to_save" not in name:
-            param.requires_grad = requires_grad
-        else:
-            logging.debug(f"modules_to_save: {name} to be trained")
-            # always train "modules_to_save"
-            if not "layernorm" in name:
-                raise NotImplementedError(
-                    f"modules_to_save should only be layernorm, got {name}"
-                )
-            param.requires_grad = True
+        # if "modules_to_save" not in name:
+        #     param.requires_grad = requires_grad
+        # else:
+        #     logging.debug(f"modules_to_save: {name} to be trained")
+        #     # always train "modules_to_save"
+        #     if not "layernorm" in name:
+        #         raise NotImplementedError(
+        #             f"modules_to_save should only be layernorm, got {name}"
+        #         )
+        #     param.requires_grad = True
+        param.requires_grad = requires_grad
     return model
 
 

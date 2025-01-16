@@ -26,7 +26,7 @@ from peft import (
     get_peft_model_state_dict,
     set_peft_model_state_dict,
 )
-from peft.utils import PeftType, TaskType
+from peft.utils import PeftType, TaskType, ModulesToSaveWrapper
 from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
 from pooling import POOL_FN, get_pooling_fn
@@ -100,6 +100,7 @@ class HypernetConfig:
 
     lora_config: LoraConfig
     module_names: dict[str, list[str]]
+    trainable_base_modules: Optional[list[str]]
     layer_indices: Iterable[int]
     feature_sizes: tuple[dict[str, int], dict[str, int]]
     aggregator_config: AggregatorConfig
@@ -574,7 +575,12 @@ class ModulatedPretrainedModel(nn.Module):
         # self.register_module("ctx_encoder", ctx_encoder)
 
     @classmethod
-    def from_state_dict(cls, state_dict: dict, train: bool = True):
+    def from_state_dict(
+        cls,
+        state_dict: dict,
+        train: bool = True,
+        use_flash_attn: bool = True,
+    ):
         lora_config = state_dict["hypernet_config"].lora_config
         model_name_or_path = lora_config.base_model_name_or_path
         base_model = get_model(
@@ -582,6 +588,7 @@ class ModulatedPretrainedModel(nn.Module):
             train=train,
             requires_grad=False,
             peft_config=lora_config,
+            use_flash_attn=use_flash_attn,
         )
         hypernet_config = state_dict["hypernet_config"]
         ctx_encoder_args = state_dict["ctx_encoder_args"]
@@ -590,6 +597,17 @@ class ModulatedPretrainedModel(nn.Module):
         return model
 
     def _init_model(self):
+        # for name, module in self.base_model.named_modules():
+        #     if isinstance(module, ModulesToSaveWrapper):
+        #         module.set_adapter("default")
+        # trainable_base_modules = getattr(
+        #     self.hypernet_config, "trainable_base_modules", None
+        # )
+        # if trainable_base_modules:
+        #     for name, param in self.base_model.named_parameters():
+        #         if any(module_name in name for module_name in trainable_base_modules):
+        #             param.requires_grad = True
+
         self.hypernet = HyperLoRA(self.hypernet_config).to(self.device)
         # ctx_encoder_name =
         # if self.ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
@@ -675,11 +693,18 @@ class ModulatedPretrainedModel(nn.Module):
 
         state_dict = self.hypernet.state_dict(*args, **kwargs)
         # base_state_dict = dict()
-        # if self.base_model.modules_to_save:
-        #     for k, v in get_peft_model_state_dict(self.base_model).items():
-        #         if any(module in k for module in self.base_model.modules_to_save):
-        #             # save only "modules_to_save"
-        #             base_state_dict[k] = v
+        # if self.hypernet_config.trainable_base_modules:
+        #     # for k, v in get_peft_model_state_dict(self.base_model).items():
+        #     #     if any(module in k for module in self.hypernet_config.trainable_base_modules):
+        #     #         # save only "modules_to_save"
+        #     #         base_state_dict[k] = v
+        #     for name, param in self.base_model.named_parameters():
+        #         if param.requires_grad and any(
+        #             module in name
+        #             for module in self.hypernet_config.trainable_base_modules
+        #         ):
+        #             base_state_dict[name] = param.data
+
         # state_dict["base_model"] = base_state_dict
         state_dict["hypernet_config"] = self.hypernet_config
         state_dict["ctx_encoder_args"] = self.ctx_encoder_args
@@ -699,16 +724,19 @@ class ModulatedPretrainedModel(nn.Module):
                 f"but the hypernet config is for: {self.hypernet_config.lora_config.base_model_name_or_path}"
             )
         self._init_model()
+        state_dict.pop("base_model", None)
         # base_state_dict = state_dict.pop("base_model", None)
         # if base_state_dict:
-        #     logging.info("Loading base model state dict")
-        #     peft_load_result = set_peft_model_state_dict(
-        #         self.base_model,
-        #         base_state_dict,
-        #         *args,
-        #         **kwargs,
-        #     )
-        #     logging.info(f"peft_load_result: {peft_load_result}")
+        #     print("Loading base model state dict")
+        #     print(base_state_dict.keys())
+        #     # peft_load_result = set_peft_model_state_dict(
+        #     #     self.base_model,
+        #     #     base_state_dict,
+        #     #     *args,
+        #     #     **kwargs,
+        #     # )
+        #     load_result = self.base_model.load_state_dict(base_state_dict, strict=False)
+        #     print(f"base_load_result: {load_result}")
         return self.hypernet.load_state_dict(state_dict, *args, **kwargs)
 
     # @torch.no_grad()
@@ -910,9 +938,7 @@ if __name__ == "__main__":
         model_name,
         train=True,
         requires_grad=False,
-        peft_config=get_lora_config(
-            model_name, modules_to_save=["input_layernorm", "post_attention_layernorm"]
-        ),
+        peft_config=get_lora_config(model_name),
     )
     print(base_model.modules_to_save)
     ctx_model_config = base_model.config
@@ -966,11 +992,11 @@ if __name__ == "__main__":
 
     state_dict = torch.load(
         open(
-            "train_outputs/runs/Jan15_17-40-28_slurm0-a3nodeset-0_fd03d041/checkpoint-1000/pytorch_model.bin",
+            "train_outputs/runs/Jan15_19-10-21_slurm0-a3nodeset-11_d1842c41/checkpoint-55000/pytorch_model.bin",
             "rb",
         )
     )
-    breakpoint()
+
     model.load_state_dict(state_dict)
     modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
     print(modelout)

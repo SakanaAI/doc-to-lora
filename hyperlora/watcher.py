@@ -62,6 +62,8 @@ class Watcher:
 
 if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
+    os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["WANDB_PROJECT"] = "ctx_to_lora"
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
