@@ -506,6 +506,7 @@ def main():
             config=args,
             tags=os.getenv("WANDB_TAGS").split(","),
             notes=ctx_args.notes,
+            resume="allow",
         )
     else:
         wandb.init(mode="disabled")
