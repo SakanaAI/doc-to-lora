@@ -87,7 +87,7 @@ if __name__ == "__main__":
         new_files = watcher.watch()
         for file in new_files:
             # workaround to prevent loading incomplete checkpoints
-            time.sleep(10)
+            time.sleep(20)
             if not os.path.exists(file):
                 # cp is delete before we can read it
                 continue

@@ -4,8 +4,9 @@ from glob import glob
 from typing import Any, Callable, Iterator, Optional
 
 from datasets import load_dataset, IterableDataset
-from training_utils import TRAINING_TASK
 from transformers import PreTrainedTokenizerBase
+
+from ctx_to_lora.training_utils import TRAINING_TASK
 
 IGNORE_INDEX = -100
 
@@ -32,6 +33,10 @@ DS_KWARGS = {
         train=dict(path="sggetao/PwC", split="train[900:2000]"),
         validation=dict(path="sggetao/PwC", split="train[:900]"),
     ),
+    "squad": dict(
+        train=dict(path="rajpurkar/squad", split="train[900:]"),
+        validation=dict(path="rajpurkar/squad", split="train[:900]"),
+    ),
     "fw_qa_tiny": dict(
         train=dict(
             path="parquet",
@@ -53,6 +58,18 @@ DS_KWARGS = {
         validation=dict(
             path="parquet",
             data_files="data/raw_datasets/fw_qa/*_val.parquet",
+            split="train",
+        ),
+    ),
+    "fw_qa_large": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_large/*res.parquet"),
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_large/*val.parquet"),
             split="train",
         ),
     ),
@@ -96,6 +113,10 @@ def validate_columns(tokenized_ds):
 
 def filter_long_samples(samples):
     return [len(ctx) < 10000 for ctx in samples["context"]]
+
+
+def filter_long_chat(samples):
+    return [len(chat) < 2**13 for chat in samples["chat"]]
 
 
 def add_repeat_prompt_fn(samples):
@@ -144,6 +165,8 @@ def add_negative_prompt_fn(samples):
         if ctx in unique_contexts:
             continue
         unique_contexts.add(ctx)
+        if len(ctx) > 3000:
+            continue
         if any(keyword in prompt for keyword in keywords):
             # Skip samples where the prompt contains any of the specified keywords
             continue
@@ -258,6 +281,7 @@ def construct_and_tokenize_ctx_qa(
         get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer), num_proc=16
     )
     # tokenize the chat + mask the assistant inputs
+    ds = ds.filter(filter_long_chat, batched=True, num_proc=16)
 
     # add "input_ids", "attention_mask", "labels"
     tokenized_ds = ds.map(
@@ -438,6 +462,15 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
                 "context": txt.strip(),
                 "prompt": sample["question"],
                 "response": sample["answer"],
+            }
+
+    elif "squad" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["question"],
+                "response": sample["answer"]["text"][0],
             }
 
     return f

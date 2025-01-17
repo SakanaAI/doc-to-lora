@@ -14,7 +14,7 @@ import torch
 import wandb
 import yaml
 
-from data_utils import (
+from ctx_to_lora.data_utils import (
     convert_ctx_prompt_response_to_messages,
     get_preprocessing_fn,
     get_sft_prompt_formatting_fn,
@@ -29,15 +29,19 @@ from datasets import (
     load_dataset,
     IterableDataset,
 )
-from model_loading import get_lora_config, get_model_and_tokenizer, get_tokenizer
-from modeling_utils import (
+from ctx_to_lora.model_loading import (
+    get_lora_config,
+    get_model_and_tokenizer,
+    get_tokenizer,
+)
+from ctx_to_lora.modeling_utils import (
     EarlyExit,
     HyperLoRA,
     ModulatedPretrainedModel,
     get_hypernet_config,
 )
 from rouge_score import rouge_scorer
-from training_utils import TRAINING_TASK, train_model
+from ctx_to_lora.training_utils import TRAINING_TASK, train_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -50,7 +54,7 @@ from transformers import (
 from peft import PeftModel
 from transformers.utils import is_liger_kernel_available
 from torch.utils.data import DataLoader
-from utils import (
+from ctx_to_lora.utils import (
     extract_cli_args,
     get_base_model,
     get_run_name,
@@ -60,7 +64,7 @@ from utils import (
     validate_args,
 )
 
-from configs import (
+from ctx_to_lora.configs import (
     ArgumentParser,
     CtxTrainingArguments,
     TrainingArguments,
@@ -483,8 +487,10 @@ def main():
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
     # TODO: use packing with SFTTrainer
 
-    # HACK: see transformers/trainer_seq2seq.py for supressing
+    # HACK [local patch]: see transformers/trainer_seq2seq.py for supressing
     # "Trainer.tokenizer is now deprecated. You should use Trainer.processing_class instead."
+    # HACK [local patch]: deepspeed model loading problem (for resume training)
+    # see https://github.com/microsoft/DeepSpeed/pull/6626/files
     if training_args.use_liger_kernel and is_liger_kernel_available():
         from liger_kernel.transformers import _apply_liger_kernel_to_instance
 

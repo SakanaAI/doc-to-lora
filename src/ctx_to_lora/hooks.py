@@ -8,7 +8,7 @@ from einops import einsum
 from jaxtyping import Float
 from torch import Tensor
 from torch.utils.hooks import RemovableHandle
-from utils import get_layers
+from ctx_to_lora.utils import get_layers
 
 logger = logging.getLogger()
 

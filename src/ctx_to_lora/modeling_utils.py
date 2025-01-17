@@ -8,14 +8,10 @@ from typing import Any, Iterable, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-
-from configs import AggregatorArguments, HypernetArguments, CtxEncoderArguments
 from einops import rearrange, repeat, unpack, einsum
 from einops.layers.torch import EinMix as Mix
 from einops.layers.torch import Reduce
-from hooks import add_generated_lora_hook, remove_hook_handles
 from jaxtyping import Float, Integer
-from model_loading import get_lora_config, get_model, get_model_and_tokenizer
 from peft import (
     get_peft_config,
     load_peft_weights,
@@ -29,7 +25,6 @@ from peft import (
 from peft.utils import PeftType, TaskType, ModulesToSaveWrapper
 from peft.tuners._buffer_dict import BufferDict
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
-from pooling import POOL_FN, get_pooling_fn
 from torch import Tensor, nn
 from transformers import (
     PerceiverConfig,
@@ -41,7 +36,12 @@ from transformers.models.perceiver.modeling_perceiver import (
     PerceiverBasicDecoder,
 )
 from transformers.modeling_outputs import ModelOutput
-from utils import (
+
+from ctx_to_lora.configs import AggregatorArguments, HypernetArguments, CtxEncoderArguments
+from ctx_to_lora.hooks import add_generated_lora_hook, remove_hook_handles
+from ctx_to_lora.model_loading import get_lora_config, get_model, get_model_and_tokenizer
+from ctx_to_lora.pooling import POOL_FN, get_pooling_fn
+from ctx_to_lora.utils import (
     get_lora_module_names,
     get_num_layers,
     get_peft_in_out_features,
@@ -100,7 +100,7 @@ class HypernetConfig:
 
     lora_config: LoraConfig
     module_names: dict[str, list[str]]
-    trainable_base_modules: Optional[list[str]]
+    # trainable_base_modules: Optional[list[str]]
     layer_indices: Iterable[int]
     feature_sizes: tuple[dict[str, int], dict[str, int]]
     aggregator_config: AggregatorConfig
@@ -760,6 +760,17 @@ class ModulatedPretrainedModel(nn.Module):
     #         )
     #     out["ctx_features"] = features
     #     return out
+
+    def generate_loras(
+        self,
+        ctx_ids: Integer[Tensor, "bs ctx_len"],
+        ctx_attn_mask: Integer[Tensor, "bs ctx_len"],
+    ):
+        with torch.no_grad():
+            ctx_features = self.ctx_encoder(
+                input_ids=ctx_ids, attention_mask=ctx_attn_mask
+            )
+        return self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
     def forward(
         self,

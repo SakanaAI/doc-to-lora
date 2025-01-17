@@ -22,9 +22,9 @@ from transformers import (
     set_seed,
 )
 
-from data_utils import get_tokenized_dataset
-from modeling_utils import ModulatedPretrainedModel
-from model_loading import get_tokenizer
+from ctx_to_lora.data_utils import get_tokenized_dataset
+from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
+from ctx_to_lora.model_loading import get_tokenizer
 
 
 def clear_gpu():
@@ -386,7 +386,7 @@ def evaluate(checkpoint_path, args, split, generative):
     eval_trainer_args["eval_strategy"] = "no"
     eval_trainer_args["save_strategy"] = "no"
     eval_trainer_args["overwrite_output_dir"] = True
-    eval_trainer_args["per_device_eval_batch_size"] = 64
+    eval_trainer_args["per_device_eval_batch_size"] = 16
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
