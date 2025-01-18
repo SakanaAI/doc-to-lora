@@ -476,38 +476,47 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
     return f
 
 
-# taken from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
+# adapted from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
 def get_assistant_start_end_indices(
     messages: list[dict[str, str]],
-    conversation_text: str,
+    tokenizer: PreTrainedTokenizerBase,
+    conversation_ids: list[int],
 ) -> list[tuple[int, int]]:
     """
-    Get the start and end indices of assistant messages in conversation text.
+    Get the start and end indices of assistant messages in conversation text using tokenized messages.
 
     Args:
         messages: List of message dictionaries with 'role' and 'content' keys
-        conversation_text: Full conversation text
+        tokenizer: Tokenizer used for tokenization
+        conversation_ids: Tokenized conversation
 
     Returns:
-        List of (start, end) index tuples for assistant messages
+        List of (start, end) index tuples for assistant messages in the tokenized conversation
     """
-    start_indices = []
-    # end_indices = []
-    current_index = 0
-    for message in messages:
-        message_text = message["content"]
-        match_index = conversation_text[current_index:].find(message_text)
-        start_indices.append(current_index + match_index)
-        # end_indices.append(current_index + match_index + len(message_text))
-        current_index += match_index + len(message_text)
-    end_indices = [
-        len(conversation_text) if i == len(start_indices) - 1 else start_indices[i + 1]
-        for i, x in enumerate(start_indices)
-    ]
-    roles = [message["role"] for message in messages]
-    return [
-        (s, e) for s, e, r in zip(start_indices, end_indices, roles) if r == "assistant"
-    ]
+    assistant_ranges = []
+    current_idx = 0
+
+    for idx, message in enumerate(messages):
+        # if message["role"] == "assistant":
+        # Tokenize the assistant message content
+        tokenized_message = tokenizer.encode(
+            message["content"], add_special_tokens=False
+        )
+        # Find the start index of the assistant message in the tokenized conversation
+        for i in range(current_idx, len(conversation_ids)):
+            if conversation_ids[i : i + len(tokenized_message)] == tokenized_message:
+                start_idx = i
+                end_idx = i + len(tokenized_message)
+                current_idx = end_idx
+                if message["role"] == "assistant":
+                    if idx == (len(messages) - 1):
+                        # include everything after the last assistant message
+                        assistant_ranges.append((start_idx, len(conversation_ids)))
+                    else:
+                        assistant_ranges.append((start_idx, end_idx))
+                break
+
+    return assistant_ranges
 
 
 def get_masked_labels(
@@ -565,21 +574,29 @@ def tokenize_chat_messages(
         raise ValueError(f"Expected 1 assistant response. Got {n_response}.")
     conversation_ids = tokenizer(
         text,
-        return_offsets_mapping=mask_assistant_inputs,
+        # return_offsets_mapping=mask_assistant_inputs,
         add_special_tokens=False,
         truncation=False,
         **(tokenizer_kwargs or {}),
     )
-    if len(conversation_ids["input_ids"]) >= tokenizer_kwargs["max_length"]:
+    if tokenizer_kwargs and (
+        len(conversation_ids["input_ids"]) >= tokenizer_kwargs["max_length"]
+    ):
         raise ValueError(
             f"Conversation length {len(conversation_ids['input_ids'])} exceeds max length {tokenizer_kwargs['max_length']}"
         )
 
     if mask_assistant_inputs:
-        assistant_ranges = get_assistant_start_end_indices(messages, text)
-        labels = get_masked_labels(conversation_ids, assistant_ranges)
-        conversation_ids["labels"] = list(labels)
-        del conversation_ids["offset_mapping"]
+        assistant_ranges = get_assistant_start_end_indices(
+            messages, tokenizer, conversation_ids["input_ids"]
+        )
+        # labels = get_masked_labels(conversation_ids, assistant_ranges)
+        labels = [
+            id_ if any(s <= i < e for s, e in assistant_ranges) else IGNORE_INDEX
+            for i, id_ in enumerate(conversation_ids["input_ids"])
+        ]
+        conversation_ids["labels"] = labels
+        # del conversation_ids["offset_mapping"]
     else:
         conversation_ids["labels"] = conversation_ids["input_ids"]
     if for_kl_loss:
@@ -603,7 +620,9 @@ def tokenize_ctx_text(
 if __name__ == "__main__":
     from transformers import AutoTokenizer
 
-    model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    # model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    # model_name = "meta-llama/Llama-2-7b-chat-hf"
+    model_name = "google/gemma-2-2b-it"
     messages = [
         {"role": "user", "content": "Hello!"},
         {"role": "assistant", "content": "Hello!"},
@@ -615,11 +634,10 @@ if __name__ == "__main__":
         messages, tokenize=False, add_generation_prompt=False, add_special_tokens=False
     )
     print(chat)
-
     model_inputs = tokenize_chat_messages(
         {"chat": chat, "messages": messages},
         tokenizer,
-        for_kl_loss=True,
+        # for_kl_loss=True,
     )
 
     print(tokenizer(chat, add_special_tokens=False))
