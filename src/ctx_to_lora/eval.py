@@ -4,6 +4,7 @@ import gc
 import json
 import os
 import random
+import shutil
 from argparse import Namespace
 from dataclasses import fields
 from functools import partial
@@ -326,11 +327,6 @@ def generation_collator(inp_list, tokenizer):
 
 def evaluate(checkpoint_path, args, split, generative):
     assert split in ["validation", "test"]
-    set_seed(42)
-    torch.use_deterministic_algorithms(True, warn_only=True)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
     model = ModulatedPretrainedModel.from_state_dict(
         torch.load(open(checkpoint_path, "rb")),
         train=False,
@@ -386,7 +382,7 @@ def evaluate(checkpoint_path, args, split, generative):
     eval_trainer_args["eval_strategy"] = "no"
     eval_trainer_args["save_strategy"] = "no"
     eval_trainer_args["overwrite_output_dir"] = True
-    eval_trainer_args["per_device_eval_batch_size"] = 16
+    eval_trainer_args["per_device_eval_batch_size"] = 4
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
@@ -443,6 +439,11 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
     os.environ["WANDB_MODE"] = "disabled"
+    set_seed(42)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     checkpoint_path = sys.argv[1]
     checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
     run_dir = "/".join(checkpoint_path.split("/")[:-2])
@@ -455,6 +456,10 @@ if __name__ == "__main__":
     args.output_dir = f"{run_dir}/eval-results-{cur_it}"
     args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
     args.run_name = run_dir.split("/")[-1]
+    if os.path.exists(args.output_dir):
+        # remove the existing output dir
+        print(f"Removing existing output dir: {args.output_dir}")
+        shutil.rmtree(args.output_dir)
 
     evaluate(checkpoint_path, args, split="validation", generative=False)
     evaluate(checkpoint_path, args, split="validation", generative=True)

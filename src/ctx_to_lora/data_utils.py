@@ -470,7 +470,7 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
             return {
                 "context": sample["context"],
                 "prompt": sample["question"],
-                "response": sample["answer"]["text"][0],
+                "response": sample["answers"]["text"][0],
             }
 
     return f

@@ -119,7 +119,8 @@ def get_model(
         device_map=device,
         torch_dtype=dtype,
         trust_remote_code=True,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="eager",
+        use_cache=False,
         # load_in_4bit=True,
         # load_in_8bit=True,
     )
@@ -127,12 +128,14 @@ def get_model(
     if model_kwargs is not None:
         model_init_kwargs.update(model_kwargs)
     if use_flash_attn:
-        model_init_kwargs["attn_implementation"] = "flash_attention_2"
-        if is_vision_model:
-            model_init_kwargs["attn_implementation"] = "sdpa"
+        if "gemma" not in model_name_or_path:
+            model_init_kwargs["attn_implementation"] = "flash_attention_2"
+    if is_vision_model:
+        model_init_kwargs["attn_implementation"] = "sdpa"
+        model_init_kwargs.pop("use_cache")
         # for training disable cache
-    if train and not is_vision_model:
-        model_init_kwargs["use_cache"] = False
+    # if train and not is_vision_model:
+    #     model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     if not is_vision_model:
         model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)

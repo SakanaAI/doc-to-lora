@@ -37,7 +37,11 @@ from transformers.models.perceiver.modeling_perceiver import (
 )
 from transformers.modeling_outputs import ModelOutput
 
-from ctx_to_lora.configs import AggregatorArguments, HypernetArguments, CtxEncoderArguments
+from ctx_to_lora.configs import (
+    AggregatorArguments,
+    HypernetArguments,
+    CtxEncoderArguments,
+)
 from ctx_to_lora.hooks import add_generated_lora_hook, remove_hook_handles
 from ctx_to_lora.model_loading import get_lora_config, get_model, get_model_and_tokenizer
 from ctx_to_lora.pooling import POOL_FN, get_pooling_fn
@@ -215,15 +219,15 @@ class MLPResidualBlock(nn.Module):
         if pre_layer_norm:
             layers.append(nn.LayerNorm(input_size))
         layers += [
-            nn.Dropout(0.1),
+            nn.Dropout(0.05),
             nn.Linear(input_size, hidden_size),
             nn.SiLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.05),
             nn.Linear(hidden_size, output_size),
             nn.SiLU(),
         ]
         if post_dropout:
-            layers.append(nn.Dropout(0.1))
+            layers.append(nn.Dropout(0.05))
         self.mlp = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -627,6 +631,8 @@ class ModulatedPretrainedModel(nn.Module):
             ctx_model_name,
             train=True,
             requires_grad=False,
+            use_flash_attn=self.base_model.config._attn_implementation
+            == "flash_attention_2",
         )
         self.ctx_encoder = EarlyExit(
             get_base_model(encoder_model), self.ctx_encoder_args.layer_idx
