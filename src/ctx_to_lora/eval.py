@@ -13,6 +13,7 @@ from typing import Callable
 
 import numpy as np
 import torch
+from datasets import disable_caching
 from rouge_score import rouge_scorer
 from transformers import (
     GenerationConfig,
@@ -439,11 +440,14 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
     os.environ["WANDB_MODE"] = "disabled"
+    disable_caching()
     set_seed(42)
     torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
     torch.backends.cudnn.benchmark = False
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     checkpoint_path = sys.argv[1]
     checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
     run_dir = "/".join(checkpoint_path.split("/")[:-2])
@@ -462,4 +466,4 @@ if __name__ == "__main__":
         shutil.rmtree(args.output_dir)
 
     evaluate(checkpoint_path, args, split="validation", generative=False)
-    evaluate(checkpoint_path, args, split="validation", generative=True)
+    # evaluate(checkpoint_path, args, split="validation", generative=True)
