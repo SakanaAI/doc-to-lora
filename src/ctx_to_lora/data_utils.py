@@ -85,6 +85,62 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "drop": dict(
+        train=dict(
+            path="ucinlp/drop",
+            split="train[900:]",
+        ),
+        validation=dict(
+            path="ucinlp/drop",
+            split="train[:900]",
+        ),
+    ),
+    "narrativeqa": dict(
+        train=dict(
+            path="nvidia/ChatQA-Training-Data",
+            name="narrativeqa",
+            split="train",
+        ),
+    ),
+    "quoref": dict(
+        train=dict(
+            path="nvidia/ChatQA-Training-Data",
+            name="quoref",
+            split="train",
+        ),
+    ),
+    "ropes": dict(
+        train=dict(
+            path="nvidia/ChatQA-Training-Data",
+            name="ropes",
+            split="train",
+        ),
+    ),
+    "synthetic_convqa": dict(
+        train=dict(
+            path="nvidia/ChatQA-Training-Data",
+            name="synthetic_convqa",
+            split="train",
+        ),
+    ),
+    "gsm8k": dict(
+        train=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="train[100:]",
+        ),
+        validation=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="train[:100]",
+        ),
+    ),
+    "openmathintx-2": dict(
+        train=dict(
+            path="nvidia/OpenMathInstruct-2",
+            split="train_1M[:100000]",
+        ),
+    ),
 }
 
 
@@ -471,6 +527,45 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
                 "context": sample["context"],
                 "prompt": sample["question"],
                 "response": sample["answers"]["text"][0],
+            }
+
+    elif ds_name == "drop":
+
+        def f(sample):
+            return {
+                "context": sample["passage"],
+                "prompt": sample["question"],
+                "response": ", ".join(sample["answers_spans"]["spans"]),
+            }
+
+    elif ds_name in ["narrativeqa", "quoref", "ropes", "synthetic_convqa"]:
+
+        def f(sample):
+            response = sample["answers"][0]
+            if isinstance(response, list):
+                response = response[0]
+            return {
+                "context": sample["document"],
+                "prompt": sample["messages"][0]["content"],
+                "response": response,
+            }
+
+    elif ds_name == "openmathintx-2":
+
+        def f(sample):
+            return {
+                "context": sample["problem"],
+                "prompt": sample["problem"],
+                "response": sample["generated_solution"],
+            }
+
+    elif "gsm8k" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["question"],
+                "prompt": sample["question"],
+                "response": sample["answer"],
             }
 
     return f

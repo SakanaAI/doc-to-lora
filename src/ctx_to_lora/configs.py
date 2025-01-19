@@ -260,6 +260,10 @@ class CtxTrainingArguments:
         default=ExperimentSetup.LORA,
         metadata={"help": "Experiment setup - LoRA, HyperLoRA, or full finetuning"},
     )
+    from_pretrained_checkpoint: str = field(
+        default=None,
+        metadata={"help": "Path to the pretrained checkpoint."},
+    )
     max_base_len: Optional[int] = field(
         default=2**13,
         metadata={"help": "Maximum base length for training."},
@@ -281,11 +285,11 @@ class CtxTrainingArguments:
         metadata={"help": "Wandb notes for the experiment."},
     )
     add_repeat_prompt: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to add repeat prompt to the dataset."},
     )
     add_negative_prompt: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to add negative prompt to the dataset."},
     )
     use_kl_loss: bool = field(
