@@ -28,6 +28,7 @@ dependencies = [
     "flask",
     "pandas",
     "plotly",
+    "rouge-score",
 ]
 
 [build-system]

@@ -1,6 +1,7 @@
 einops
 jaxtyping
 liger-kernel
+rouge-score
 transformers==4.46.3
 deepspeed==0.15.4 # curretly 0.16.2
 accelerate==1.2.1
