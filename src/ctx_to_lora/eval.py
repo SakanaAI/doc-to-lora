@@ -331,9 +331,9 @@ def generation_collator(inp_list, tokenizer):
 def evaluate(checkpoint_path, args, split, generative):
     assert split in ["validation", "test"]
     model = ModulatedPretrainedModel.from_state_dict(
-        torch.load(open(checkpoint_path, "rb")),
+        torch.load(checkpoint_path),
         train=False,
-        use_flash_attn=False,
+        use_flash_attn=True,
     )
     # NOTE: there is still some randomness in the eval result
     # despite all the deterministic settings

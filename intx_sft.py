@@ -341,8 +341,9 @@ def main():
                 f"Loading from checkpoint: {ctx_args.from_pretrained_checkpoint}"
             )
             model = ModulatedPretrainedModel.from_state_dict(
-                torch.load(open(ctx_args.from_pretrained_checkpoint, "rb")),
+                torch.load(ctx_args.from_pretrained_checkpoint),
                 train=True,
+                use_flash_attn=model_args.use_flash_attn,
             )
             tokenizer = get_tokenizer(model.base_model.config.name_or_path)
             ctx_name = model.ctx_encoder_args.ctx_encoder_model_name_or_path

@@ -635,7 +635,7 @@ class ModulatedPretrainedModel(nn.Module):
         logger.debug(f"base_model.config._attn_implementation: {base_model_attn_impl}")
         encoder_model = get_model(
             ctx_model_name,
-            train=True,
+            train=self.base_model.training,
             requires_grad=False,
             use_flash_attn=base_model_attn_impl == "flash_attention_2",
         )
@@ -1013,11 +1013,10 @@ if __name__ == "__main__":
     print(modelout)
 
     state_dict = torch.load(
-        open(
-            "train_outputs/runs/Jan15_19-10-21_slurm0-a3nodeset-11_d1842c41/checkpoint-55000/pytorch_model.bin",
-            "rb",
-        )
+        "train_outputs/runs/Jan15_19-10-21_slurm0-a3nodeset-11_d1842c41/checkpoint-55000/pytorch_model.bin",
     )
+    print(state_dict.keys())
+    breakpoint()
 
     model.load_state_dict(state_dict)
     modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
