@@ -6,9 +6,10 @@ description = ""
 readme = "README.md"
 requires-python = ">= 3.10"
 dependencies = [
-    "transformers",
+    "transformers==4.46.3",
+    "deepspeed==0.15.4",
+    "accelerate==1.2.1",
     "peft",
-    "accelerate",
     "datasets",
     "bitsandbytes",
     "jupyter",
@@ -17,10 +18,16 @@ dependencies = [
     "torchmetrics",
     "inflect",
     "pre-commit",
-    "trl",
     "tensorboardX",
     "wandb",
     "fasttext-wheel",
+    "einops",
+    "jaxtyping",
+    "liger-kernel",
+    "tensorboard",
+    "flask",
+    "pandas",
+    "plotly",
 ]
 
 [build-system]
