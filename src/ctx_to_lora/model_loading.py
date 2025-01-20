@@ -129,23 +129,29 @@ def get_model(
     is_vision_model = "Llama" in model_name_or_path and "Vision" in model_name_or_path
     if model_kwargs is not None:
         model_init_kwargs.update(model_kwargs)
+
+    if is_vision_model:
+        # always use sdpa for vision models
+        model_init_kwargs["attn_implementation"] = "sdpa"
+        model_init_kwargs.pop("use_cache")
+    elif "gte" in model_name_or_path:
+        model_init_kwargs["torch_dtype"] = torch.float32
+        model_init_kwargs.pop("use_cache")
+
     if use_flash_attn:
         if ("gemma" not in model_name_or_path) and ("gte" not in model_name_or_path):
             model_init_kwargs["attn_implementation"] = "flash_attention_2"
-    if is_vision_model:
-        model_init_kwargs["attn_implementation"] = "sdpa"
-        model_init_kwargs.pop("use_cache")
-        # for training disable cache
-    elif "gte" in model_name_or_path:
-        model_init_kwargs["attn_implementation"] = "sdpa"
-        model_init_kwargs["torch_dtype"] = torch.float32
-        model_init_kwargs.pop("use_cache")
+        elif "gte" in model_name_or_path:
+            model_init_kwargs["attn_implementation"] = "sdpa"
+
     # if train and not is_vision_model:
     #     model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     if not is_vision_model:
-        # model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
-        model = AutoModel.from_pretrained(**model_init_kwargs)
+        if "gte" in model_name_or_path:
+            model = AutoModel.from_pretrained(**model_init_kwargs)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
     else:
         model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
         model = model.language_model

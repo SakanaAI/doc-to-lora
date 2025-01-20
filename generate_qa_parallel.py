@@ -467,8 +467,10 @@ if __name__ == "__main__":
         "--request_url", default="https://api.openai.com/v1/chat/completions"
     )
     parser.add_argument("--api_key", default=os.getenv("OPENAI_API_KEY"))
-    parser.add_argument("--max_requests_per_minute", type=int, default=5_000 * 0.5)
-    parser.add_argument("--max_tokens_per_minute", type=int, default=2_000_000 * 0.8)
+    # tier 4 limit
+    parser.add_argument("--max_requests_per_minute", type=int, default=10_000 * 0.5)
+    parser.add_argument("--max_tokens_per_minute", type=int, default=10_000_000 * 0.5)
+    #
     parser.add_argument("--token_encoding_name", default="o200k_base")
     parser.add_argument("--max_attempts", type=int, default=5)
     parser.add_argument("--logging_level", default=logging.INFO)

@@ -20,3 +20,4 @@ plots/
 *.bin
 *.safetensors
 *tfevents*
+watcher_state.yaml

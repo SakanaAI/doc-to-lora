@@ -204,3 +204,9 @@ if __name__ == "__main__":
         print(
             f"Saved {fname}_neg.parquet to data/raw_datasets/ctx_qa/{fname}_neg.parquet"
         )
+        # val_ds = ds.take(500)
+        # ds = ds.skip(500)
+        # ds.to_parquet(f"data/raw_datasets/fw_qa_large/{fname}.parquet")
+        # val_ds.to_parquet(f"data/raw_datasets/fw_qa_large/{fname}_val.parquet")
+        # print(f"Saved {fname} to data/raw_datasets/fw_qa_large/{fname}.parquet")
+        # print(f"Saved {fname}_val to data/raw_datasets/fw_qa_large/{fname}_val.parquet")
