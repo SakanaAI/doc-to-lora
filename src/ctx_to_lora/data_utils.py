@@ -88,11 +88,7 @@ DS_KWARGS = {
     "drop": dict(
         train=dict(
             path="ucinlp/drop",
-            split="train[900:]",
-        ),
-        validation=dict(
-            path="ucinlp/drop",
-            split="train[:900]",
+            split="train",
         ),
     ),
     "narrativeqa": dict(
@@ -138,7 +134,7 @@ DS_KWARGS = {
     "openmathintx-2": dict(
         train=dict(
             path="nvidia/OpenMathInstruct-2",
-            split="train_1M[:100000]",
+            split="train_1M[:500000]",
         ),
     ),
 }
