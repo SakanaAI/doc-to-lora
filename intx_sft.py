@@ -257,7 +257,7 @@ def main():
     run_name = (
         get_run_name(seed_str=training_args.logging_dir.strip("runs/"))
         if not checkpoint_dir
-        else checkpoint_dir.split("/")[-2]
+        else checkpoint_dir.strip("/").split("/")[-2]
     )
 
     output_dir = f"train_outputs/runs/{run_name}"
@@ -296,40 +296,59 @@ def main():
 
     ############ Model setup
 
-    model_name = model_args.model_name_or_path
-    model, tokenizer = get_model_and_tokenizer(
-        **vars(model_args),
-        train=True,
-        requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
-        peft_config=get_lora_config(model_name, **vars(lora_args)),
-    )
-    ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
-    if ctx_name is not None:
-        ctx_encoder_model_config = AutoConfig.from_pretrained(ctx_name)
-        if "Llama" in ctx_name and "Vision" in ctx_name:
-            ctx_encoder_model_config = ctx_encoder_model_config.text_config
-        ctx_tokenizer = get_tokenizer(ctx_name)
-    else:
-        ctx_encoder_model_config = model.config
-        ctx_tokenizer = tokenizer
+    if not ctx_args.from_pretrained_checkpoint:
+        model_name = model_args.model_name_or_path
+        model, tokenizer = get_model_and_tokenizer(
+            **vars(model_args),
+            train=True,
+            requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
+            peft_config=get_lora_config(model_name, **vars(lora_args)),
+        )
+        ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
+        if ctx_name is not None:
+            ctx_encoder_model_config = AutoConfig.from_pretrained(
+                ctx_name, trust_remote_code=True
+            )
+            if "Llama" in ctx_name and "Vision" in ctx_name:
+                ctx_encoder_model_config = ctx_encoder_model_config.text_config
+            ctx_tokenizer = get_tokenizer(ctx_name)
+        else:
+            ctx_encoder_model_config = model.config
+            ctx_tokenizer = tokenizer
 
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
         logger.info("Using HyperLoRA")
-        hypernet_config = get_hypernet_config(
-            model, ctx_encoder_model_config, hypernet_args, aggregator_args
-        )
-        if ctx_encoder_args.layer_idx is None:
-            ctx_encoder_args.layer_idx = ctx_encoder_model_config.num_hidden_layers // 4
-            logger.info(
-                f"Using the first {ctx_encoder_args.layer_idx} layers"
-                " as the context encoder"
+        if not ctx_args.from_pretrained_checkpoint:
+            hypernet_config = get_hypernet_config(
+                model, ctx_encoder_model_config, hypernet_args, aggregator_args
             )
-        model = ModulatedPretrainedModel(
-            model,
-            hypernet_config,
-            ctx_encoder_args,
-            ctx_args.use_kl_loss,
-        )
+            if ctx_encoder_args.layer_idx is None:
+                ctx_encoder_args.layer_idx = (
+                    ctx_encoder_model_config.num_hidden_layers // 4
+                )
+                logger.info(
+                    f"Using the first {ctx_encoder_args.layer_idx} layers"
+                    " as the context encoder"
+                )
+            model = ModulatedPretrainedModel(
+                model,
+                hypernet_config,
+                ctx_encoder_args,
+                ctx_args.use_kl_loss,
+            )
+        else:
+            logger.info(
+                f"Loading from checkpoint: {ctx_args.from_pretrained_checkpoint}"
+            )
+            model = ModulatedPretrainedModel.from_state_dict(
+                torch.load(open(ctx_args.from_pretrained_checkpoint, "rb")),
+                train=True,
+            )
+            tokenizer = get_tokenizer(model.base_model.config.name_or_path)
+            ctx_name = model.ctx_encoder_args.ctx_encoder_model_name_or_path
+            if ctx_name is None:
+                ctx_name = model.base_model.config.name_or_path
+            ctx_tokenizer = get_tokenizer(ctx_name)
         if len([p for p in model.ctx_encoder.parameters() if p.requires_grad]):
             raise ValueError("ctx_encoder contains trainable parameters")
         if len([p for p in model.base_model.parameters() if p.requires_grad]):

@@ -143,7 +143,7 @@ def save_generated_text(samples, output_dir, split):
             f.write(json.dumps(sample) + "\n")
 
 
-def decode_test_result(test_dataset, test_result, tokenizer):
+def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
     out = []
     for sample, pred_toks in zip(test_dataset, test_result.predictions):
         # sample and labels are not padded
@@ -168,14 +168,16 @@ def decode_test_result(test_dataset, test_result, tokenizer):
         d["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
         d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True)
         if "ctx_ids" in sample:
-            d["context"] = tokenizer.decode(sample["ctx_ids"], skip_special_tokens=True)
+            d["context"] = ctx_tokenizer.decode(
+                sample["ctx_ids"], skip_special_tokens=True
+            )
         out.append(d)
 
     return out
 
 
 @torch.no_grad()
-def eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs):
+def eval_generation(eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen_kwargs):
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
     out = {}
@@ -186,7 +188,7 @@ def eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs):
             metric_key_prefix=split_name,
             **gen_kwargs,
         )
-        decoded_txts = decode_test_result(ds, eval_result, tokenizer)
+        decoded_txts = decode_test_result(ds, eval_result, tokenizer, ctx_tokenizer)
         rouge_metrics = compute_rouge(
             [txt["generated"] for txt in decoded_txts],
             [txt["label"] for txt in decoded_txts],
@@ -428,7 +430,9 @@ def evaluate(checkpoint_path, args, split, generative):
             out.update(metrics)
     else:
         eval_trainer = Seq2SeqTrainer(**trainer_kwargs)
-        metrics = eval_generation(eval_trainer, tokenizer, datasets, split, gen_kwargs)
+        metrics = eval_generation(
+            eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen_kwargs
+        )
         out.update(metrics)
 
     clear_gpu()
@@ -466,4 +470,4 @@ if __name__ == "__main__":
         shutil.rmtree(args.output_dir)
 
     evaluate(checkpoint_path, args, split="validation", generative=False)
-    # evaluate(checkpoint_path, args, split="validation", generative=True)
+    evaluate(checkpoint_path, args, split="validation", generative=True)

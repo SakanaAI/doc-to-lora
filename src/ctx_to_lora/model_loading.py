@@ -38,7 +38,8 @@ def get_model_and_tokenizer(
     )
     tokenizer = get_tokenizer(model_name_or_path, tokenizer_kwargs, peft_config, train)
     model.config.pad_token_id = tokenizer.pad_token_id
-    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    if getattr(model, "generation_config", None):
+        model.generation_config.pad_token_id = tokenizer.pad_token_id
     return model, tokenizer
 
 
@@ -65,6 +66,7 @@ def get_tokenizer(
         model_name_or_path,
         padding_side=padding_side,
         truncation_side=truncation_side,
+        trust_remote_code=True,
         **tokenizer_kwargs,
     )
 
@@ -128,17 +130,22 @@ def get_model(
     if model_kwargs is not None:
         model_init_kwargs.update(model_kwargs)
     if use_flash_attn:
-        if "gemma" not in model_name_or_path:
+        if ("gemma" not in model_name_or_path) and ("gte" not in model_name_or_path):
             model_init_kwargs["attn_implementation"] = "flash_attention_2"
     if is_vision_model:
         model_init_kwargs["attn_implementation"] = "sdpa"
         model_init_kwargs.pop("use_cache")
         # for training disable cache
+    elif "gte" in model_name_or_path:
+        model_init_kwargs["attn_implementation"] = "sdpa"
+        model_init_kwargs["torch_dtype"] = torch.float32
+        model_init_kwargs.pop("use_cache")
     # if train and not is_vision_model:
     #     model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     if not is_vision_model:
-        model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
+        # model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
+        model = AutoModel.from_pretrained(**model_init_kwargs)
     else:
         model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
         model = model.language_model

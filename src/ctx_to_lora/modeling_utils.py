@@ -344,7 +344,10 @@ class EarlyExit(nn.Module):
     def __init__(self, base_model: PreTrainedModel, exit_layer: int):
         super().__init__()
         self.base_model = base_model
-        self.base_model.layers = base_model.layers[:exit_layer]
+        if "gte" in base_model.config.name_or_path:
+            self.base_model.encoder.layer = base_model.encoder.layer[:exit_layer]
+        else:
+            self.base_model.layers = base_model.layers[:exit_layer]
         # self.exit_layer = exit_layer
 
     @torch.no_grad()
@@ -612,7 +615,7 @@ class ModulatedPretrainedModel(nn.Module):
         #         if any(module_name in name for module_name in trainable_base_modules):
         #             param.requires_grad = True
 
-        self.hypernet = HyperLoRA(self.hypernet_config).to(self.device)
+        self.hypernet = HyperLoRA(self.hypernet_config).to(self.device).to(torch.float32)
         # ctx_encoder_name =
         # if self.ctx_encoder_args.ctx_encoder_model_name_or_path is not None:
         #     encoder_model = get_model(
@@ -627,12 +630,14 @@ class ModulatedPretrainedModel(nn.Module):
             ctx_model_name = self.base_model.config.name_or_path
         # use an explicit copy of the base model
         # for using with "modules_to_save"
+        base_model_attn_impl = self.base_model.config._attn_implementation
+        logger.debug(f"ctx_model_name: {ctx_model_name}")
+        logger.debug(f"base_model.config._attn_implementation: {base_model_attn_impl}")
         encoder_model = get_model(
             ctx_model_name,
             train=True,
             requires_grad=False,
-            use_flash_attn=self.base_model.config._attn_implementation
-            == "flash_attention_2",
+            use_flash_attn=base_model_attn_impl == "flash_attention_2",
         )
         self.ctx_encoder = EarlyExit(
             get_base_model(encoder_model), self.ctx_encoder_args.layer_idx

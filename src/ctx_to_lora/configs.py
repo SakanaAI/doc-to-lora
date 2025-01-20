@@ -228,6 +228,10 @@ class ModelArguments:
         default=None,
         metadata={"help": ("Base model name or path.")},
     )
+    use_flash_attn: bool = field(
+        default=True,
+        metadata={"help": "Whether to use flash attention."},
+    )
     # use_peft: bool = field(
     #     default=False,
     #     metadata={"help": ("Whether to use PEFT or not for training.")},
