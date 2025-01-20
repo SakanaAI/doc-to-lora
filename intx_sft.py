@@ -313,6 +313,7 @@ def main():
                 ctx_encoder_model_config = ctx_encoder_model_config.text_config
             ctx_tokenizer = get_tokenizer(ctx_name)
         else:
+            ctx_name = model.base_model.config.name_or_path
             ctx_encoder_model_config = model.config
             ctx_tokenizer = tokenizer
 
@@ -519,7 +520,7 @@ def main():
             _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
             if ctx_name is not None:
                 logger.info("Applying liger-kernel to ctx_encoder_model")
-                _apply_liger_kernel_to_instance(model=model.ctx_encoder)
+                _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)
         elif isinstance(model, PeftModel):
             logger.info("Applying liger-kernel to PeftModel")
             _apply_liger_kernel_to_instance(model=model.base_model.model)
