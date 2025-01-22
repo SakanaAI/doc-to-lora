@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +32,7 @@ from transformers import (
     PerceiverModel,
     PreTrainedModel,
     PretrainedConfig,
+    PreTrainedTokenizerBase,
 )
 from transformers.models.perceiver.modeling_perceiver import (
     PerceiverBasicDecoder,
@@ -326,10 +328,10 @@ def maybe_add_batch_dim(kwargs):
     try:
         batched_input = False
         batched_attn_mask = False
-        if len(kwargs["input_ids"].shape) == 1:
+        if "input_ids" in kwargs and len(kwargs["input_ids"].shape) == 1:
             kwargs["input_ids"] = kwargs["input_ids"].unsqueeze(0)
             batched_input = True
-        if len(kwargs["attention_mask"].shape) == 1:
+        if "attention_mask" in kwargs and len(kwargs["attention_mask"].shape) == 1:
             kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
             batched_attn_mask = True
         yield batched_input, batched_attn_mask
@@ -349,6 +351,10 @@ class EarlyExit(nn.Module):
         else:
             self.base_model.layers = base_model.layers[:exit_layer]
         # self.exit_layer = exit_layer
+
+    @property
+    def config(self):
+        return self.base_model.config
 
     @torch.no_grad()
     def forward(self, **kwargs):
@@ -568,12 +574,14 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_encoder_args: CtxEncoderArguments,
         # use_kl_loss is only used for training
         use_kl_loss: bool = False,
+        use_base_input_as_ctx: bool = False,
     ):
         super().__init__()
         self.device = base_model.device
         self.hypernet_config = hypernet_config
         self.ctx_encoder_args = ctx_encoder_args
         self.use_kl_loss = use_kl_loss
+        self.use_base_input_as_ctx = use_base_input_as_ctx
 
         self.register_module("base_model", base_model)
         self._init_model()
@@ -776,10 +784,12 @@ class ModulatedPretrainedModel(nn.Module):
         self,
         ctx_ids: Integer[Tensor, "bs ctx_len"],
         ctx_attn_mask: Integer[Tensor, "bs ctx_len"],
+        *args: Any,
+        **kwargs: Any,
     ):
         with torch.no_grad():
             ctx_features = self.ctx_encoder(
-                input_ids=ctx_ids, attention_mask=ctx_attn_mask
+                input_ids=ctx_ids, attention_mask=ctx_attn_mask, *args, **kwargs
             )
         return self.hypernet.generate_loras(ctx_features, ctx_attn_mask)
 
@@ -788,15 +798,16 @@ class ModulatedPretrainedModel(nn.Module):
         # ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
         ctx_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_len"]] = None,
-        chat_ids: Optional[Integer[Tensor, "bs chat_len"]] = None,
-        chat_attn_mask: Optional[Integer[Tensor, "bs chat_len"]] = None,
-        chat_labels: Optional[Integer[Tensor, "bs chat_len"]] = None,
+        # chat_ids: Optional[Integer[Tensor, "bs chat_len"]] = None,
+        # chat_attn_mask: Optional[Integer[Tensor, "bs chat_len"]] = None,
+        # chat_labels: Optional[Integer[Tensor, "bs chat_len"]] = None,
+        *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ) -> Union[tuple, ModelOutput]:
         """Forward pass of the modulated model."""
 
         generated_loras = None
-        if ctx_ids is None:
+        if ctx_ids is None and not self.use_base_input_as_ctx:
             logger.warning(
                 (
                     "*" * 100,
@@ -809,6 +820,17 @@ class ModulatedPretrainedModel(nn.Module):
             # return model_outputs
 
         else:
+            if self.use_base_input_as_ctx:
+                ctx_ids = (
+                    model_inputs_kwargs["input_ids"]
+                    if "input_ids" in model_inputs_kwargs
+                    else model_inputs_args[0]
+                )
+                ctx_attn_mask = (
+                    model_inputs_kwargs["attention_mask"]
+                    if "attention_mask" in model_inputs_kwargs
+                    else None
+                )
             with torch.no_grad():
                 ctx_features = self.ctx_encoder(
                     input_ids=ctx_ids, attention_mask=ctx_attn_mask
@@ -821,41 +843,44 @@ class ModulatedPretrainedModel(nn.Module):
         # - select only the position of the label tokens (but we're actually not using the labels themselves)
         # - compute kl loss between the two logits
         if self.use_kl_loss and "labels" in model_inputs_kwargs:
-            bs = chat_ids.shape[0]
-            labels = model_inputs_kwargs.pop("labels")  # [bs, prompt_res_len]
-            first_label_pos = torch.argmax((labels != -100).float(), dim=-1)
-            # just a place holder, we dont use labels as groundtruth anyway
-            labels[torch.arange(bs), first_label_pos - 1] = 1
-            # same for chat_labels
-            first_label_pos = torch.argmax((chat_labels != -100).float(), dim=-1)
-            chat_labels[torch.arange(bs), first_label_pos - 1] = 1
+            raise NotImplementedError("Not implemented")
+            # bs = chat_ids.shape[0]
+            # labels = model_inputs_kwargs.pop("labels")  # [bs, prompt_res_len]
+            # first_label_pos = torch.argmax((labels != -100).float(), dim=-1)
+            # # just a place holder, we dont use labels as groundtruth anyway
+            # labels[torch.arange(bs), first_label_pos - 1] = 1
+            # # same for chat_labels
+            # first_label_pos = torch.argmax((chat_labels != -100).float(), dim=-1)
+            # chat_labels[torch.arange(bs), first_label_pos - 1] = 1
 
-            with torch.no_grad():
-                chat_outputs = self.base_model(
-                    input_ids=chat_ids, attention_mask=chat_attn_mask
-                )
+            # with torch.no_grad():
+            #     chat_outputs = self.base_model(
+            #         input_ids=chat_ids, attention_mask=chat_attn_mask
+            #     )
 
-            with apply_generated_loras(
-                self.base_model,
-                generated_loras,
-                self.hypernet.layer_indices,
-                self.training,
-            ):
-                model_outputs = self.base_model(**model_inputs_kwargs)
-                pred_logits = model_outputs.logits  # [bs, prompt_res_len, vocab_size]
+            # with apply_generated_loras(
+            #     self.base_model,
+            #     generated_loras,
+            #     self.hypernet.layer_indices,
+            #     self.training,
+            # ):
+            #     model_outputs = self.base_model(
+            #         *model_inputs_args, **model_inputs_kwargs
+            #     )
+            #     pred_logits = model_outputs.logits  # [bs, prompt_res_len, vocab_size]
 
-            # [bs, ctx_prompt_res_len, vocab_size]
-            base_chat_logits = chat_outputs.logits
-            base_chat_logits = base_chat_logits[torch.where(chat_labels != -100)]
-            pred_logits = pred_logits[torch.where(labels != -100)]
-            kl_loss = F.kl_div(
-                F.log_softmax(pred_logits, dim=-1),
-                F.softmax(base_chat_logits, dim=-1),
-                reduction="none",
-            )
-            # only compute kl loss on tokens where labels != -100
-            kl_loss = kl_loss.sum(dim=-1).mean()
-            model_outputs = ModelOutput(loss=kl_loss, **model_outputs)
+            # # [bs, ctx_prompt_res_len, vocab_size]
+            # base_chat_logits = chat_outputs.logits
+            # base_chat_logits = base_chat_logits[torch.where(chat_labels != -100)]
+            # pred_logits = pred_logits[torch.where(labels != -100)]
+            # kl_loss = F.kl_div(
+            #     F.log_softmax(pred_logits, dim=-1),
+            #     F.softmax(base_chat_logits, dim=-1),
+            #     reduction="none",
+            # )
+            # # only compute kl loss on tokens where labels != -100
+            # kl_loss = kl_loss.sum(dim=-1).mean()
+            # model_outputs = ModelOutput(loss=kl_loss, **model_outputs)
         else:
             # input_ids in model_inputs_kwargs contains only
             # prompt + response (for hypernet training)
@@ -865,7 +890,9 @@ class ModulatedPretrainedModel(nn.Module):
                 self.hypernet.layer_indices,
                 self.training,
             ):
-                model_outputs = self.base_model(**model_inputs_kwargs)
+                model_outputs = self.base_model(
+                    *model_inputs_args, **model_inputs_kwargs
+                )
 
         return model_outputs
 
@@ -874,10 +901,11 @@ class ModulatedPretrainedModel(nn.Module):
         self,
         ctx_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
+        *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
         generated_loras = None
-        if ctx_ids is None:
+        if ctx_ids is None and not self.use_base_input_as_ctx:
             logger.warning(
                 (
                     "*" * 100,
@@ -889,6 +917,17 @@ class ModulatedPretrainedModel(nn.Module):
             # model_outputs.generated_loras = None
             # return model_outputs
         else:
+            if self.use_base_input_as_ctx:
+                ctx_ids = (
+                    model_inputs_kwargs["input_ids"]
+                    if "input_ids" in model_inputs_kwargs
+                    else model_inputs_args[0]
+                )
+                ctx_attn_mask = (
+                    model_inputs_kwargs["attention_mask"]
+                    if "attention_mask" in model_inputs_kwargs
+                    else None
+                )
             ctx_features = self.ctx_encoder(
                 input_ids=ctx_ids, attention_mask=ctx_attn_mask
             )
@@ -902,8 +941,97 @@ class ModulatedPretrainedModel(nn.Module):
             self.hypernet.layer_indices,
             self.training,
         ):
-            model_outputs = self.base_model.generate(**model_inputs_kwargs)
+            model_outputs = self.base_model.generate(
+                *model_inputs_args, **model_inputs_kwargs
+            )
         return model_outputs
+
+
+class ModulatedModelWithSharedInput(nn.Module):
+    def __init__(
+        self,
+        modulated_model: ModulatedPretrainedModel,
+        base_tokenizer: PreTrainedTokenizerBase,
+        ctx_tokenizer: PreTrainedTokenizerBase,
+        ctx_end_predicate: Optional[str] = None,
+        remove_ctx_from_base_input: bool = False,
+    ):
+        super().__init__()
+        self.modulated_model = modulated_model
+        self.base_tokenizer = base_tokenizer
+        self.ctx_tokenizer = ctx_tokenizer
+        self.register_module("modulated_model", self.modulated_model)
+        self.ctx_end_predicate = ctx_end_predicate
+        self.remove_ctx_from_base_input = remove_ctx_from_base_input
+
+    # delegate to self.modulated_model
+    @property
+    def config(self):
+        return self.modulated_model.config
+
+    @property
+    def device(self):
+        return self.modulated_model.device
+
+    def tie_weights(self):
+        self.modulated_model.base_model.tie_weights()
+
+    def state_dict(self, *args, **kwargs):
+        return self.modulated_model.state_dict(*args, **kwargs)
+
+    def forward(self, *args, **kwargs):
+        input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
+        input_txts = self.base_tokenizer.batch_decode(
+            input_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+        )
+        ctx_txts = deepcopy(input_txts)
+        if self.ctx_end_predicate:
+            ctx_txts = [
+                txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
+            ]
+        ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
+            self.device
+        )
+        ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
+        if self.remove_ctx_from_base_input:
+            raise NotImplementedError("Not implemented")
+            # input_txts = [
+            #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
+            # ]
+            # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
+            # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
+            # kwargs["input_ids"] = input_ids
+            # kwargs["attention_mask"] = attention_mask
+        return self.modulated_model(ctx_ids, ctx_attn_mask, *args, **kwargs)
+
+    def generate(self, *args, **kwargs):
+        input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
+        input_txts = self.base_tokenizer.batch_decode(
+            input_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+        )
+        ctx_txts = deepcopy(input_txts)
+        if self.ctx_end_predicate:
+            ctx_txts = [
+                txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
+            ]
+        ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
+            self.device
+        )
+        ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
+        if self.remove_ctx_from_base_input:
+            raise NotImplementedError("Not implemented")
+            # input_txts = [
+            #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
+            # ]
+            # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
+            # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
+            # kwargs["input_ids"] = input_ids
+            # kwargs["attention_mask"] = attention_mask
+        return self.modulated_model.generate(ctx_ids, ctx_attn_mask, *args, **kwargs)
 
 
 @contextmanager

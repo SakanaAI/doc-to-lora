@@ -46,6 +46,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     AutoConfig,
+    PretrainedConfig,
     DataCollatorForSeq2Seq,
     EvalPrediction,
     HfArgumentParser,
@@ -357,6 +358,10 @@ def main():
             raise ValueError("base model contains trainable parameters")
     else:
         # activate LoRA
+        base_model_config = AutoConfig.from_pretrained(
+            model_args.model_name_or_path, trust_remote_code=True
+        )
+        base_model_config.save_pretrained(output_dir)
         logger.info("Using LoRA")
         model.set_adapter("default")
 

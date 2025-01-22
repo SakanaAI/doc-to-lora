@@ -1,9 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=gemma_llama_vision
+#SBATCH --job-name=gemma_pixtral
 #SBATCH --partition=a3
 #SBATCH --nodes=1
 #SBATCH --gpus=8
-#SBATCH --exclude=slurm0-a3nodeset-7
 #SBATCH --output=outputs/%x-%j.out
 #SBATCH --error=outputs/%x-%j.out
 
@@ -19,12 +18,12 @@
 conda activate /home/rujikorn_sakana_ai/.conda/envs/llm-modulator
 # eval "$@"
 
-accelerate launch --num_processes=8 --gradient_accumulation_steps=2 --gradient_clipping=1.0 \
+accelerate launch --num_processes=8 --gradient_accumulation_steps=4 --gradient_clipping=1.0 \
 --gpu_ids all --main_process_port 29554 intx_sft.py configs/pretrain_all.yaml \
---model_name_or_path=google/gemma-2-2b-it --num_train_epochs=5.1 --per_device_train_batch_size=8 \
---gradient_accumulation_steps=2 --per_device_eval_batch_size=4 --exp_setup=hyper_lora --aggregator_type=perceiver \
+--model_name_or_path=google/gemma-2-2b-it --num_train_epochs=5.1 --per_device_train_batch_size=4 \
+--gradient_accumulation_steps=4 --per_device_eval_batch_size=4 --exp_setup=hyper_lora --aggregator_type=perceiver \
 --target_modules=down_proj,up_proj --num_blocks=1 --num_self_attends_per_block=16 \
---self_attention_widening_factor=4 --eval_steps=5000 --save_steps=5000 --learning_rate=2e-5 \
+--self_attention_widening_factor=1 --eval_steps=5000 --save_steps=5000 --learning_rate=2e-5 \
 --neftune_noise_alpha=5 --use_light_weight_lora=True --light_weight_latent_size=512 \
 --load_best_model_at_end=True --metric_for_best_model=pwc_loss --add_negative_prompt=False \
 --add_repeat_prompt=False --ctx_encoder_model_name_or_path=meta-llama/Llama-3.2-11B-Vision-Instruct

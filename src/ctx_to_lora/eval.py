@@ -464,10 +464,6 @@ if __name__ == "__main__":
     args.output_dir = f"{run_dir}/eval-results-{cur_it}"
     args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
     args.run_name = run_dir.split("/")[-1]
-    if os.path.exists(args.output_dir):
-        # remove the existing output dir
-        print(f"Removing existing output dir: {args.output_dir}")
-        shutil.rmtree(args.output_dir)
 
     evaluate(checkpoint_path, args, split="validation", generative=False)
     evaluate(checkpoint_path, args, split="validation", generative=True)

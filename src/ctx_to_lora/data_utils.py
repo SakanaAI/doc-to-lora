@@ -134,7 +134,19 @@ DS_KWARGS = {
     "openmathintx-2": dict(
         train=dict(
             path="nvidia/OpenMathInstruct-2",
-            split="train_1M[:500000]",
+            split="train_1M[:100000]",
+        ),
+    ),
+    "opencoder-edu": dict(
+        train=dict(
+            path="OpenCoder-LLM/opc-sft-stage2",
+            name="educational_instruct",
+            split="train[900:]",
+        ),
+        validation=dict(
+            path="OpenCoder-LLM/opc-sft-stage2",
+            name="educational_instruct",
+            split="train[:900]",
         ),
     ),
 }
@@ -280,7 +292,7 @@ def get_tokenized_dataset(
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat
     try:
-        ds = load_dataset(**get_ds_kwargs(ds_name, split))
+        ds = load_dataset(**get_ds_kwargs(ds_name, split), trust_remote_code=True)
     except ValueError as e:
         logger.info(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}\nSkipping..."
@@ -562,6 +574,15 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
                 "context": sample["question"],
                 "prompt": sample["question"],
                 "response": sample["answer"],
+            }
+
+    elif "opencoder-edu" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["instruction"],
+                "prompt": sample["instruction"],
+                "response": "```python\n" + sample["code"].strip() + "\n```",
             }
 
     return f
