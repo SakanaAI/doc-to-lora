@@ -103,6 +103,7 @@ class HypernetConfig:
     latent_size: int
     use_light_weight_lora: bool
     light_weight_latent_size: int
+    dropout_rate: float
 
     lora_config: LoraConfig
     module_names: dict[str, list[str]]
@@ -215,21 +216,22 @@ class MLPResidualBlock(nn.Module):
         output_size: int,
         pre_layer_norm: bool = True,
         post_dropout: bool = True,
+        dropout_rate: float = 0,
     ):
         super().__init__()
         layers = []
         if pre_layer_norm:
             layers.append(nn.LayerNorm(input_size))
         layers += [
-            nn.Dropout(0.05),
+            nn.Dropout(dropout_rate),
             nn.Linear(input_size, hidden_size),
             nn.SiLU(),
-            nn.Dropout(0.05),
+            nn.Dropout(dropout_rate),
             nn.Linear(hidden_size, output_size),
             nn.SiLU(),
         ]
         if post_dropout:
-            layers.append(nn.Dropout(0.05))
+            layers.append(nn.Dropout(dropout_rate))
         self.mlp = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -437,6 +439,7 @@ class HyperLoRA(nn.Module):
             input_size=self.config.latent_size,
             hidden_size=self.config.latent_size * 4,
             output_size=self.config.latent_size,
+            dropout_rate=self.config.dropout_rate,
         )
 
         if self.config.use_light_weight_lora:

@@ -180,7 +180,7 @@ def get_lora_config(model_dir, **kwargs):
         peft_type=PeftType.LORA,
         base_model_name_or_path=model_dir,
         task_type="CAUSAL_LM",
-        lora_dropout=kwargs.get("lora_dropout", 0.05),
+        lora_dropout=kwargs.get("lora_dropout", 0.0),
         lora_alpha=r ** (3 / 2) * 2,
     )
 

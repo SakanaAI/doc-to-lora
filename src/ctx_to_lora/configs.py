@@ -245,7 +245,7 @@ class LoRAArguments:
         metadata={"help": ("LoRA R value.")},
     )
     lora_dropout: Optional[float] = field(
-        default=0.05,
+        default=0,
         metadata={"help": ("LoRA dropout.")},
     )
     target_modules: Optional[list[str]] = field(
@@ -339,6 +339,10 @@ class HypernetArguments:
     light_weight_latent_size: int = field(
         default=128,
         metadata={"help": "Latent size for light-weight LoRA."},
+    )
+    dropout_rate: float = field(
+        default=0.0,
+        metadata={"help": "Dropout rate for HyperLoRA."},
     )
     # trainable_base_modules: Optional[list[str]] = field(
     #     default=None,
