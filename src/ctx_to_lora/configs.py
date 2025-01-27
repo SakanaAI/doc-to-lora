@@ -154,6 +154,10 @@ class TrainingArguments(TrainingArguments):
         default=0.95,
         metadata={"help": "Adam beta 2."},
     )
+    adam_epsilon: float = field(
+        default=1e-6,
+        metadata={"help": "Adam epsilon."},
+    )
     lr_scheduler_type: str = field(
         default="cosine_with_min_lr",
         metadata={"help": "Learning rate scheduler type."},
@@ -245,7 +249,7 @@ class LoRAArguments:
         metadata={"help": ("LoRA R value.")},
     )
     lora_dropout: Optional[float] = field(
-        default=0,
+        default=0.02,
         metadata={"help": ("LoRA dropout.")},
     )
     target_modules: Optional[list[str]] = field(
@@ -275,6 +279,10 @@ class CtxTrainingArguments:
     max_ctx_len: Optional[int] = field(
         default=2**13,
         metadata={"help": "Maximum context length for training."},
+    )
+    use_multipack_sampler: bool = field(
+        default=False,
+        metadata={"help": "Whether to use multipack sampler."},
     )
     max_new_tokens: Optional[int] = field(
         default=2**10,
@@ -344,10 +352,10 @@ class HypernetArguments:
         default=0.0,
         metadata={"help": "Dropout rate for HyperLoRA."},
     )
-    # trainable_base_modules: Optional[list[str]] = field(
-    #     default=None,
-    #     metadata={"help": ("Modules to train of the base model.")},
-    # )
+    extra_modules: Optional[list[str]] = field(
+        default=None,
+        metadata={"help": "Extra modules to train."},
+    )
 
 
 @dataclass

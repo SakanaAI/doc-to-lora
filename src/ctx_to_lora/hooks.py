@@ -185,3 +185,50 @@ def add_generated_lora_hook(
             return newoutput
 
     return apply_hook_to_layers(model, [module_name], [layer_index], post_hook=lora_hook)
+
+
+def add_generated_layernorm_hook(
+    model: torch.nn.Module,
+    module_name: str,
+    layer_index: int,
+    W: Float[Tensor, "bs hidden_size"],
+    training: bool,
+) -> list[RemovableHandle]:
+    """
+    Adds layer normalization hooks to specified modules and layers.
+
+    Args:
+        model (torch.nn.Module): Model to hook
+        module_name (str): Name of layernorm module (e.g., "input_layernorm")
+        layer_index (int): Index of layer to modify
+        W (Tensor): Learned weight tensor of shape [batch_size, hidden_size]
+        training (bool): Whether model is in training mode
+
+    Returns:
+        list[RemovableHandle]: Hook handles for removal
+    """
+
+    def layernorm_hook(
+        module: torch.nn.Module,
+        args: tuple,
+        output: Float[Tensor, "bs seq_len hidden_size"],
+    ) -> Float[Tensor, "bs seq_len hidden_size"]:
+        # For models that return tuples from layernorm (e.g., some attention implementations)
+        if isinstance(output, tuple):
+            main_output = output[0]
+            rest = output[1:]
+        else:
+            main_output = output
+            rest = None
+
+        x = args[0].to(W.dtype)
+        # Apply learned weights to layernorm output
+        # Unsqueeze to add seq_len dimension for broadcasting
+        scaled_output = x * W.unsqueeze(1)
+        new_output = main_output + scaled_output.to(output.dtype)
+
+        return (new_output, *rest) if rest else new_output
+
+    return apply_hook_to_layers(
+        model, [module_name], [layer_index], post_hook=layernorm_hook
+    )
