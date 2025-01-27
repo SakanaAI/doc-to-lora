@@ -14,6 +14,7 @@ from typing import Callable
 import numpy as np
 import torch
 from datasets import disable_caching
+from peft import PeftModel
 from rouge_score import rouge_scorer
 from transformers import (
     GenerationConfig,
@@ -23,6 +24,8 @@ from transformers import (
     EvalPrediction,
     set_seed,
 )
+from transformers.utils import is_liger_kernel_available
+
 
 from ctx_to_lora.data_utils import get_tokenized_dataset
 from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
@@ -304,8 +307,9 @@ def generation_collator(inp_list, tokenizer):
         {"input_ids": input_ids, "attention_mask": attn_mask}, **padding_kwargs
     )
 
-    out["labels"] = labels
-
+    # we don't include the labels in the output
+    # since we don't want to compute the loss on the labels
+    # during generation
     if "ctx_ids" in inp_list[0]:
         # have to be manual since it has [ctx_len, features] shape
         # pad to the longest ctx_len in the batch
@@ -330,8 +334,10 @@ def generation_collator(inp_list, tokenizer):
 
 def evaluate(checkpoint_path, args, split, generative):
     assert split in ["validation", "test"]
+    state_dict = torch.load(checkpoint_path)
+    ctx_name = state_dict["ctx_encoder_args"].ctx_encoder_model_name_or_path
     model = ModulatedPretrainedModel.from_state_dict(
-        torch.load(checkpoint_path),
+        state_dict,
         train=False,
         use_flash_attn=True,
     )
@@ -345,8 +351,8 @@ def evaluate(checkpoint_path, args, split, generative):
     model.base_model.generation_config.pad_token_id = tokenizer.pad_token_id
 
     ctx_tokenizer = tokenizer
-    if args.ctx_encoder_model_name_or_path:
-        ctx_tokenizer = get_tokenizer(args.ctx_encoder_model_name_or_path, train=False)
+    if ctx_name:
+        ctx_tokenizer = get_tokenizer(ctx_name, train=False)
         if ctx_tokenizer.pad_token_id is None:
             ctx_tokenizer.pad_token_id = ctx_tokenizer.eos_token_id
 
