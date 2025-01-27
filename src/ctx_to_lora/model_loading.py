@@ -130,31 +130,36 @@ def get_model(
     if model_kwargs is not None:
         model_init_kwargs.update(model_kwargs)
 
+    is_bidir_model = (
+        "bert" in model_name_or_path.lower() or "gte" in model_name_or_path.lower()
+    )
+
+    if use_flash_attn:
+        if "gte" not in model_name_or_path:
+            model_init_kwargs["attn_implementation"] = "flash_attention_2"
+        elif "gte" in model_name_or_path:
+            model_init_kwargs["attn_implementation"] = "sdpa"
+
     if is_vision_model:
         # always use sdpa for vision models
         model_init_kwargs["attn_implementation"] = "sdpa"
         model_init_kwargs.pop("use_cache")
-    elif "gte" in model_name_or_path:
+    elif is_bidir_model:
         model_init_kwargs["torch_dtype"] = torch.float32
         model_init_kwargs.pop("use_cache")
-
-    if use_flash_attn:
-        if ("gemma" not in model_name_or_path) and ("gte" not in model_name_or_path):
-            model_init_kwargs["attn_implementation"] = "flash_attention_2"
-        elif "gte" in model_name_or_path:
-            model_init_kwargs["attn_implementation"] = "sdpa"
 
     # if train and not is_vision_model:
     #     model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     if not is_vision_model:
-        if "gte" in model_name_or_path:
+        if is_bidir_model:
             model = AutoModel.from_pretrained(**model_init_kwargs)
         else:
             model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
     else:
         model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
         model = model.language_model
+        # model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
     if peft_config is not None:
         model = PeftModel(model, peft_config)
     model.train(train)
@@ -174,6 +179,9 @@ def get_model(
 
 
 def get_lora_config(model_dir, **kwargs):
+    if "target_modules" not in kwargs:
+        logger.info("No target modules specified for LoRA.")
+        return None
     r = kwargs.pop("lora_r", 8)
     peft_conf_kwargs = dict(
         r=r,
