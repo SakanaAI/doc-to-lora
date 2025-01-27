@@ -284,6 +284,12 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to use multipack sampler."},
     )
+    per_device_train_max_batch_len: Optional[int] = field(
+        default=2**12,
+        metadata={
+            "help": "Maximum batch length for training. Only used with multipack sampler."
+        },
+    )
     max_new_tokens: Optional[int] = field(
         default=2**10,
         metadata={"help": "Maximum new tokens for generation-based evaluation."},

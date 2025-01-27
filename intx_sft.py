@@ -526,7 +526,9 @@ def main():
         """
         lengths = np.array([len(x["ctx_ids"]) for x in train_ds])
         batch_sampler = MultipackDistributedBatchSampler(
-            batch_max_length=2048, lengths=lengths, seed=training_args.seed
+            batch_max_length=ctx_args.per_device_train_max_batch_len,
+            lengths=lengths,
+            seed=training_args.seed,
         )
 
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
