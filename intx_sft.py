@@ -319,6 +319,7 @@ def main():
             ctx_tokenizer = tokenizer
 
     if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
+        # TODO: handle only extra_modules case (no target_modules)
         logger.info("Using HyperLoRA")
         if not ctx_args.from_pretrained_checkpoint:
             hypernet_config = get_hypernet_config(
@@ -510,6 +511,24 @@ def main():
             out["chat_labels"] = chat_labels
         return out
 
+    batch_sampler = None
+    if ctx_args.use_multipack_sampler:
+        from multipack_sampler.multipack_sampler import MultipackDistributedBatchSampler
+
+        """
+        sampler = MultipackDistributedBatchSampler(
+            batch_max_length=batch_max_len,
+            lengths=lengths,
+            seed=0
+        )
+
+        dataloader = DataLoader(data, batch_sampler=sampler)
+        """
+        lengths = np.array([len(x["ctx_ids"]) for x in train_ds])
+        batch_sampler = MultipackDistributedBatchSampler(
+            batch_max_length=2048, lengths=lengths, seed=training_args.seed
+        )
+
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
     # TODO: use packing with SFTTrainer
 
@@ -551,6 +570,7 @@ def main():
         val_ds,
         test_ds,
         partial(train_collator, tokenizer=tokenizer),
+        train_batch_sampler=batch_sampler,
         # partial(generation_collator, tokenizer=tokenizer),
         compute_metrics=partial(
             compute_metrics,
