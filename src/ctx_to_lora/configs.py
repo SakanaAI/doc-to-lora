@@ -284,6 +284,10 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to use multipack sampler."},
     )
+    use_sequence_packing: bool = field(
+        default=False,
+        metadata={"help": "Whether to use sequence packing."},
+    )
     per_device_train_max_batch_len: Optional[int] = field(
         default=2**12,
         metadata={

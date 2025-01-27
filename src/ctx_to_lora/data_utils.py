@@ -287,6 +287,7 @@ def get_tokenized_dataset(
     add_repeat_prompt: bool,
     add_negative_prompt: bool,
     use_kl_loss: bool,
+    set_format: Optional[str] = None,
 ) -> dict[str, Any]:
 
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
@@ -319,6 +320,7 @@ def get_tokenized_dataset(
         use_kl_loss,
         need_ctx_ids,
         ds,
+        set_format,
     )
     return tokenized_ds
 
@@ -332,6 +334,7 @@ def construct_and_tokenize_ctx_qa(
     use_kl_loss,
     need_ctx_ids,
     ds,
+    set_format=None,
 ):
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
@@ -395,7 +398,7 @@ def construct_and_tokenize_ctx_qa(
     tokenized_ds = tokenized_ds.remove_columns(
         ["messages", "chat", "context", "prompt", "response"]
     )
-    tokenized_ds.set_format(type="pt")
+    tokenized_ds.set_format(type=set_format)
     validate_columns(tokenized_ds)
     return tokenized_ds
 
