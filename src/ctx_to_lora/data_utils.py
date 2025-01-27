@@ -719,11 +719,21 @@ def tokenize_chat_messages(
 
 
 def tokenize_ctx_text(
-    example: dict[str, Any],
+    samples: dict[str, Any],
     tokenizer: PreTrainedTokenizerBase,
 ) -> dict[str, Any]:
-    text = example["context"]
-    tokenized_text = tokenizer(text)
+    if tokenizer.chat_template:
+        txt = tokenizer.apply_chat_template(
+            [[{"role": "user", "content": text.strip()}] for text in samples["context"]],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        # special tokens are already added by the chat template
+        tokenized_text = tokenizer(txt, truncation=False, add_special_tokens=False)
+    else:
+        txt = samples["context"]
+        tokenized_text = tokenizer(txt, truncation=False)
+
     ctx_ids = tokenized_text["input_ids"]
     ctx_attn_mask = tokenized_text["attention_mask"]
     return dict(ctx_ids=ctx_ids, ctx_attn_mask=ctx_attn_mask)
