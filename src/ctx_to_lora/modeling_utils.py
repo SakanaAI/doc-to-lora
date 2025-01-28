@@ -94,7 +94,6 @@ def get_aggregator_config(
     num_modules: int,
     aggregator_args: AggregatorArguments,
 ):
-    lora_config = model.peft_config["default"]
     return AggregatorConfig(
         feature_size=ctx_encoder_model_config.hidden_size,
         output_size=output_size,
@@ -112,7 +111,7 @@ class HypernetConfig:
     dropout_rate: float
 
     lora_config: LoraConfig
-    module_names: dict[str, list[str]]
+    # module_names: dict[str, list[str]]
     extra_modules: Optional[list[str]]
     base_hidden_size: int
 
@@ -127,16 +126,18 @@ def get_hypernet_config(
     hypernet_args: HypernetArguments,
     aggregator_args: AggregatorArguments,
 ):
-    lora_config = model.peft_config["default"]
-    num_modules = len(lora_config.target_modules) + len(
-        hypernet_args.extra_modules or []
-    )
+    num_modules = 0
+    lora_config = getattr(model, "peft_config", None)
+    if lora_config is not None:
+        lora_config = lora_config["default"]
+        num_modules += len(lora_config.target_modules)
+    num_modules += len(hypernet_args.extra_modules or [])
     indices = torch.arange(get_num_layers(model), device=model.device)
     return HypernetConfig(
         **vars(hypernet_args),
         base_hidden_size=model.config.hidden_size,
         lora_config=lora_config,
-        module_names=get_lora_module_names(model, lora_config.target_modules, indices),
+        # module_names=get_lora_module_names(model, lora_config.target_modules, indices),
         layer_indices=indices,
         feature_sizes=get_peft_in_out_features(model, peft_config=lora_config),
         aggregator_config=get_aggregator_config(
@@ -482,62 +483,57 @@ class HyperLoRA(nn.Module):
 
         self.d_in, self.d_out = self.config.feature_sizes
 
-        self.layers = MLPResidualBlock(
-            input_size=self.config.latent_size,
-            hidden_size=self.config.latent_size * 4,
-            output_size=self.config.latent_size,
-            dropout_rate=getattr(self.config, "dropout_rate", 0),
-        )
-        # self.pre_layers_norm = nn.LayerNorm(self.config.latent_size)
-        # self.norm = nn.LayerNorm(self.config.latent_size)
-        if self.extra_modules:
-            self.extra_layers = MLPResidualBlock(
+        if self.target_modules:
+            self.layers = MLPResidualBlock(
                 input_size=self.config.latent_size,
                 hidden_size=self.config.latent_size * 4,
                 output_size=self.config.latent_size,
                 dropout_rate=getattr(self.config, "dropout_rate", 0),
             )
-            # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
-            # self.extra_norm = nn.LayerNorm(self.config.latent_size)
-        if self.config.use_light_weight_lora:
-            # light-weight lora projection (per module)
+            if self.config.use_light_weight_lora:
+                # light-weight lora projection (per module)
 
-            self.pre_lora_projection = nn.ParameterDict(
-                {
-                    k: nn.Parameter(
-                        torch.randn(self.d_in[k], self.config.light_weight_latent_size)
-                    )
-                    for k in self.target_modules
+                self.pre_lora_projection = nn.ParameterDict(
+                    {
+                        k: nn.Parameter(
+                            torch.randn(
+                                self.d_in[k], self.config.light_weight_latent_size
+                            )
+                        )
+                        for k in self.target_modules
+                    }
+                )
+                for param in self.pre_lora_projection.values():
+                    nn.init.orthogonal_(param)
+
+                self.post_lora_projection = nn.ParameterDict(
+                    {
+                        k: nn.Parameter(
+                            torch.randn(
+                                self.d_out[k], self.config.light_weight_latent_size
+                            )
+                        )
+                        for k in self.target_modules
+                    }
+                )
+                for param in self.post_lora_projection.values():
+                    nn.init.orthogonal_(param)
+
+                d_lora = self.config.light_weight_latent_size * 2
+                self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
+                self.d_out = {
+                    k: self.config.light_weight_latent_size for k in self.d_out
                 }
-            )
-            for param in self.pre_lora_projection.values():
-                nn.init.orthogonal_(param)
 
-            self.post_lora_projection = nn.ParameterDict(
-                {
-                    k: nn.Parameter(
-                        torch.randn(self.d_out[k], self.config.light_weight_latent_size)
-                    )
-                    for k in self.target_modules
-                }
-            )
-            for param in self.post_lora_projection.values():
-                nn.init.orthogonal_(param)
+                logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
+            else:
+                d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
-            d_lora = self.config.light_weight_latent_size * 2
-            self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
-            self.d_out = {k: self.config.light_weight_latent_size for k in self.d_out}
-
-            logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
-        else:
-            d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
-
-        n_modules = len(self.target_modules)
-        # have to do this otherwise doesnt work with adamw_torch_fused
-        # has something to do with the bias shape (n_modules r d_lora)
-        # when n_modules == 1, adamw_torch_fused complains about device/layout
-        # but when n_modules > 1, it works fine
-        if n_modules > 0:
+            n_modules = len(self.target_modules)
+            # have to do this otherwise doesnt work with adamw_torch_fused
+            # has something to do with the bias shape (n_modules r d_lora)
+            # when n_modules == 1, adamw_torch_fused complains about device/layout
+            # but when n_modules > 1, it works fine
             if n_modules == 1:
                 self.head = Mix(
                     "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
@@ -561,9 +557,18 @@ class HyperLoRA(nn.Module):
                     d_lora=d_lora,
                 )
 
-        # separate head for extra_modules, e.g., layernorm
-        n_extra_modules = len(self.extra_modules) if self.extra_modules else 0
-        if n_extra_modules > 0:
+        if self.extra_modules:
+            self.extra_layers = MLPResidualBlock(
+                input_size=self.config.latent_size,
+                hidden_size=self.config.latent_size * 4,
+                output_size=self.config.latent_size,
+                dropout_rate=getattr(self.config, "dropout_rate", 0),
+            )
+            # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
+            # self.extra_norm = nn.LayerNorm(self.config.latent_size)
+
+            # separate head for extra_modules, e.g., layernorm
+            n_extra_modules = len(self.extra_modules) if self.extra_modules else 0
             if n_extra_modules == 1:
                 self.extra_head = Mix(
                     "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
@@ -585,6 +590,8 @@ class HyperLoRA(nn.Module):
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
     ) -> dict[str, dict[str, Float[Tensor, "bs n_layers r _"]]]:
+        if self.target_modules is None:
+            return None
         # list of [bs, n_layers, r, in_d_outim]
         # and in_d_outim might vary across modules
         loras = unpack(
@@ -649,8 +656,10 @@ class HyperLoRA(nn.Module):
         )
 
         # [bs, n_layers, n_modules, r, max_in_d_outim]
-        lora_emb = self.layers(lora_emb)
-        flat_loras = self.head(lora_emb)
+        flat_loras = None
+        if self.target_modules:
+            lora_emb = self.layers(lora_emb)
+            flat_loras = self.head(lora_emb)
 
         flat_layernorms = None
         if self.num_extra_modules:
@@ -704,7 +713,7 @@ class ModulatedPretrainedModel(nn.Module):
         use_flash_attn: bool = True,
     ):
         lora_config = state_dict["hypernet_config"].lora_config
-        model_name_or_path = lora_config.base_model_name_or_path
+        model_name_or_path = state_dict["base_model_name_or_path"]
         base_model = get_model(
             model_name_or_path,
             train=train,
@@ -776,42 +785,46 @@ class ModulatedPretrainedModel(nn.Module):
 
     @torch.no_grad()
     def _bias_hyper_init(self):
-        peft_weights = get_init_peft_weights(self.base_model, self.hypernet.lora_config)
-        logger.debug(f"peft_weights: {peft_weights}")
-        self.hypernet.head.weight.data[:] = 0
-        self.hypernet.head.bias.data[:] = 0
-        if self.hypernet.config.extra_modules:
+        if self.hypernet.extra_modules:
             self.hypernet.extra_head.weight.data[:] = 0
             self.hypernet.extra_head.bias.data[:] = 0
-        # d_in = self.hypernet.d_in
-        # d_out = self.hypernet.d_out
-        # m = max(self.hypernet.target_modules, key=lambda m: d_in[m] + d_out[m])
+        if self.hypernet.target_modules:
+            peft_weights = get_init_peft_weights(
+                self.base_model, self.hypernet.lora_config
+            )
+            logger.debug(f"peft_weights: {peft_weights}")
+            self.hypernet.head.weight.data[:] = 0
+            self.hypernet.head.bias.data[:] = 0
 
-        # A = peft_weights[m]["lora_A"].weight.clone()[:, : d_in[m]]  # [r, d_in]
-        # B = peft_weights[m]["lora_B"].weight.clone()[: d_out[m]]  # [d_out, r]
-        # biases = [A, B.T]
+            # d_in = self.hypernet.d_in
+            # d_out = self.hypernet.d_out
+            # m = max(self.hypernet.target_modules, key=lambda m: d_in[m] + d_out[m])
 
-        # # bias-hyperinit
-        # # init weights to zeros and bias to the base weights
-        # bias_cat = torch.cat(biases, dim=1)
-        # self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
-        for i, m in enumerate(self.hypernet.target_modules):
-            A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
-            B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
-            if self.hypernet.config.use_light_weight_lora:
-                A = A[:, : self.hypernet.config.light_weight_latent_size]
-                B = B[: self.hypernet.config.light_weight_latent_size]
-            biases = [A, B.T]
+            # A = peft_weights[m]["lora_A"].weight.clone()[:, : d_in[m]]  # [r, d_in]
+            # B = peft_weights[m]["lora_B"].weight.clone()[: d_out[m]]  # [d_out, r]
+            # biases = [A, B.T]
 
-            # bias-hyperinit
-            # init weights to zeros and bias to the base weights
-            bias_cat = torch.cat(biases, dim=1)
-            self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
-            # if len(self.hypernet.target_modules) > 1:
-            #     self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
-            # else:
-            #     self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
-        # self.hypernet.head.bias.requires_grad = False
+            # # bias-hyperinit
+            # # init weights to zeros and bias to the base weights
+            # bias_cat = torch.cat(biases, dim=1)
+            # self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
+            for i, m in enumerate(self.hypernet.target_modules):
+                A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
+                B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
+                if self.hypernet.config.use_light_weight_lora:
+                    A = A[:, : self.hypernet.config.light_weight_latent_size]
+                    B = B[: self.hypernet.config.light_weight_latent_size]
+                biases = [A, B.T]
+
+                # bias-hyperinit
+                # init weights to zeros and bias to the base weights
+                bias_cat = torch.cat(biases, dim=1)
+                self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
+                # if len(self.hypernet.target_modules) > 1:
+                #     self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
+                # else:
+                #     self.hypernet.head.bias.data[..., :, : bias_cat.shape[1]] = bias_cat
+            # self.hypernet.head.bias.requires_grad = False
 
     def state_dict(self, *args, **kwargs):
         # we assume ctx_encoder and base model is frozen here
@@ -835,22 +848,21 @@ class ModulatedPretrainedModel(nn.Module):
         #             base_state_dict[name] = param.data
 
         # state_dict["base_model"] = base_state_dict
+        state_dict["base_model_name_or_path"] = self.base_model.name_or_path
         state_dict["hypernet_config"] = self.hypernet_config
         state_dict["ctx_encoder_args"] = self.ctx_encoder_args
         return state_dict
 
     def load_state_dict(self, state_dict: dict, *args, **kwargs):
         # NOTE: might have to set `strict=False` as we don't save all the params
+        self.base_model_name_or_path = state_dict.pop("base_model_name_or_path")
         self.hypernet_config = state_dict.pop("hypernet_config")
         self.ctx_encoder_args = state_dict.pop("ctx_encoder_args")
-        if (
-            self.hypernet_config.lora_config.base_model_name_or_path
-            != self.base_model.name_or_path
-        ):
+        if self.base_model_name_or_path != self.base_model.name_or_path:
             raise ValueError(
                 f"Base model name or path mismatch. "
                 f"The base model given is: {self.base_model.name_or_path}, "
-                f"but the hypernet config is for: {self.hypernet_config.lora_config.base_model_name_or_path}"
+                f"but the loaded name is: {self.base_model_name_or_path}"
             )
         self._init_model()
         state_dict.pop("base_model", None)
