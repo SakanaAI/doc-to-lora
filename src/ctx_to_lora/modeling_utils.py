@@ -57,6 +57,7 @@ from ctx_to_lora.utils import (
     get_peft_in_out_features,
     get_base_model,
 )
+from ctx_to_lora.modeling_idefics2 import Idefics2PerceiverConfig, Idefics2Perceiver
 
 logger = logging.getLogger()
 
@@ -164,36 +165,54 @@ class Perceiver(nn.Module):
         super().__init__()
         self.num_layers = num_layers
         self.num_modules = num_modules
-        self.config = PerceiverConfig(
-            d_model=feature_size,  # + num_bands
-            num_latents=num_layers * num_modules * num_latent_factor,
-            d_latents=output_size,
-            # attention_probs_dropout_prob=0.0,
-            # num_blocks=8,
-            # num_self_attends_per_block=6,
-            # self_attention_widening_factor=4,
-            **kwargs,
-        )
-        decoder = PerceiverBasicDecoder(
-            self.config,
-            output_num_channels=output_size,
-            output_index_dims=num_layers * num_modules,
-            num_channels=output_size,
-            final_project=False,
-            trainable_position_encoding_kwargs=dict(
-                num_channels=output_size,
-                index_dims=num_layers * num_modules,
-            ),
-        )
+        # self.config = PerceiverConfig(
+        #     d_model=feature_size,  # + num_bands
+        #     num_latents=num_layers * num_modules * num_latent_factor,
+        #     d_latents=output_size,
+        #     # attention_probs_dropout_prob=0.0,
+        #     # num_blocks=8,
+        #     # num_self_attends_per_block=6,
+        #     # self_attention_widening_factor=4,
+        #     **kwargs,
+        # )
+        # decoder = PerceiverBasicDecoder(
+        #     self.config,
+        #     output_num_channels=output_size,
+        #     output_index_dims=num_layers * num_modules,
+        #     num_channels=output_size,
+        #     final_project=False,
+        #     trainable_position_encoding_kwargs=dict(
+        #         num_channels=output_size,
+        #         index_dims=num_layers * num_modules,
+        #     ),
+        # )
 
-        self.perceiver = PerceiverModel(self.config, decoder=decoder)
+        # self.perceiver = PerceiverModel(self.config, decoder=decoder)
+        self.config = Idefics2PerceiverConfig(
+            input_size=feature_size,
+            # the first layer is xattn
+            resampler_depth=kwargs["num_self_attends_per_block"] + 1,
+            resampler_n_latents=num_layers * num_modules * num_latent_factor,
+            intermediate_size_factor=4,
+            hidden_size=output_size,
+            attn_implementation="flash_attention_2",
+        )
+        self.decoder_config = Idefics2PerceiverConfig(
+            input_size=output_size,
+            resampler_depth=1,
+            resampler_n_latents=num_layers * num_modules,
+            hidden_size=output_size,
+            attn_implementation="flash_attention_2",
+        )
+        self.perceiver = Idefics2Perceiver(self.config, self.decoder_config)
 
     def forward(
         self,
         ctx_features: Float[Tensor, "bs seq_len feature_dim"],
         ctx_attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        ctx_position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
-        x = self.perceiver(ctx_features, ctx_attn_mask).logits
+        x = self.perceiver(ctx_features, ctx_attn_mask, ctx_position_ids)
         x = rearrange(
             x,
             "bs (n_layers n_modules) d -> bs n_layers n_modules d",
@@ -342,10 +361,18 @@ def maybe_add_batch_dim(kwargs):
     try:
         batched_input = False
         batched_attn_mask = False
-        if "input_ids" in kwargs and len(kwargs["input_ids"].shape) == 1:
+        if (
+            "input_ids" in kwargs
+            and kwargs["input_ids"] is not None
+            and len(kwargs["input_ids"].shape) == 1
+        ):
             kwargs["input_ids"] = kwargs["input_ids"].unsqueeze(0)
             batched_input = True
-        if "attention_mask" in kwargs and len(kwargs["attention_mask"].shape) == 1:
+        if (
+            "attention_mask" in kwargs
+            and kwargs["attention_mask"] is not None
+            and len(kwargs["attention_mask"].shape) == 1
+        ):
             kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
             batched_attn_mask = True
         yield batched_input, batched_attn_mask
@@ -370,7 +397,7 @@ class EarlyExit(nn.Module):
     def config(self):
         return self.base_model.config
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def forward(self, **kwargs):
         # if len(kwargs["input_ids"].shape) == 1:
         #     kwargs["input_ids"] = kwargs["input_ids"].unsqueeze(0)
@@ -461,8 +488,8 @@ class HyperLoRA(nn.Module):
             output_size=self.config.latent_size,
             dropout_rate=getattr(self.config, "dropout_rate", 0),
         )
-        self.pre_layers_norm = nn.LayerNorm(self.config.latent_size)
-        self.norm = nn.LayerNorm(self.config.latent_size)
+        # self.pre_layers_norm = nn.LayerNorm(self.config.latent_size)
+        # self.norm = nn.LayerNorm(self.config.latent_size)
         if self.extra_modules:
             self.extra_layers = MLPResidualBlock(
                 input_size=self.config.latent_size,
@@ -470,8 +497,8 @@ class HyperLoRA(nn.Module):
                 output_size=self.config.latent_size,
                 dropout_rate=getattr(self.config, "dropout_rate", 0),
             )
-            self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
-            self.extra_norm = nn.LayerNorm(self.config.latent_size)
+            # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
+            # self.extra_norm = nn.LayerNorm(self.config.latent_size)
         if self.config.use_light_weight_lora:
             # light-weight lora projection (per module)
 
@@ -610,10 +637,11 @@ class HyperLoRA(nn.Module):
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
         attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
 
         # [bs, n_layers, n_total_modules, feature_dim]
-        emb = self.aggregator(features.to(torch.float32), attn_mask)
+        emb = self.aggregator(features, attn_mask, position_ids)
         lora_emb, extra_emb = unpack(
             emb,
             [[self.num_modules], [self.num_extra_modules]],
@@ -621,17 +649,13 @@ class HyperLoRA(nn.Module):
         )
 
         # [bs, n_layers, n_modules, r, max_in_d_outim]
-        lora_emb = self.norm(self.layers(self.pre_layers_norm(lora_emb)))
+        lora_emb = self.layers(lora_emb)
         flat_loras = self.head(lora_emb)
 
         flat_layernorms = None
         if self.num_extra_modules:
             # [bs, n_layers, n_extra_modules, base_hidden_size]
-            emb = self.extra_norm(
-                self.extra_layers(
-                    self.pre_extra_layers_norm(extra_emb[:, :, self.num_modules :])
-                )
-            )
+            extra_emb = self.extra_layers(extra_emb)
             flat_layernorms = self.extra_head(extra_emb)
 
         return flat_loras, flat_layernorms
@@ -640,8 +664,12 @@ class HyperLoRA(nn.Module):
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
         attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+        position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
-        flat_loras, flat_layernorms = self.forward(features, attn_mask)
+        flat_loras, flat_layernorms = self.forward(features, attn_mask, position_ids)
+        # print(f"flat_loras: {flat_loras.shape}")
+        # if flat_layernorms is not None:
+        #     print(f"flat_layernorms: {flat_layernorms.shape}")
         return self._to_lora_dict(flat_loras), self._to_layernorm_dict(flat_layernorms)
 
 
@@ -735,7 +763,7 @@ class ModulatedPretrainedModel(nn.Module):
         self.base_model = self.base_model.to(*args, **kwargs)
         self.ctx_encoder = self.ctx_encoder.to(*args, **kwargs)
         # self.hypernet = self.hypernet.to(*args, **kwargs)
-        self.hypernet.to(torch.float32)
+        # self.hypernet.to(torch.float32)
         return self
 
     # Delegate to base_model
@@ -865,21 +893,62 @@ class ModulatedPretrainedModel(nn.Module):
     def generate_weights(
         self,
         ctx_ids: Integer[Tensor, "bs ctx_len"],
-        ctx_attn_mask: Integer[Tensor, "bs ctx_len"],
+        ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_len"]] = None,
+        ctx_position_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         *args: Any,
         **kwargs: Any,
     ):
-        with torch.inference_mode():
+        with torch.no_grad():
+            # TODO: for modernbert ctx_encoder pass
+            # `cu_seq_len` and `max_seq_len` to the forward call
             ctx_features = self.ctx_encoder(
-                input_ids=ctx_ids, attention_mask=ctx_attn_mask, *args, **kwargs
+                input_ids=ctx_ids,
+                attention_mask=ctx_attn_mask,
+                position_ids=ctx_position_ids,
+                *args,
+                **kwargs,
             )
-        return self.hypernet.generate_weights(ctx_features, ctx_attn_mask)
+        # print(f"padded ctx_features: {ctx_features.shape}")
+        # if ctx_attn_mask is not None:
+        #     print(f"padded ctx_attn_mask: {ctx_attn_mask.shape}")
+        # if ctx_position_ids is not None:
+        #     print(f"padded ctx_position_ids: {ctx_position_ids.shape}")
+
+        return self.hypernet.generate_weights(
+            ctx_features, ctx_attn_mask, ctx_position_ids
+        )
+
+    # @torch.inference_mode()
+    # def _unpack(self, ctx_position_ids, ctx_features):
+    #     # [1, len, d] -> [len, d]
+    #     ctx_features = ctx_features.squeeze(0)
+    #     lengths = torch.where(ctx_position_ids == 0)[1]
+    #     total_len = torch.tensor([len(ctx_features)], device=self.device)
+    #     lengths = torch.cat([lengths, total_len])
+    #     # compute the difference between the lengths
+    #     lens = torch.diff(lengths).unsqueeze(1)
+
+    #     ctx_features = unpack(ctx_features, lens, "* d")
+    #     ctx_attn_mask = [torch.ones(len(x), device=self.device) for x in ctx_features]
+    #     ctx_features = torch.nn.utils.rnn.pad_sequence(
+    #         ctx_features,
+    #         batch_first=True,
+    #         padding_value=0,
+    #     )
+    #     ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
+    #         ctx_attn_mask,
+    #         batch_first=True,
+    #         padding_value=0,
+    #     )
+
+    #     return ctx_features, ctx_attn_mask
 
     def forward(
         self,
         # ctx_features: Optional[Float[Tensor, "bs ctx_length feature_dim"]] = None,
         ctx_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_len"]] = None,
+        ctx_position_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         # chat_ids: Optional[Integer[Tensor, "bs chat_len"]] = None,
         # chat_attn_mask: Optional[Integer[Tensor, "bs chat_len"]] = None,
         # chat_labels: Optional[Integer[Tensor, "bs chat_len"]] = None,
@@ -889,6 +958,7 @@ class ModulatedPretrainedModel(nn.Module):
         """Forward pass of the modulated model."""
 
         generated_loras = None
+        generated_layernorms = None
         if ctx_ids is None and not self.use_base_input_as_ctx:
             logger.warning(
                 (
@@ -913,78 +983,48 @@ class ModulatedPretrainedModel(nn.Module):
                     if "attention_mask" in model_inputs_kwargs
                     else None
                 )
-            with torch.inference_mode():
-                ctx_features = self.ctx_encoder(
-                    input_ids=ctx_ids, attention_mask=ctx_attn_mask
+                ctx_position_ids = (
+                    model_inputs_kwargs["position_ids"]
+                    if "position_ids" in model_inputs_kwargs
+                    else None
                 )
-            generated_loras, generated_layernorms = self.hypernet.generate_weights(
-                ctx_features, ctx_attn_mask
+            # with torch.inference_mode():
+            #     ctx_features = self.ctx_encoder(
+            #         input_ids=ctx_ids,
+            #         attention_mask=ctx_attn_mask,
+            #         position_ids=ctx_position_ids,
+            #     )
+            # generated_loras, generated_layernorms = self.hypernet.generate_weights(
+            #     ctx_features, ctx_attn_mask
+            # )
+            generated_loras, generated_layernorms = self.generate_weights(
+                ctx_ids, ctx_attn_mask, ctx_position_ids
             )
 
-        # compute kl loss
-        # - compute logits from the base model from tokenized chat [bs, chat_len, vocab_size]
-        # - compute logits from model w/ generated loras [bs, answer_len, vocab_size]
-        # - select only the position of the label tokens (but we're actually not using the labels themselves)
-        # - compute kl loss between the two logits
-        if self.use_kl_loss and "labels" in model_inputs_kwargs:
-            raise NotImplementedError("Not implemented")
-            # bs = chat_ids.shape[0]
-            # labels = model_inputs_kwargs.pop("labels")  # [bs, prompt_res_len]
-            # first_label_pos = torch.argmax((labels != -100).float(), dim=-1)
-            # # just a place holder, we dont use labels as groundtruth anyway
-            # labels[torch.arange(bs), first_label_pos - 1] = 1
-            # # same for chat_labels
-            # first_label_pos = torch.argmax((chat_labels != -100).float(), dim=-1)
-            # chat_labels[torch.arange(bs), first_label_pos - 1] = 1
-
-            # with torch.no_grad():
-            #     chat_outputs = self.base_model(
-            #         input_ids=chat_ids, attention_mask=chat_attn_mask
-            #     )
-
-            # with apply_generated_loras(
-            #     self.base_model,
-            #     generated_loras,
-            #     self.hypernet.layer_indices,
-            #     self.training,
-            # ):
-            #     model_outputs = self.base_model(
-            #         *model_inputs_args, **model_inputs_kwargs
-            #     )
-            #     pred_logits = model_outputs.logits  # [bs, prompt_res_len, vocab_size]
-
-            # # [bs, ctx_prompt_res_len, vocab_size]
-            # base_chat_logits = chat_outputs.logits
-            # base_chat_logits = base_chat_logits[torch.where(chat_labels != -100)]
-            # pred_logits = pred_logits[torch.where(labels != -100)]
-            # kl_loss = F.kl_div(
-            #     F.log_softmax(pred_logits, dim=-1),
-            #     F.softmax(base_chat_logits, dim=-1),
-            #     reduction="none",
-            # )
-            # # only compute kl loss on tokens where labels != -100
-            # kl_loss = kl_loss.sum(dim=-1).mean()
-            # model_outputs = ModelOutput(loss=kl_loss, **model_outputs)
-        else:
-            # input_ids in model_inputs_kwargs contains only
-            # prompt + response (for hypernet training)
-            with (
-                apply_generated_loras(
-                    self.base_model,
-                    generated_loras,
-                    self.hypernet.layer_indices,
-                    self.training,
-                ),
-                apply_generated_layernorm(
-                    self.base_model,
-                    generated_layernorms,
-                    self.hypernet.layer_indices,
-                    self.training,
-                ),
-            ):
-                model_outputs = self.base_model(
-                    *model_inputs_args, **model_inputs_kwargs
-                )
+        # input_ids in model_inputs_kwargs contains only
+        # prompt + response (for hypernet training)
+        position_ids = (
+            model_inputs_kwargs["position_ids"]
+            if "position_ids" in model_inputs_kwargs
+            else None
+        )
+        with (
+            apply_generated_loras(
+                self.base_model,
+                generated_loras,
+                self.hypernet.layer_indices,
+                position_ids,
+                self.training,
+            ),
+            apply_generated_layernorm(
+                self.base_model,
+                generated_layernorms,
+                self.hypernet.layer_indices,
+                position_ids,
+                self.training,
+            ),
+        ):
+            model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
         return model_outputs
 
@@ -993,10 +1033,12 @@ class ModulatedPretrainedModel(nn.Module):
         self,
         ctx_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
+        ctx_position_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
         generated_loras = None
+        generated_layernorms = None
         if ctx_ids is None and not self.use_base_input_as_ctx:
             logger.warning(
                 (
@@ -1020,26 +1062,41 @@ class ModulatedPretrainedModel(nn.Module):
                     if "attention_mask" in model_inputs_kwargs
                     else None
                 )
-            ctx_features = self.ctx_encoder(
-                input_ids=ctx_ids, attention_mask=ctx_attn_mask
-            )
-            generated_loras, generated_layernorms = self.hypernet.generate_weights(
-                ctx_features, ctx_attn_mask
+                ctx_position_ids = (
+                    model_inputs_kwargs["position_ids"]
+                    if "position_ids" in model_inputs_kwargs
+                    else None
+                )
+            # ctx_features = self.ctx_encoder(
+            #     input_ids=ctx_ids, attention_mask=ctx_attn_mask
+            # )
+            # generated_loras, generated_layernorms = self.hypernet.generate_weights(
+            #     ctx_features, ctx_attn_mask
+            # )
+            generated_loras, generated_layernorms = self.generate_weights(
+                ctx_ids, ctx_attn_mask, ctx_position_ids
             )
 
         # apply lora hook to the base model
         # self.apply_generated_loras(generated_loras)
+        position_ids = (
+            model_inputs_kwargs["position_ids"]
+            if "position_ids" in model_inputs_kwargs
+            else None
+        )
         with (
             apply_generated_loras(
                 self.base_model,
                 generated_loras,
                 self.hypernet.layer_indices,
+                position_ids,
                 self.training,
             ),
             apply_generated_layernorm(
                 self.base_model,
                 generated_layernorms,
                 self.hypernet.layer_indices,
+                position_ids,
                 self.training,
             ),
         ):
@@ -1141,6 +1198,7 @@ def apply_generated_layernorm(
     base_model: nn.Module,
     generated_layernorms: Optional[dict[str, Float[Tensor, "bs n_layers h"]]] = None,
     layer_indices: Optional[Iterable[int]] = None,
+    position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
     training: bool = False,
 ):
     if generated_layernorms is None:
@@ -1156,6 +1214,7 @@ def apply_generated_layernorm(
                     module_name,
                     layer_idx,
                     W=generated_layernorms[module_name][:, layer_idx],
+                    position_ids=position_ids,
                     training=training,
                 )
         yield base_model
@@ -1168,6 +1227,7 @@ def apply_generated_loras(
     base_model: nn.Module,
     generated_loras: Optional[dict] = None,
     layer_indices: Optional[Iterable[int]] = None,
+    position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
     training: bool = False,
 ):
     if generated_loras is None:
@@ -1187,12 +1247,23 @@ def apply_generated_loras(
                     B=generated_loras[module_name]["B"][:, layer_idx],
                     scaling=base_model.peft_config["default"].lora_alpha,
                     input_dropout=base_model.peft_config["default"].lora_dropout,
+                    position_ids=position_ids,
                     training=training,
                 )
 
         yield base_model
     finally:
         remove_hook_handles(hooks)
+
+
+@contextmanager
+def apply_generated_loras_packed_sequence(
+    base_model: nn.Module,
+    generated_loras: Optional[dict] = None,
+    layer_indices: Optional[Iterable[int]] = None,
+    training: bool = False,
+):
+    pass
 
 
 # needed for loading model from checkpoint

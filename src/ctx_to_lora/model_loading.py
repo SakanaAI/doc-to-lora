@@ -179,7 +179,7 @@ def get_model(
 
 
 def get_lora_config(model_dir, **kwargs):
-    if "target_modules" not in kwargs:
+    if "target_modules" not in kwargs or kwargs["target_modules"] is None:
         logger.info("No target modules specified for LoRA.")
         return None
     r = kwargs.pop("lora_r", 8)

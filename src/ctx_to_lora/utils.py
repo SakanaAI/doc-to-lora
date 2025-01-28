@@ -162,7 +162,7 @@ def get_peft_in_out_features(
 ) -> tuple[dict[str, int], dict[str, int]]:
 
     if peft_config is None:
-        peft_config = model.peft_config["default"]
+        return None, None
     in_features = dict()
     out_features = dict()
     for module_name, module in model.named_modules():

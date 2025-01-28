@@ -538,7 +538,10 @@ def main():
 
         if isinstance(model, ModulatedPretrainedModel):
             logger.info("Applying liger-kernel to ModulatedPretrainedModel")
-            _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
+            if isinstance(model.base_model, PeftModel):
+                _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
+            else:
+                _apply_liger_kernel_to_instance(model=model.base_model.model)
             if ctx_name is not None:
                 logger.info("Applying liger-kernel to ctx_encoder_model")
                 _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)

@@ -5,7 +5,7 @@ from typing import Callable, Iterable, Optional
 import torch
 import torch.nn.functional as F
 from einops import einsum
-from jaxtyping import Float
+from jaxtyping import Float, Integer
 from torch import Tensor
 from torch.utils.hooks import RemovableHandle
 from ctx_to_lora.utils import get_layers
@@ -133,7 +133,8 @@ def add_generated_lora_hook(
     B: Float[Tensor, "bs d_out r"],
     scaling: float,
     input_dropout: float,
-    training: bool,
+    position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    training: bool = False,
 ) -> list[RemovableHandle]:
     """
     Adds LoRA hooks to the specified modules and layers of the model.
@@ -184,7 +185,51 @@ def add_generated_lora_hook(
         else:
             return newoutput
 
-    return apply_hook_to_layers(model, [module_name], [layer_index], post_hook=lora_hook)
+    if position_ids is not None:
+        position_ids = position_ids.squeeze()
+        seq_lens = position_ids[torch.where(position_ids == 0)[0][1:] - 1]
+        seq_lens = torch.cat(
+            [seq_lens, torch.tensor([position_ids[-1]], device=seq_lens.device)]
+        )
+        seq_lens += 1
+
+    def lora_hook_packed_sequence(
+        module: torch.nn.Module,
+        args: tuple | Float[Tensor, "bs seq_len d_in"],
+        output: Float[Tensor, "bs seq_len d_out"],
+    ) -> Float[Tensor, "bs seq_len d_out"]:
+        if isinstance(output, tuple):
+            model_out = output[0]
+        else:
+            model_out = output
+
+        # bs of x should be 1 in this case
+        x = args[0].to(A.dtype)  # [1, tot_seq_len, d_in]
+        # print(f"seq_lens: {seq_lens}")
+        # print(f"sum of seq_lens: {seq_lens.sum()}")
+        # print(f"tot_len: {x.shape[1]}")
+        delta_x = F.dropout(x, input_dropout, training)
+        n_seq = A.shape[0]
+        # [tot_seq_len, r, d_in]
+        repeated_A = A.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
+        # [tot_seq_len, d_out, r]
+        repeated_B = B.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
+        delta_x = einsum(
+            repeated_A, delta_x, "tot_len r d_in, bs tot_len d_in -> bs tot_len r"
+        )
+        delta_x = einsum(
+            repeated_B, delta_x, "tot_len d_out r, bs tot_len r -> bs tot_len d_out"
+        )
+        delta_x = delta_x * scaling
+        newoutput = model_out + delta_x.to(model_out.dtype)
+        if isinstance(output, tuple):
+            return (newoutput, *output[1:])
+        else:
+            return newoutput
+
+    hook_fn = lora_hook if position_ids is None else lora_hook_packed_sequence
+
+    return apply_hook_to_layers(model, [module_name], [layer_index], post_hook=hook_fn)
 
 
 def add_generated_layernorm_hook(
@@ -193,6 +238,7 @@ def add_generated_layernorm_hook(
     layer_index: int,
     W: Float[Tensor, "bs hidden_size"],
     training: bool,
+    position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
 ) -> list[RemovableHandle]:
     """
     Adds layer normalization hooks to specified modules and layers.
@@ -203,6 +249,7 @@ def add_generated_layernorm_hook(
         layer_index (int): Index of layer to modify
         W (Tensor): Learned weight tensor of shape [batch_size, hidden_size]
         training (bool): Whether model is in training mode
+        position_ids (Optional[Tensor]): Position IDs for packed sequence processing
 
     Returns:
         list[RemovableHandle]: Hook handles for removal
@@ -213,7 +260,6 @@ def add_generated_layernorm_hook(
         args: tuple,
         output: Float[Tensor, "bs seq_len hidden_size"],
     ) -> Float[Tensor, "bs seq_len hidden_size"]:
-        # For models that return tuples from layernorm (e.g., some attention implementations)
         if isinstance(output, tuple):
             main_output = output[0]
             rest = output[1:]
@@ -229,6 +275,37 @@ def add_generated_layernorm_hook(
 
         return (new_output, *rest) if rest else new_output
 
-    return apply_hook_to_layers(
-        model, [module_name], [layer_index], post_hook=layernorm_hook
-    )
+    if position_ids is not None:
+        position_ids = position_ids.squeeze()
+        seq_lens = position_ids[torch.where(position_ids == 0)[0][1:] - 1]
+        seq_lens = torch.cat(
+            [seq_lens, torch.tensor([position_ids[-1]], device=seq_lens.device)]
+        )
+        seq_lens += 1
+
+    def layernorm_hook_packed_sequence(
+        module: torch.nn.Module,
+        args: tuple,
+        output: Float[Tensor, "bs seq_len hidden_size"],
+    ) -> Float[Tensor, "bs seq_len hidden_size"]:
+        if isinstance(output, tuple):
+            main_output = output[0]
+            rest = output[1:]
+        else:
+            main_output = output
+            rest = None
+
+        # [1, tot_seq_len, d_in]
+        x = args[0].to(W.dtype)
+        # Repeat weights for each sequence
+
+        repeated_W = W.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
+        # Apply learned weights to layernorm output
+        scaled_output = x * repeated_W.unsqueeze(0)
+        new_output = main_output + scaled_output.to(output.dtype)
+
+        return (new_output, *rest) if rest else new_output
+
+    hook_fn = layernorm_hook if position_ids is None else layernorm_hook_packed_sequence
+
+    return apply_hook_to_layers(model, [module_name], [layer_index], post_hook=hook_fn)
