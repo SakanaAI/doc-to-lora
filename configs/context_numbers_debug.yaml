@@ -26,7 +26,7 @@ learning_rate: 0.00001
 # lr_scheduler_type: "constant_with_warmup"
 neftune_noise_alpha: 1
 weight_decay: 0.01
-warmup_ratio: 0.1
+
 
 # LoRA
 lora_r: 16

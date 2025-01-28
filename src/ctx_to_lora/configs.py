@@ -49,6 +49,11 @@ class ArgumentParser(HfArgumentParser):
             for arg, val in other_args.items():
                 # add only if in keys
                 if arg in keys:
+                    if val in ["None", "none", "null", "NULL"]:
+                        val = None
+                        inputs[arg] = val
+                        used_args[arg] = val
+                        continue
                     base_type = data_yaml.__dataclass_fields__[arg].type
                     inputs[arg] = val
 
@@ -165,6 +170,10 @@ class TrainingArguments(TrainingArguments):
     lr_scheduler_kwargs: dict = field(
         default=None,
         metadata={"help": "Learning rate scheduler kwargs."},
+    )
+    warmup_steps: int = field(
+        default=100,
+        metadata={"help": "Number of warmup steps."},
     )
     eval_on_start: bool = field(
         default=True,

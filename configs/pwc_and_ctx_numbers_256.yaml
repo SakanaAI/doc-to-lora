@@ -23,8 +23,8 @@ max_val_samples_per_ds: 1000
 learning_rate: 0.00001
 # lr_scheduler_type: "constant_with_warmup"
 neftune_noise_alpha: 1
-weight_decay: 0.1
-warmup_ratio: 0.1
+weight_decay: 0.01
+
 
 # LoRA
 lora_r: 16
