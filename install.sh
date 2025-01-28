@@ -1,5 +1,5 @@
 pip install -e . 
-pip install flash-attn --no-build-isolation
+pip install flash-attn==2.6.3 --no-build-isolation
 # huggingface-cli login
 
 # lm-evaluation-harness
