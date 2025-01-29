@@ -370,6 +370,7 @@ def evaluate(checkpoint_path, args, split, generative):
         add_repeat_prompt=False,
         add_negative_prompt=False,
         use_kl_loss=False,
+        set_format="pt",
     )
 
     datasets = dict()
