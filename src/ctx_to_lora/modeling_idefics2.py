@@ -663,6 +663,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
             seq_lens_k = attention_mask.sum(dim=-1, dtype=torch.int32)
             cu_seq_lens_k = torch.cumsum(seq_lens_k, dim=0, dtype=torch.int32)
             max_length_k = seq_lens_k.max().item()
+            cu_seq_lens_k = nn.functional.pad(cu_seq_lens_k, (1, 0))
 
         elif position_ids is not None:
             logger.warning_once("Using position ids for resampler")
