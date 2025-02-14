@@ -529,10 +529,9 @@ def main():
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
     # TODO: use packing with SFTTrainer
 
-    # HACK [local patch]: see transformers/trainer_seq2seq.py for supressing
-    # "Trainer.tokenizer is now deprecated. You should use Trainer.processing_class instead."
     # HACK [local patch]: deepspeed model loading problem (for resume training)
     # see https://github.com/microsoft/DeepSpeed/pull/6626/files
+    # /home/rujikorn_sakana_ai/.conda/envs/ctx-to-lora/lib/python3.10/site-packages/deepspeed/runtime/engine.py
     if training_args.use_liger_kernel and is_liger_kernel_available():
         from liger_kernel.transformers import _apply_liger_kernel_to_instance
 
@@ -593,4 +592,6 @@ if __name__ == "__main__":
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     if os.getenv("DEBUG", False):
         disable_caching()
+    # randomly sleep to avoid run_name collision
+    time.sleep(random.random() * 13)
     main()

@@ -758,6 +758,7 @@ class Idefics2Perceiver(Idefics2PreTrainedModel):
         #     outputs = self.decoder(latents)
         # else:
         # packed sequence
+        # always use position_ids for decoder
         latent_position_ids = torch.arange(
             self.encoder.n_latents, device=context.device
         ).unsqueeze(0)

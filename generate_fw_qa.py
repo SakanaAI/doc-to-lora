@@ -93,32 +93,34 @@ def parse_args() -> Namespace:
 if __name__ == "__main__":
     # Load the datasets
     args = parse_args()
-    # ds = load_dataset(
-    #     "parquet",
-    #     data_files=f"./data/raw_datasets/fineweb_sharded/{args.shard_pattern}.parquet",
-    #     split="train",
-    #     streaming=True,
-    # )
-    # os.makedirs("openai_batches", exist_ok=True)
-    # lines = []
-    # c = 0
-    # for i, sample in tqdm(enumerate(iter(ds))):
-    #     if len(lines) >= 20_000:
-    #         with open(f"openai_batches/fineweb_qa_pairs_{c}.jsonl", "w") as f:
-    #             for line in lines:
-    #                 f.write(json.dumps(line) + "\n")
-    #         lines = []
-    #         c += 1
-    #     jsonl = get_json_request(
-    #         f"{c}_{i}", sample["text"], args.n_qa_pairs, args.gpt_model_name
-    #     )
-    #     lines.append(jsonl)
-    #
+    ds = load_dataset(
+        "parquet",
+        data_files=f"./data/raw_datasets/fineweb_sharded/{args.shard_pattern}.parquet",
+        split="train",
+        streaming=True,
+    )
+    os.makedirs("openai_batches", exist_ok=True)
+    lines = []
+    c = 0
+    for i, sample in tqdm(enumerate(iter(ds))):
+        if len(lines) >= 20_000:
+            with open(f"openai_batches/fineweb_qa_pairs_{c}.jsonl", "w") as f:
+                for line in lines:
+                    f.write(json.dumps(line) + "\n")
+            lines = []
+            c += 1
+        jsonl = get_json_request(
+            f"{c}_{i}", sample["text"], args.n_qa_pairs, args.gpt_model_name
+        )
+        lines.append(jsonl)
+
     client = OpenAI()
     res_files = glob("openai_batches/fineweb_qa_pairs_*_res.jsonl")
     prompt_files = glob("openai_batches/fineweb_qa_pairs_*[!res].jsonl")
-    unprocessed_files = set(prompt_files) - set([f.replace("_res","") for f in res_files]) 
-    for file in unprocessed_files: 
+    unprocessed_files = set(prompt_files) - set(
+        [f.replace("_res", "") for f in res_files]
+    )
+    for file in unprocessed_files:
         print(f"Submitting batch {file}")
         batch_input_file = client.files.create(file=open(file, "rb"), purpose="batch")
         batch_input_file_id = batch_input_file.id

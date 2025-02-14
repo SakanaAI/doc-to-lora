@@ -73,6 +73,18 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "fw_qa_xl": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_xl/*[!val].parquet"),
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_xl/*val.parquet"),
+            split="train",
+        ),
+    ),
     "ctx_qa": dict(
         train=dict(
             path="parquet",

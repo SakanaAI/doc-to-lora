@@ -38,7 +38,7 @@ from transformers.models.perceiver.modeling_perceiver import (
     PerceiverBasicDecoder,
 )
 from transformers.modeling_outputs import ModelOutput
-
+from transformers.models.modernbert.modeling_modernbert import ModernBertModel
 from ctx_to_lora.configs import (
     AggregatorArguments,
     HypernetArguments,
@@ -372,6 +372,7 @@ def maybe_add_batch_dim(kwargs):
         if (
             "attention_mask" in kwargs
             and kwargs["attention_mask"] is not None
+            and isinstance(kwargs["attention_mask"], torch.Tensor)
             and len(kwargs["attention_mask"].shape) == 1
         ):
             kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
@@ -405,14 +406,14 @@ class EarlyExit(nn.Module):
         # if len(kwargs["attention_mask"].shape) == 1:
         #     kwargs["attention_mask"] = kwargs["attention_mask"].unsqueeze(0)
 
-        with (
-            # early_exit(self.base_model, self.exit_layer),
-            maybe_add_batch_dim(kwargs) as (batched_input, batched_attn_mask),
-        ):
-            model_outputs = self.base_model(**kwargs)
+        # with (
+        #     # early_exit(self.base_model, self.exit_layer),
+        #     maybe_add_batch_dim(kwargs) as (batched_input, batched_attn_mask),
+        # ):
+        model_outputs = self.base_model(**kwargs)
 
-        if batched_input:
-            model_outputs.last_hidden_state = model_outputs.last_hidden_state.squeeze(0)
+        # if batched_input:
+        #     model_outputs.last_hidden_state = model_outputs.last_hidden_state.squeeze(0)
 
         return model_outputs.last_hidden_state
 
@@ -767,13 +768,13 @@ class ModulatedPretrainedModel(nn.Module):
             get_base_model(encoder_model), self.ctx_encoder_args.layer_idx
         )
 
-    def to(self, *args, **kwargs):
-        # workaround to avoid the hypernet being wrapped by DeepSpeed
-        self.base_model = self.base_model.to(*args, **kwargs)
-        self.ctx_encoder = self.ctx_encoder.to(*args, **kwargs)
-        # self.hypernet = self.hypernet.to(*args, **kwargs)
-        # self.hypernet.to(torch.float32)
-        return self
+    # def to(self, *args, **kwargs):
+    #     # workaround to avoid the hypernet being wrapped by DeepSpeed
+    #     self.base_model = self.base_model.to(*args, **kwargs)
+    #     self.ctx_encoder = self.ctx_encoder.to(*args, **kwargs)
+    #     # self.hypernet = self.hypernet.to(*args, **kwargs)
+    #     # self.hypernet.to(torch.float32)
+    #     return self
 
     # Delegate to base_model
     @property
@@ -907,19 +908,46 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_ids: Integer[Tensor, "bs ctx_len"],
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         ctx_position_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
-        *args: Any,
         **kwargs: Any,
     ):
         with torch.no_grad():
-            # TODO: for modernbert ctx_encoder pass
-            # `cu_seq_len` and `max_seq_len` to the forward call
-            ctx_features = self.ctx_encoder(
+            ctx_encoder_kwargs = dict(
                 input_ids=ctx_ids,
                 attention_mask=ctx_attn_mask,
                 position_ids=ctx_position_ids,
-                *args,
-                **kwargs,
             )
+            # TODO: for modernbert ctx_encoder pass
+            # `cu_seq_len` and `max_seq_len` to the forward call
+            if isinstance(self.ctx_encoder.base_model, ModernBertModel):
+                position_ids = ctx_position_ids.flatten()
+                indices = torch.arange(
+                    position_ids.size(0), device=position_ids.device, dtype=torch.int32
+                )
+                # [bsz + 1]
+                cu_seqlens = torch.cat(
+                    (
+                        indices[position_ids == 0],
+                        torch.tensor(
+                            position_ids.size(),
+                            device=position_ids.device,
+                            dtype=torch.int32,
+                        ),
+                    )
+                )
+                ctx_encoder_kwargs = dict(
+                    input_ids=ctx_ids.squeeze(0),
+                    cu_seqlens=cu_seqlens,
+                    max_seqlen=position_ids.max() + 1,
+                    attention_mask=-1,
+                    seq_len=-1,
+                    batch_size=-1,
+                )
+
+            ctx_features = self.ctx_encoder(**ctx_encoder_kwargs, **kwargs)
+
+        if isinstance(self.ctx_encoder.base_model, ModernBertModel):
+            ctx_features = ctx_features.unsqueeze(0)
+
         # print(f"padded ctx_features: {ctx_features.shape}")
         # if ctx_attn_mask is not None:
         #     print(f"padded ctx_attn_mask: {ctx_attn_mask.shape}")

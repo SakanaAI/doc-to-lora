@@ -133,8 +133,11 @@ class TrainingArguments(TrainingArguments):
         default=True,
         metadata={"help": "Whether to pin memory in data loaders or not."},
     )
+    # mem leak if use persistent workers
+    # https://github.com/pytorch/pytorch/issues/62066
+    # https://github.com/huggingface/transformers/issues/30943
     dataloader_persistent_workers: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "Whether to keep the workers alive after a dataset has been consumed once."
         },
@@ -156,11 +159,11 @@ class TrainingArguments(TrainingArguments):
         metadata={"help": "Adam beta 1."},
     )
     adam_beta2: float = field(
-        default=0.95,
+        default=0.999,
         metadata={"help": "Adam beta 2."},
     )
     adam_epsilon: float = field(
-        default=1e-6,
+        default=1e-8,
         metadata={"help": "Adam epsilon."},
     )
     lr_scheduler_type: str = field(
@@ -200,7 +203,7 @@ class TrainingArguments(TrainingArguments):
     #     metadata={"help": "Whether to load the best model at the end of training."},
     # )
     save_total_limit: int = field(
-        default=5,
+        default=2,
         metadata={"help": "Total number of checkpoints to save."},
     )
     save_strategy: str = field(

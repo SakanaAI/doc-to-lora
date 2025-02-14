@@ -21,3 +21,4 @@ plots/
 *.safetensors
 *tfevents*
 watcher_state.yaml
+ds_config.json

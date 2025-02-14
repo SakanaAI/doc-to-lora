@@ -341,8 +341,25 @@ def evaluate(checkpoint_path, args, split, generative):
         train=False,
         use_flash_attn=True,
     )
+    if generative:
+        model = model.to(torch.bfloat16)
     # NOTE: there is still some randomness in the eval result
     # despite all the deterministic settings
+    if args.use_liger_kernel and is_liger_kernel_available():
+        from liger_kernel.transformers import _apply_liger_kernel_to_instance
+
+        if isinstance(model, ModulatedPretrainedModel):
+            print("Applying liger-kernel to ModulatedPretrainedModel")
+            if isinstance(model.base_model, PeftModel):
+                _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
+            else:
+                _apply_liger_kernel_to_instance(model=model.base_model.model)
+            if ctx_name is not None:
+                print("Applying liger-kernel to ctx_encoder_model")
+                _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)
+        elif isinstance(model, PeftModel):
+            print("Applying liger-kernel to PeftModel")
+            _apply_liger_kernel_to_instance(model=model.base_model.model)
 
     tokenizer = get_tokenizer(args.model_name_or_path, train=False)
     if tokenizer.pad_token_id is None:
@@ -392,7 +409,7 @@ def evaluate(checkpoint_path, args, split, generative):
     eval_trainer_args["eval_strategy"] = "no"
     eval_trainer_args["save_strategy"] = "no"
     eval_trainer_args["overwrite_output_dir"] = True
-    eval_trainer_args["per_device_eval_batch_size"] = 4
+    eval_trainer_args["per_device_eval_batch_size"] = 32
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
