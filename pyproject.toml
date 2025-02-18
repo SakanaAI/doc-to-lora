@@ -6,7 +6,7 @@ description = ""
 readme = "README.md"
 requires-python = ">= 3.10"
 dependencies = [
-    "transformers==4.48.1",
+    "transformers==4.48.3",
     "deepspeed==0.15.4",
     "accelerate==1.2.1",
     "peft",
