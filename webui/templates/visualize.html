@@ -213,6 +213,23 @@
     }
 
     /* Removed system-msg-container button styles */
+
+    #eval-folder-selection {
+        margin-bottom: 20px;
+    }
+
+    #eval-folder-selection label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+
+    #eval-folder-selection select {
+        width: 300px;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+    }
 </style>
 {% endblock %}
 
@@ -227,8 +244,23 @@
 
 <div class="container">
     <div class="column">
+        {% if eval_folders %} <!-- Conditionally show folder selection if eval_folders exist -->
+        <div id="eval-folder-selection">
+            <label for="eval_folder">Select Evaluation Folder:</label>
+            <select id="eval_folder" onchange="loadEvalFolder()">
+                <option value="">-- Select Folder --</option>
+                {% for folder in eval_folders %}
+                <option value="{{ folder }}" {% if selected_eval_folder==folder %}selected{% endif %}>{{ folder }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+
+        {% if data %}
         {% for group, results in data.items() %}
-        <h2>{{ group }}</h2>
+        <h2>{{ group }} ({% if selected_eval_folder and selected_eval_folder != "root" %}{{ selected_eval_folder }}{%
+            else %}root{% endif %})</h2>
         <table class="performance-table">
             <thead>
                 <tr>
@@ -267,6 +299,7 @@
             </tbody>
         </table>
         {% endfor %}
+        {% endif %}
     </div>
 
     <div class="column">
@@ -274,7 +307,8 @@
         {% for split, data in generated_data.items() %}
         {% if data %}
         <div class="generated-text-container">
-            <h2>Generated Text ({{ split }})</h2>
+            <h2>Generated Text ({{ split }} - {% if selected_eval_folder and selected_eval_folder != "root" %}{{
+                selected_eval_folder }}{% else %}root{% endif %})</h2>
             <div id="{{ split }}-text" class="generated-text-display">
                 <p id="{{ split }}-context-container" style="display: none;">
                     <strong>Context:</strong> <span id="{{ split }}-context"></span>
@@ -294,8 +328,9 @@
         </div>
         {% endif %}
         {% endfor %}
-        {% else %}
-        <p>No generated text data found.</p>
+        {% elif selected_eval_folder %}
+        <p>No generated text data found in {% if selected_eval_folder and selected_eval_folder != "root" %}{{
+            selected_eval_folder }}{% else %}root{% endif %}.</p>
         {% endif %}
 
         <div id="load-chat-container">
@@ -358,14 +393,17 @@
         updateText(split);
     }
 
-    // Initialize text for each split using JavaScript
+    // Initialize text for each split using JavaScript if generatedData is available
     window.addEventListener('DOMContentLoaded', (event) => {
-        for (const split in generatedData) {
-            if (generatedData[split].length > 0) {
-                updateText(split);
+        if (generatedData && Object.keys(generatedData).length > 0) {
+            for (const split in generatedData) {
+                if (generatedData[split].length > 0) {
+                    updateText(split);
+                }
             }
         }
     });
+
 
     function goBack() {
         window.history.back();
@@ -488,9 +526,15 @@
         chatOutput.scrollTop = chatOutput.scrollHeight;
     }
 
-    // Removed the separate updateSystemMsg function
+    function loadEvalFolder() {
+        const selectedFolder = document.getElementById('eval_folder').value;
+        const runName = '{{ run }}';
+        if (selectedFolder) {
+            window.location.href = `/visualize/${runName}?eval_folder=${selectedFolder}`;
+        }
+    }
 
-    // Updated sendMessage function handles system msg update and chat message
+
     // Bind the sendMessage function to the Enter key
     document.getElementById('chat-input').addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {

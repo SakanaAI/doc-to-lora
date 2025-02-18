@@ -10,7 +10,7 @@ from transformers import pipeline
 
 app = Flask(__name__)
 
-TRAIN_OUTPUTS_DIR = "train_outputs"
+TRAIN_OUTPUTS_DIR = "train_outputs/runs"
 chat_generator = None
 chat_model_name = None
 chat_history = None
@@ -142,13 +142,41 @@ def visualize(run):
     if not os.path.isdir(logdir):
         abort(404, description=f"Run '{run}' not found.")
 
-    data = get_run_data(logdir)
-    if data is None:
-        abort(404, description=f"'all_results.json' not found in '{run}'.")
+    eval_folders = [
+        d
+        for d in os.listdir(logdir)
+        if os.path.isdir(os.path.join(logdir, d)) and d.startswith("eval-results-")
+    ]
+    eval_folders.sort(
+        key=lambda d: os.path.getctime(os.path.join(logdir, d)),
+        reverse=True,
+    )
 
-    generated_data = get_generated_text_data(logdir)
+    selected_eval_folder = request.args.get("eval_folder")
 
-    # Load config.yaml from the run directory
+    if eval_folders and selected_eval_folder:
+        # New structure with eval folders and a folder is selected
+        eval_path = os.path.join(logdir, selected_eval_folder)
+        data = get_run_data(eval_path)
+        if data is None:
+            abort(
+                404,
+                description=f"'all_results.json' not found in '{selected_eval_folder}'.",
+            )
+        generated_data = get_generated_text_data(eval_path)
+    elif not eval_folders:
+        # Old structure: eval results in the root folder
+        data = get_run_data(logdir)
+        if data is None:
+            abort(404, description=f"'all_results.json' not found in '{run}'.")
+        generated_data = get_generated_text_data(logdir)
+        selected_eval_folder = "root"  # Indicate root folder for template
+    else:
+        # New structure, but no eval folder selected yet
+        data = None
+        generated_data = None
+
+    # Load config.yaml from the run directory (root level)
     config_path = os.path.join(logdir, "config.yaml")
     try:
         with open(config_path) as f:
@@ -160,6 +188,8 @@ def visualize(run):
     return render_template(
         "visualize.html",
         run=run,
+        eval_folders=eval_folders,
+        selected_eval_folder=selected_eval_folder,
         data=data,
         generated_data=generated_data,
         model_name=model_name,
