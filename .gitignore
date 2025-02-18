@@ -22,3 +22,4 @@ plots/
 *tfevents*
 watcher_state.yaml
 ds_config.json
+eval_results/
