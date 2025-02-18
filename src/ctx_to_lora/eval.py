@@ -558,8 +558,8 @@ if __name__ == "__main__":
     else:
         args = Namespace(
             model_name_or_path=cli_args.model_name_or_path,
-            output_dir=f"eval-results/{cli_args.model_name_or_path}",
-            logging_dir=f"eval-results/{cli_args.model_name_or_path}",
+            output_dir=f"eval_results/{cli_args.model_name_or_path}",
+            logging_dir=f"eval_results/{cli_args.model_name_or_path}",
             run_name=f"eval_results/{cli_args.model_name_or_path}",
             max_base_len=2**13,
             max_ctx_len=-1,  # not used
