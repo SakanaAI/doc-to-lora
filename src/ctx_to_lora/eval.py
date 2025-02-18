@@ -124,7 +124,7 @@ class Evaluator:
         return result
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def compute_metrics(
     eval_pred: EvalPrediction,
     compute_result: bool,
@@ -179,7 +179,7 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
     return out
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def eval_generation(eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen_kwargs):
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
@@ -377,6 +377,7 @@ def evaluate(checkpoint_path, args, split, generative):
     ctx_tokenizer_kwargs = {"max_length": args.max_ctx_len}
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
 
+    # TODO: handle base model eval
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         tokenizer=tokenizer,
@@ -396,7 +397,10 @@ def evaluate(checkpoint_path, args, split, generative):
         datasets[ds_name] = _get_tokenized_dataset(ds_name, split)
     print(datasets)
 
-    gen_kwargs = dict(do_sample=False, max_new_tokens=args.max_new_tokens)
+    gen_kwargs = dict(
+        do_sample=False,
+        max_new_tokens=256,  # max_new_tokens=args.max_new_tokens
+    )
 
     eval_trainer_args = {}
 
@@ -409,7 +413,7 @@ def evaluate(checkpoint_path, args, split, generative):
     eval_trainer_args["eval_strategy"] = "no"
     eval_trainer_args["save_strategy"] = "no"
     eval_trainer_args["overwrite_output_dir"] = True
-    eval_trainer_args["per_device_eval_batch_size"] = 32
+    eval_trainer_args["per_device_eval_batch_size"] = 8 if not generative else 32
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
@@ -464,6 +468,34 @@ def evaluate(checkpoint_path, args, split, generative):
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate a checkpoint")
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        required=True,
+        help="Path to the checkpoint to evaluate",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        choices=["validation", "test"],
+        default="validation",
+        help="Which split to evaluate on",
+    )
+    parser.add_argument(
+        "--datasets",
+        type=str,
+        nargs="+",
+        help=(
+            "Specific datasets to evaluate on."
+            "If not provided, uses default from args.yaml"
+        ),
+    )
+
+    cli_args = parser.parse_args()
+
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
@@ -476,18 +508,24 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-    checkpoint_path = sys.argv[1]
-    checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
-    run_dir = "/".join(checkpoint_path.split("/")[:-2])
-    cur_it = int(checkpoint_path.split("checkpoint-")[1].split("/")[0])
+
+    checkpoint_dir = "/".join(cli_args.checkpoint_path.split("/")[:-1])
+    run_dir = "/".join(cli_args.checkpoint_path.split("/")[:-2])
+    cur_it = int(cli_args.checkpoint_path.split("checkpoint-")[1].split("/")[0])
     args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r")))
-    print(f"checkpoint_path: {checkpoint_path}")
+    print(f"checkpoint_path: {cli_args.checkpoint_path}")
     print(f"run_dir: {run_dir}")
-    # print(f"args: {args}")
 
     args.output_dir = f"{run_dir}/eval-results-{cur_it}"
     args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
     args.run_name = run_dir.split("/")[-1]
 
-    evaluate(checkpoint_path, args, split="validation", generative=False)
-    evaluate(checkpoint_path, args, split="validation", generative=True)
+    # Override dataset names if provided via CLI
+    if cli_args.datasets:
+        if cli_args.split == "validation":
+            args.val_ds_names = cli_args.datasets
+        else:
+            args.test_ds_names = cli_args.datasets
+
+    evaluate(cli_args.checkpoint_path, args, split=cli_args.split, generative=False)
+    evaluate(cli_args.checkpoint_path, args, split=cli_args.split, generative=True)
