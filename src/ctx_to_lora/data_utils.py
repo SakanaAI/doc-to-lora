@@ -36,6 +36,7 @@ DS_KWARGS = {
     "squad": dict(
         train=dict(path="rajpurkar/squad", split="train[900:]"),
         validation=dict(path="rajpurkar/squad", split="train[:900]"),
+        test=dict(path="rajpurkar/squad", split="validation"),
     ),
     "fw_qa_tiny": dict(
         train=dict(
