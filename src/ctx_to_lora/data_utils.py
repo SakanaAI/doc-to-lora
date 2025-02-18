@@ -132,6 +132,26 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "booksum": dict(
+        train=dict(
+            path="kmfoda/booksum",
+            split="train+validation+test",
+        )
+    ),
+    "gov_report": dict(
+        train=dict(
+            path="ccdv/govreport-summarization",
+            split="train",
+        ),
+        validation=dict(
+            path="ccdv/govreport-summarization",
+            split="validation",
+        ),
+        test=dict(
+            path="ccdv/govreport-summarization",
+            split="test",
+        ),
+    ),
     "gsm8k": dict(
         train=dict(
             path="openai/gsm8k",
@@ -572,6 +592,24 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
                 "context": sample["document"],
                 "prompt": sample["messages"][0]["content"],
                 "response": response,
+            }
+
+    elif ds_name == "booksum":
+
+        def f(sample):
+            return {
+                "context": sample["chapter"],
+                "prompt": "Summarize the provided text.",
+                "response": sample["summary_text"],
+            }
+
+    elif ds_name == "gov_report":
+
+        def f(sample):
+            return {
+                "context": sample["report"],
+                "prompt": "Summarize the provided text.",
+                "response": sample["summary"],
             }
 
     elif ds_name == "openmathintx-2":
