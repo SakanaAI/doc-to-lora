@@ -292,10 +292,6 @@ class CtxTrainingArguments:
         default=2**13,
         metadata={"help": "Maximum context length for training."},
     )
-    use_multipack_sampler: bool = field(
-        default=False,
-        metadata={"help": "Whether to use multipack sampler."},
-    )
     use_sequence_packing: bool = field(
         default=False,
         metadata={"help": "Whether to use sequence packing."},

@@ -256,8 +256,9 @@ def main():
     # should be the same across processes
     # still possible to have a name crash though
     # logging_dir is just "runs/DATE_TIME_HOSTNAME"
+    slurm_job_id = f"_{os.getenv('SLURM_JOB_ID')}" if os.getenv("SLURM_JOB_ID") else ""
     run_name = (
-        get_run_name(seed_str=training_args.logging_dir.strip("runs/"))
+        get_run_name(seed_str=training_args.logging_dir.strip("runs/") + slurm_job_id)
         if not checkpoint_dir
         else checkpoint_dir.strip("/").split("/")[-2]
     )
@@ -506,26 +507,6 @@ def main():
         else partial(train_collator, tokenizer=tokenizer)
     )
 
-    batch_sampler = None
-    if ctx_args.use_multipack_sampler:
-        from multipack_sampler.multipack_sampler import MultipackDistributedBatchSampler
-
-        """
-        sampler = MultipackDistributedBatchSampler(
-            batch_max_length=batch_max_len,
-            lengths=lengths,
-            seed=0
-        )
-
-        dataloader = DataLoader(data, batch_sampler=sampler)
-        """
-        lengths = np.array([len(x["ctx_ids"]) for x in train_ds])
-        batch_sampler = MultipackDistributedBatchSampler(
-            batch_max_length=ctx_args.per_device_train_max_batch_len,
-            lengths=lengths,
-            seed=training_args.seed,
-        )
-
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
     # TODO: use packing with SFTTrainer
 
@@ -569,7 +550,6 @@ def main():
         val_ds,
         test_ds,
         train_collator,
-        train_batch_sampler=batch_sampler,
         # partial(generation_collator, tokenizer=tokenizer),
         compute_metrics=partial(
             compute_metrics,
