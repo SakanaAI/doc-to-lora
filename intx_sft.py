@@ -573,5 +573,5 @@ if __name__ == "__main__":
     if os.getenv("DEBUG", False):
         disable_caching()
     # randomly sleep to avoid run_name collision
-    time.sleep(random.random() * 13)
+    # time.sleep(random.random() * 13)
     main()

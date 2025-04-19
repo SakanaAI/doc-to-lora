@@ -76,6 +76,7 @@ class AggregatorConfig:
     feature_size: int
     num_layers: int
     num_modules: int
+    num_extra_modules: int
     output_size: int
 
     # perceiver
@@ -85,6 +86,8 @@ class AggregatorConfig:
     self_attention_widening_factor: int = 4
     cross_attention_widening_factor: int = 1
     num_latent_factor: int = 8
+    lora_r: int = 8
+    per_rank_gen: bool = False
 
 
 def get_aggregator_config(
@@ -92,6 +95,9 @@ def get_aggregator_config(
     ctx_encoder_model_config: PretrainedConfig,
     output_size: int,
     num_modules: int,
+    num_extra_modules: int,
+    lora_r: int,
+    per_rank_gen: bool,
     aggregator_args: AggregatorArguments,
 ):
     return AggregatorConfig(
@@ -99,6 +105,9 @@ def get_aggregator_config(
         output_size=output_size,
         num_layers=get_num_layers(model),
         num_modules=num_modules,
+        num_extra_modules=num_extra_modules,
+        lora_r=lora_r,
+        per_rank_gen=per_rank_gen,
         **vars(aggregator_args),
     )
 
@@ -108,6 +117,7 @@ class HypernetConfig:
     latent_size: int
     use_light_weight_lora: bool
     light_weight_latent_size: int
+    per_rank_gen: bool
     dropout_rate: float
 
     lora_config: LoraConfig
@@ -131,7 +141,7 @@ def get_hypernet_config(
     if lora_config is not None:
         lora_config = lora_config["default"]
         num_modules += len(lora_config.target_modules)
-    num_modules += len(hypernet_args.extra_modules or [])
+    num_extra_modules = len(hypernet_args.extra_modules or [])
     indices = torch.arange(get_num_layers(model), device=model.device)
     return HypernetConfig(
         **vars(hypernet_args),
@@ -145,6 +155,9 @@ def get_hypernet_config(
             ctx_encoder_model_config,
             hypernet_args.latent_size,
             num_modules,
+            num_extra_modules,
+            lora_config.r,
+            hypernet_args.per_rank_gen,
             aggregator_args,
         ),
     )
@@ -159,6 +172,9 @@ class Perceiver(nn.Module):
         output_size,
         num_layers,
         num_modules,
+        num_extra_modules,
+        per_rank_gen,
+        lora_r,
         num_latent_factor,
         *args,
         **kwargs,
@@ -166,6 +182,9 @@ class Perceiver(nn.Module):
         super().__init__()
         self.num_layers = num_layers
         self.num_modules = num_modules
+        self.num_extra_modules = num_extra_modules
+        self.per_rank_gen = per_rank_gen
+        self.r = lora_r if self.per_rank_gen else 1
         # self.config = PerceiverConfig(
         #     d_model=feature_size,  # + num_bands
         #     num_latents=num_layers * num_modules * num_latent_factor,
@@ -193,7 +212,8 @@ class Perceiver(nn.Module):
             input_size=feature_size,
             # the first layer is xattn
             resampler_depth=kwargs["num_self_attends_per_block"] + 1,
-            resampler_n_latents=num_layers * num_modules * num_latent_factor,
+            resampler_n_latents=(num_layers * (num_modules * self.r + num_extra_modules))
+            * num_latent_factor,
             intermediate_size_factor=4,
             hidden_size=output_size,
             attn_implementation="flash_attention_2",
@@ -201,7 +221,7 @@ class Perceiver(nn.Module):
         self.decoder_config = Idefics2PerceiverConfig(
             input_size=output_size,
             resampler_depth=1,
-            resampler_n_latents=num_layers * num_modules,
+            resampler_n_latents=num_layers * (num_modules * self.r + num_extra_modules),
             hidden_size=output_size,
             attn_implementation="flash_attention_2",
         )
@@ -214,13 +234,43 @@ class Perceiver(nn.Module):
         ctx_position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
     ):
         x = self.perceiver(ctx_features, ctx_attn_mask, ctx_position_ids)
-        x = rearrange(
+        lora_x, extra_x = unpack(
             x,
-            "bs (n_layers n_modules) d -> bs n_layers n_modules d",
+            [
+                [self.num_layers * self.num_modules * self.r],
+                [self.num_layers * self.num_extra_modules],
+            ],
+            "bs * feature_dim",
+        )
+        lora_x = rearrange(
+            lora_x,
+            "bs (n_layers n_modules r) d -> bs n_layers n_modules r d",
             n_modules=self.num_modules,
             n_layers=self.num_layers,
+            r=self.r,
         )
-        return x
+        if not self.per_rank_gen:
+            lora_x = lora_x.squeeze(3)
+
+        extra_x = rearrange(
+            extra_x,
+            "bs (n_layers n_extra_modules) d -> bs n_layers n_extra_modules d",
+            n_extra_modules=self.num_extra_modules,
+            n_layers=self.num_layers,
+        )
+
+        # x = rearrange(
+        #     x,
+        #     "bs (n_layers n_modules) d -> bs n_layers n_modules d",
+        #     n_modules=self.num_modules,
+        #     n_layers=self.num_layers,
+        # )
+        # lora_emb, extra_emb = unpack(
+        #     emb,
+        #     [[self.num_modules], [self.num_extra_modules]],
+        #     "bs n_layers * feature_dim",
+        # )
+        return lora_x, extra_x
 
 
 class Mixer(nn.Module):
@@ -485,12 +535,24 @@ class HyperLoRA(nn.Module):
         self.d_in, self.d_out = self.config.feature_sizes
 
         if self.target_modules:
+            # self.layers = nn.Sequential(
+            #     *[
+            #         MLPResidualBlock(
+            #             input_size=self.config.latent_size,
+            #             hidden_size=self.config.latent_size * 4,
+            #             output_size=self.config.latent_size,
+            #             dropout_rate=getattr(self.config, "dropout_rate", 0),
+            #         )
+            #         for _ in range(4)
+            #     ]
+            # )
             self.layers = MLPResidualBlock(
                 input_size=self.config.latent_size,
                 hidden_size=self.config.latent_size * 4,
                 output_size=self.config.latent_size,
                 dropout_rate=getattr(self.config, "dropout_rate", 0),
             )
+            # self.layers = nn.Identity()
             if self.config.use_light_weight_lora:
                 # light-weight lora projection (per module)
 
@@ -535,36 +597,73 @@ class HyperLoRA(nn.Module):
             # has something to do with the bias shape (n_modules r d_lora)
             # when n_modules == 1, adamw_torch_fused complains about device/layout
             # but when n_modules > 1, it works fine
-            if n_modules == 1:
-                self.head = Mix(
-                    "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                    weight_shape="d_latent r d_lora",
-                    # bias_shape=None,  # no bias
-                    bias_shape="r d_lora",
-                    d_latent=self.config.latent_size,
-                    r=self.config.lora_config.r,
-                    d_lora=d_lora,
-                )
+            if self.config.per_rank_gen:
+                if n_modules == 1:
+                    self.head = Mix(
+                        "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                        weight_shape="d_latent d_lora",
+                        # bias_shape=None,  # no bias
+                        bias_shape="d_lora",
+                        # n_layers=len(self.layer_indices),
+                        d_latent=self.config.latent_size,
+                        r=self.config.lora_config.r,
+                        d_lora=d_lora,
+                    )
+                else:
+                    self.head = Mix(
+                        "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                        weight_shape="n_modules d_latent d_lora",
+                        # bias_shape=None,  # no bias
+                        bias_shape="n_modules d_lora",
+                        # n_layers=len(self.layer_indices),
+                        n_modules=n_modules,
+                        d_latent=self.config.latent_size,
+                        r=self.config.lora_config.r,
+                        d_lora=d_lora,
+                    )
             else:
-                # each module processes d -> r d_out independently
-                self.head = Mix(
-                    "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                    weight_shape="n_modules d_latent r d_lora",
-                    # bias_shape=None,  # no bias
-                    bias_shape="n_modules r d_lora",
-                    n_modules=len(self.target_modules),
-                    d_latent=self.config.latent_size,
-                    r=self.config.lora_config.r,
-                    d_lora=d_lora,
-                )
+                if n_modules == 1:
+                    self.head = Mix(
+                        "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                        weight_shape="d_latent r d_lora",
+                        # bias_shape=None,  # no bias
+                        bias_shape="r d_lora",
+                        d_latent=self.config.latent_size,
+                        r=self.config.lora_config.r,
+                        d_lora=d_lora,
+                    )
+                else:
+                    # each module processes d -> r d_out independently
+                    self.head = Mix(
+                        "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                        weight_shape="n_modules d_latent r d_lora",
+                        # bias_shape=None,  # no bias
+                        bias_shape="n_modules r d_lora",
+                        n_modules=n_modules,
+                        d_latent=self.config.latent_size,
+                        r=self.config.lora_config.r,
+                        d_lora=d_lora,
+                    )
 
         if self.extra_modules:
+            # self.extra_layers = nn.Sequential(
+            #     *[
+            #         MLPResidualBlock(
+            #             input_size=self.config.latent_size,
+            #             hidden_size=self.config.latent_size * 4,
+            #             output_size=self.config.latent_size,
+            #             dropout_rate=getattr(self.config, "dropout_rate", 0),
+            #         )
+            #         for _ in range(4)
+            #     ]
+            # )
             self.extra_layers = MLPResidualBlock(
                 input_size=self.config.latent_size,
                 hidden_size=self.config.latent_size * 4,
                 output_size=self.config.latent_size,
                 dropout_rate=getattr(self.config, "dropout_rate", 0),
             )
+            # self.extra_layers = nn.Identity()
             # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
             # self.extra_norm = nn.LayerNorm(self.config.latent_size)
 
@@ -649,12 +748,12 @@ class HyperLoRA(nn.Module):
     ):
 
         # [bs, n_layers, n_total_modules, feature_dim]
-        emb = self.aggregator(features, attn_mask, position_ids)
-        lora_emb, extra_emb = unpack(
-            emb,
-            [[self.num_modules], [self.num_extra_modules]],
-            "bs n_layers * feature_dim",
-        )
+        lora_emb, extra_emb = self.aggregator(features, attn_mask, position_ids)
+        # lora_emb, extra_emb = unpack(
+        #     emb,
+        #     [[self.num_modules], [self.num_extra_modules]],
+        #     "bs n_layers * feature_dim",
+        # )
 
         # [bs, n_layers, n_modules, r, max_in_d_outim]
         flat_loras = None
@@ -815,6 +914,9 @@ class ModulatedPretrainedModel(nn.Module):
                 if self.hypernet.config.use_light_weight_lora:
                     A = A[:, : self.hypernet.config.light_weight_latent_size]
                     B = B[: self.hypernet.config.light_weight_latent_size]
+                if self.hypernet.config.per_rank_gen:
+                    A = A[0:1]
+                    B = B[:, 0:1]
                 biases = [A, B.T]
 
                 # bias-hyperinit

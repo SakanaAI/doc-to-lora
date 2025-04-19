@@ -574,14 +574,14 @@ if __name__ == "__main__":
         else:
             args.test_ds_names = cli_args.datasets
 
-    evaluate(
-        cli_args.checkpoint_path,
-        cli_args.model_name_or_path,
-        cli_args.eval_batch_size,
-        args,
-        split=cli_args.split,
-        generative=False,
-    )
+    # evaluate(
+    #     cli_args.checkpoint_path,
+    #     cli_args.model_name_or_path,
+    #     cli_args.eval_batch_size,
+    #     args,
+    #     split=cli_args.split,
+    #     generative=False,
+    # )
     evaluate(
         cli_args.checkpoint_path,
         cli_args.model_name_or_path,

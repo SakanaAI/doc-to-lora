@@ -86,6 +86,18 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "fw_qa_2": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_2/*[!val].parquet"),
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_2/*val.parquet"),
+            split="train",
+        ),
+    ),
     "ctx_qa": dict(
         train=dict(
             path="parquet",
@@ -152,6 +164,20 @@ DS_KWARGS = {
             split="test",
         ),
     ),
+    # "wikitext-2": dict(
+    #     train=dict(
+    #         path="EleutherAI/wikitext_document_level",
+    #         name="wikitext-2-raw-v1",
+    #         split="train",
+    #     ),
+    # ),
+    # "wikitext-103": dict(
+    #     train=dict(
+    #         path="EleutherAI/wikitext_document_level",
+    #         name="wikitext-103-raw-v1",
+    #         split="train",
+    #     ),
+    # ),
     "gsm8k": dict(
         train=dict(
             path="openai/gsm8k",
@@ -224,11 +250,11 @@ def add_repeat_prompt_fn(samples):
     ):
         # Only process if the context is not already in the set
         if ctx in unique_contexts:
+           continue
+        # remove too long contexts
+        if len(ctx) > 1000:
             continue
         unique_contexts.add(ctx)
-        # remove too long contexts
-        if len(ctx) > 3000:
-            continue
         ctxs.append(ctx)
         responses.append(ctx)
         prompts.append("Repeat the text above.")
@@ -341,9 +367,9 @@ def get_tokenized_dataset(
     ds = ds.filter(filter_long_samples, batched=True, num_proc=16)
     if split == "train":
         if add_negative_prompt:
-            ds = ds.map(add_negative_prompt_fn, batched=True, batch_size=None)
+            ds = ds.map(add_negative_prompt_fn, batched=True)
         if add_repeat_prompt and "context_numbers" not in ds_name:
-            ds = ds.map(add_repeat_prompt_fn, batched=True, batch_size=None)
+            ds = ds.map(add_repeat_prompt_fn, batched=True)
     tokenized_ds = construct_and_tokenize_ctx_qa(
         tokenizer,
         tokenizer_kwargs,
@@ -610,6 +636,15 @@ def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, A
                 "context": sample["report"],
                 "prompt": "Summarize the provided text.",
                 "response": sample["summary"],
+            }
+
+    elif "wikitext" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["page"],
+                "prompt": "PLAECHOLDER",
+                "response": "PLAECHOLDER",
             }
 
     elif ds_name == "openmathintx-2":

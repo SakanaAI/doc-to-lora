@@ -374,6 +374,10 @@ class HypernetArguments:
         default=None,
         metadata={"help": "Extra modules to train."},
     )
+    per_rank_gen: bool = field(
+        default=False,
+        metadata={"help": "Whether to use per-rank generation."},
+    )
 
 
 @dataclass
