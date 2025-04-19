@@ -505,6 +505,15 @@ def get_init_peft_weights(model: PeftModel, peft_config: PeftConfig = None):
     return peft_weights
 
 
+class ResMLPBlock(nn.Module): ...
+
+
+class ResMLPBlockPerLayer(nn.module):
+    def __init__(self, ...):
+        super().__init__()
+        self.mlp = MLPBlock(...)
+
+
 class HyperLoRA(nn.Module):
     def __init__(self, config: HypernetConfig):
         super().__init__()
@@ -601,9 +610,9 @@ class HyperLoRA(nn.Module):
                 if n_modules == 1:
                     self.head = Mix(
                         "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="d_latent d_lora",
+                        weight_shape="n_layers d_latent d_lora",
                         # bias_shape=None,  # no bias
-                        bias_shape="d_lora",
+                        bias_shape="n_layers d_lora",
                         # n_layers=len(self.layer_indices),
                         d_latent=self.config.latent_size,
                         r=self.config.lora_config.r,
@@ -612,9 +621,9 @@ class HyperLoRA(nn.Module):
                 else:
                     self.head = Mix(
                         "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="n_modules d_latent d_lora",
+                        weight_shape="n_layers n_modules d_latent d_lora",
                         # bias_shape=None,  # no bias
-                        bias_shape="n_modules d_lora",
+                        bias_shape="n_layers n_modules d_lora",
                         # n_layers=len(self.layer_indices),
                         n_modules=n_modules,
                         d_latent=self.config.latent_size,
@@ -625,9 +634,9 @@ class HyperLoRA(nn.Module):
                 if n_modules == 1:
                     self.head = Mix(
                         "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="d_latent r d_lora",
+                        weight_shape="n_layers d_latent r d_lora",
                         # bias_shape=None,  # no bias
-                        bias_shape="r d_lora",
+                        bias_shape="n_layers r d_lora",
                         d_latent=self.config.latent_size,
                         r=self.config.lora_config.r,
                         d_lora=d_lora,
@@ -636,9 +645,9 @@ class HyperLoRA(nn.Module):
                     # each module processes d -> r d_out independently
                     self.head = Mix(
                         "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="n_modules d_latent r d_lora",
+                        weight_shape="n_layers n_modules d_latent r d_lora",
                         # bias_shape=None,  # no bias
-                        bias_shape="n_modules r d_lora",
+                        bias_shape="n_layers n_modules r d_lora",
                         n_modules=n_modules,
                         d_latent=self.config.latent_size,
                         r=self.config.lora_config.r,
