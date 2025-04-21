@@ -378,6 +378,10 @@ class HypernetArguments:
         default=False,
         metadata={"help": "Whether to use per-rank generation."},
     )
+    per_layer_processing: bool = field(
+        default=False,
+        metadata={"help": "Whether to use per-layer processing (after preceiver)."},
+    )
 
 
 @dataclass
@@ -431,12 +435,16 @@ class AggregatorArguments:
         metadata={"help": "Number of self-attends per block for Perceiver."},
     )
     self_attention_widening_factor: int = field(
-        default=1,
+        default=4,
         metadata={"help": "Self-attention widening factor for Perceiver."},
     )
     cross_attention_widening_factor: int = field(
-        default=1,
+        default=4,
         metadata={"help": "Cross-attention widening factor for Perceiver."},
+    )
+    decoder_depth: int = field(
+        default=1,
+        metadata={"help": "Decoder depth for Perceiver."},
     )
 
 

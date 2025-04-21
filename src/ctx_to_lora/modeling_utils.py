@@ -83,6 +83,7 @@ class AggregatorConfig:
     attention_probs_dropout_prob: float = 0.0
     num_blocks: int = 1
     num_self_attends_per_block: int = 16
+    decoder_depth: int = 1  # 1 = only cross-attention
     self_attention_widening_factor: int = 4
     cross_attention_widening_factor: int = 1
     num_latent_factor: int = 8
@@ -118,6 +119,7 @@ class HypernetConfig:
     use_light_weight_lora: bool
     light_weight_latent_size: int
     per_rank_gen: bool
+    per_layer_processing: bool
     dropout_rate: float
 
     lora_config: LoraConfig
@@ -208,20 +210,21 @@ class Perceiver(nn.Module):
         # )
 
         # self.perceiver = PerceiverModel(self.config, decoder=decoder)
+        n_output_queries = num_layers * (num_modules * self.r + num_extra_modules)
         self.config = Idefics2PerceiverConfig(
             input_size=feature_size,
             # the first layer is xattn
             resampler_depth=kwargs["num_self_attends_per_block"] + 1,
-            resampler_n_latents=(num_layers * (num_modules * self.r + num_extra_modules))
-            * num_latent_factor,
+            resampler_n_latents=n_output_queries * num_latent_factor,
             intermediate_size_factor=4,
             hidden_size=output_size,
             attn_implementation="flash_attention_2",
         )
         self.decoder_config = Idefics2PerceiverConfig(
             input_size=output_size,
-            resampler_depth=1,
-            resampler_n_latents=num_layers * (num_modules * self.r + num_extra_modules),
+            resampler_depth=kwargs["decoder_depth"],
+            resampler_n_latents=n_output_queries,
+            intermediate_size_factor=4,
             hidden_size=output_size,
             attn_implementation="flash_attention_2",
         )
@@ -284,7 +287,7 @@ class Mixer(nn.Module):
         self.gate_proj = nn.Linear(input_size, intermediate_emb_size, bias=False)
         self.up_proj = nn.Linear(input_size, intermediate_emb_size, bias=False)
         self.down_proj = nn.Linear(intermediate_emb_size, output_size, bias=False)
-        self.act_fn = nn.SiLU()
+        self.act_fn = nn.GELU(approximate="tanh")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
@@ -302,18 +305,20 @@ class MLPResidualBlock(nn.Module):
     ):
         super().__init__()
         layers = []
-        if pre_layer_norm:
-            layers.append(nn.LayerNorm(input_size))
-        layers += [
+        # if pre_layer_norm:
+        # layers.append(nn.LayerNorm(input_size))
+        layers = [
+            Gemma3RMSNorm(input_size),
             nn.Dropout(dropout_rate),
             nn.Linear(input_size, hidden_size),
-            nn.SiLU(),
+            nn.GELU(approximate="tanh"),
             nn.Dropout(dropout_rate),
             nn.Linear(hidden_size, output_size),
-            nn.SiLU(),
+            Gemma3RMSNorm(output_size),
+            # nn.GELU(approximate="tanh"),
         ]
-        if post_dropout:
-            layers.append(nn.Dropout(dropout_rate))
+        # if post_dropout:
+        #     layers.append(nn.Dropout(dropout_rate))
         self.mlp = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -505,13 +510,91 @@ def get_init_peft_weights(model: PeftModel, peft_config: PeftConfig = None):
     return peft_weights
 
 
+class Gemma3RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.zeros(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float())
+        # Llama does x.to(float16) * w whilst Gemma3 is (x * w).to(float16)
+        # See https://github.com/huggingface/transformers/pull/29402
+        output = output * (1.0 + self.weight.float())
+        return output.type_as(x)
+
+    def extra_repr(self):
+        return f"{tuple(self.weight.shape)}, eps={self.eps}"
+
+
 class ResMLPBlock(nn.Module): ...
 
 
-class ResMLPBlockPerLayer(nn.module):
-    def __init__(self, ...):
+class UpMixPerLayer(nn.Module):
+    def __init__(self, n_layers: int, n_modules: int, r: int, d_in: int, d_up: int):
         super().__init__()
-        self.mlp = MLPBlock(...)
+        self.linear = Mix(
+            "bs n_layers n_modules r d_in -> bs n_layers n_modules r d_up",
+            weight_shape="n_layers d_in d_up",
+            bias_shape=None,  # "n_layers n_modules d_up",
+            n_layers=n_layers,
+            # n_modules=n_modules,
+            r=r,
+            d_in=d_in,
+            d_up=d_up,
+        )
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+class DownMixPerLayer(nn.Module):
+    def __init__(self, n_layers: int, n_modules: int, r: int, d_up: int, d_out: int):
+        super().__init__()
+        self.linear = Mix(
+            "bs n_layers n_modules r d_up -> bs n_layers n_modules r d_out",
+            weight_shape="n_layers d_up d_out",
+            bias_shape=None,  # "n_layers n_modules d_out",
+            n_layers=n_layers,
+            # n_modules=n_modules,
+            r=r,
+            d_up=d_up,
+            d_out=d_out,
+        )
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+class MixerPerLayer(nn.Module):
+    def __init__(self, n_layers: int, n_modules: int, r: int, d_in: int):
+        super().__init__()
+        self.up_proj = UpMixPerLayer(n_layers, n_modules, r, d_in, d_in * 4)
+        self.gate_proj = UpMixPerLayer(n_layers, n_modules, r, d_in, d_in * 4)
+        self.down_proj = DownMixPerLayer(n_layers, n_modules, r, d_in * 4, d_in)
+        self.act_fn = nn.GELU(approximate="tanh")
+
+    def forward(self, x):
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+
+class ResMLPBlockPerLayer(nn.Module):
+    def __init__(self, n_layers: int, n_modules: int, r: int, d_in: int):
+        super().__init__()
+        # input shape: [bs, n_layers, n_modules, feature_dim]
+        self.pre_norm = Gemma3RMSNorm(d_in)
+        self.post_norm = Gemma3RMSNorm(d_in)
+        self.mixer = MixerPerLayer(n_layers, n_modules, r, d_in)
+
+    def forward(self, x):
+        inp = x
+        x = self.pre_norm(x)
+        x = self.mixer(x)
+        x = self.post_norm(x)
+        return x + inp
 
 
 class HyperLoRA(nn.Module):
@@ -540,8 +623,10 @@ class HyperLoRA(nn.Module):
         )
         self.num_extra_modules = len(self.extra_modules) if self.extra_modules else 0
         self.layer_indices = self.config.layer_indices
+        self.n_layers = len(self.layer_indices)
 
         self.d_in, self.d_out = self.config.feature_sizes
+        self.d_latent = self.config.latent_size
 
         if self.target_modules:
             # self.layers = nn.Sequential(
@@ -555,51 +640,65 @@ class HyperLoRA(nn.Module):
             #         for _ in range(4)
             #     ]
             # )
-            self.layers = MLPResidualBlock(
-                input_size=self.config.latent_size,
-                hidden_size=self.config.latent_size * 4,
-                output_size=self.config.latent_size,
-                dropout_rate=getattr(self.config, "dropout_rate", 0),
-            )
-            # self.layers = nn.Identity()
-            if self.config.use_light_weight_lora:
-                # light-weight lora projection (per module)
-
-                self.pre_lora_projection = nn.ParameterDict(
-                    {
-                        k: nn.Parameter(
-                            torch.randn(
-                                self.d_in[k], self.config.light_weight_latent_size
-                            )
-                        )
-                        for k in self.target_modules
-                    }
+            if self.config.per_layer_processing:
+                self.layers = nn.Sequential(
+                    nn.Linear(self.d_latent, self.d_latent),
+                    ResMLPBlockPerLayer(
+                        self.n_layers,
+                        self.num_modules,
+                        self.lora_config.r,
+                        self.d_latent,
+                    ),
                 )
-                for param in self.pre_lora_projection.values():
-                    nn.init.orthogonal_(param)
-
-                self.post_lora_projection = nn.ParameterDict(
-                    {
-                        k: nn.Parameter(
-                            torch.randn(
-                                self.d_out[k], self.config.light_weight_latent_size
-                            )
-                        )
-                        for k in self.target_modules
-                    }
-                )
-                for param in self.post_lora_projection.values():
-                    nn.init.orthogonal_(param)
-
-                d_lora = self.config.light_weight_latent_size * 2
-                self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
-                self.d_out = {
-                    k: self.config.light_weight_latent_size for k in self.d_out
-                }
-
-                logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
             else:
-                d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
+                self.layers = nn.Sequential(
+                    nn.Linear(self.d_latent, self.d_latent),
+                    MLPResidualBlock(
+                        input_size=self.config.latent_size,
+                        hidden_size=self.config.latent_size * 4,
+                        output_size=self.config.latent_size,
+                        dropout_rate=getattr(self.config, "dropout_rate", 0),
+                    ),
+                )
+
+            d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
+
+            # if self.config.use_light_weight_lora:
+            #     # light-weight lora projection (per module)
+
+            #     self.pre_lora_projection = nn.ParameterDict(
+            #         {
+            #             k: nn.Parameter(
+            #                 torch.randn(
+            #                     self.d_in[k], self.config.light_weight_latent_size
+            #                 )
+            #             )
+            #             for k in self.target_modules
+            #         }
+            #     )
+            #     for param in self.pre_lora_projection.values():
+            #         nn.init.orthogonal_(param)
+
+            #     self.post_lora_projection = nn.ParameterDict(
+            #         {
+            #             k: nn.Parameter(
+            #                 torch.randn(
+            #                     self.d_out[k], self.config.light_weight_latent_size
+            #                 )
+            #             )
+            #             for k in self.target_modules
+            #         }
+            #     )
+            #     for param in self.post_lora_projection.values():
+            #         nn.init.orthogonal_(param)
+
+            #     d_lora = self.config.light_weight_latent_size * 2
+            #     self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
+            #     self.d_out = {
+            #         k: self.config.light_weight_latent_size for k in self.d_out
+            #     }
+
+            #     logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
 
             n_modules = len(self.target_modules)
             # have to do this otherwise doesnt work with adamw_torch_fused
@@ -608,93 +707,140 @@ class HyperLoRA(nn.Module):
             # but when n_modules > 1, it works fine
             if self.config.per_rank_gen:
                 if n_modules == 1:
-                    self.head = Mix(
-                        "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="n_layers d_latent d_lora",
-                        # bias_shape=None,  # no bias
-                        bias_shape="n_layers d_lora",
-                        # n_layers=len(self.layer_indices),
-                        d_latent=self.config.latent_size,
-                        r=self.config.lora_config.r,
-                        d_lora=d_lora,
-                    )
+                    if self.config.per_layer_processing:
+                        self.head = Mix(
+                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="n_layers r d_latent d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="n_layers r d_lora",
+                            n_layers=len(self.layer_indices),
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
+                    else:
+                        self.head = Mix(
+                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="r d_latent d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="r d_lora",
+                            # n_layers=len(self.layer_indices),
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
                 else:
-                    self.head = Mix(
-                        "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="n_layers n_modules d_latent d_lora",
-                        # bias_shape=None,  # no bias
-                        bias_shape="n_layers n_modules d_lora",
-                        # n_layers=len(self.layer_indices),
-                        n_modules=n_modules,
-                        d_latent=self.config.latent_size,
-                        r=self.config.lora_config.r,
-                        d_lora=d_lora,
-                    )
+                    if self.config.per_layer_processing:
+                        self.head = Mix(
+                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="n_layers n_modules r d_latent d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="n_layers n_modules r d_lora",
+                            n_layers=len(self.layer_indices),
+                            n_modules=n_modules,
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
+                    else:
+                        self.head = Mix(
+                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="n_modules r d_latent d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="n_modules r d_lora",
+                            n_layers=len(self.layer_indices),
+                            n_modules=n_modules,
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
             else:
                 if n_modules == 1:
+                    if self.config.per_layer_processing:
+                        self.head = Mix(
+                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="n_layers d_latent r d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="n_layers r d_lora",
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
                     self.head = Mix(
                         "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="n_layers d_latent r d_lora",
+                        weight_shape="d_latent r d_lora",
                         # bias_shape=None,  # no bias
-                        bias_shape="n_layers r d_lora",
+                        bias_shape="r d_lora",
                         d_latent=self.config.latent_size,
                         r=self.config.lora_config.r,
                         d_lora=d_lora,
                     )
                 else:
                     # each module processes d -> r d_out independently
-                    self.head = Mix(
-                        "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="n_layers n_modules d_latent r d_lora",
-                        # bias_shape=None,  # no bias
-                        bias_shape="n_layers n_modules r d_lora",
-                        n_modules=n_modules,
-                        d_latent=self.config.latent_size,
-                        r=self.config.lora_config.r,
-                        d_lora=d_lora,
-                    )
+                    if self.config.per_layer_processing:
+                        self.head = Mix(
+                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="n_layers n_modules d_latent r d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="n_layers n_modules r d_lora",
+                            n_modules=n_modules,
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
+                    else:
+                        self.head = Mix(
+                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="n_modules d_latent r d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="n_modules r d_lora",
+                            n_modules=n_modules,
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
 
-        if self.extra_modules:
-            # self.extra_layers = nn.Sequential(
-            #     *[
-            #         MLPResidualBlock(
-            #             input_size=self.config.latent_size,
-            #             hidden_size=self.config.latent_size * 4,
-            #             output_size=self.config.latent_size,
-            #             dropout_rate=getattr(self.config, "dropout_rate", 0),
-            #         )
-            #         for _ in range(4)
-            #     ]
-            # )
-            self.extra_layers = MLPResidualBlock(
-                input_size=self.config.latent_size,
-                hidden_size=self.config.latent_size * 4,
-                output_size=self.config.latent_size,
-                dropout_rate=getattr(self.config, "dropout_rate", 0),
-            )
-            # self.extra_layers = nn.Identity()
-            # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
-            # self.extra_norm = nn.LayerNorm(self.config.latent_size)
+        # if self.extra_modules:
+        #     # self.extra_layers = nn.Sequential(
+        #     #     *[
+        #     #         MLPResidualBlock(
+        #     #             input_size=self.config.latent_size,
+        #     #             hidden_size=self.config.latent_size * 4,
+        #     #             output_size=self.config.latent_size,
+        #     #             dropout_rate=getattr(self.config, "dropout_rate", 0),
+        #     #         )
+        #     #         for _ in range(4)
+        #     #     ]
+        #     # )
+        #     self.extra_layers = MLPResidualBlock(
+        #         input_size=self.config.latent_size,
+        #         hidden_size=self.config.latent_size * 4,
+        #         output_size=self.config.latent_size,
+        #         dropout_rate=getattr(self.config, "dropout_rate", 0),
+        #     )
+        #     # self.extra_layers = nn.Identity()
+        #     # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
+        #     # self.extra_norm = nn.LayerNorm(self.config.latent_size)
 
-            # separate head for extra_modules, e.g., layernorm
-            n_extra_modules = len(self.extra_modules) if self.extra_modules else 0
-            if n_extra_modules == 1:
-                self.extra_head = Mix(
-                    "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
-                    weight_shape="d_latent hidden_size",
-                    bias_shape="hidden_size",
-                    d_latent=self.config.latent_size,
-                    hidden_size=self.config.base_hidden_size,
-                )
-            else:
-                self.extra_head = Mix(
-                    "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
-                    weight_shape="n_modules d_latent hidden_size",
-                    bias_shape="n_modules hidden_size",
-                    n_modules=n_extra_modules,
-                    d_latent=self.config.latent_size,
-                    hidden_size=self.config.base_hidden_size,
-                )
+        #     # separate head for extra_modules, e.g., layernorm
+        #     n_extra_modules = len(self.extra_modules) if self.extra_modules else 0
+        #     if n_extra_modules == 1:
+        #         self.extra_head = Mix(
+        #             "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
+        #             weight_shape="d_latent hidden_size",
+        #             bias_shape="hidden_size",
+        #             d_latent=self.config.latent_size,
+        #             hidden_size=self.config.base_hidden_size,
+        #         )
+        #     else:
+        #         self.extra_head = Mix(
+        #             "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
+        #             weight_shape="n_modules d_latent hidden_size",
+        #             bias_shape="n_modules hidden_size",
+        #             n_modules=n_extra_modules,
+        #             d_latent=self.config.latent_size,
+        #             hidden_size=self.config.base_hidden_size,
+        #         )
 
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
