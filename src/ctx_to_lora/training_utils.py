@@ -22,6 +22,8 @@ from transformers.trainer_utils import (
     has_length,
     seed_worker,
 )
+from transformers.trainer import _is_peft_model
+from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 from transformers.trainer_pt_utils import LengthGroupedSampler
 from transformers.utils import is_datasets_available
 
@@ -29,6 +31,60 @@ from transformers.utils import is_datasets_available
 TRAINING_TASK = Enum("TRAINING_TASK", ["CAUSAL_LM", "COMPLETION"])
 
 logger = logging.getLogger()
+
+
+class ModulatedModelTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        self.gen_lora_l1_reg_coef = kwargs.pop("gen_lora_l1_reg_coef", 0.0)
+        super().__init__(*args, **kwargs)
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+        Subclass and override for custom behavior.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+
+        ##### get generated LoRAs
+        outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
+        #####
+
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        if labels is not None:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if _is_peft_model(unwrapped_model):
+                model_name = unwrapped_model.base_model.model._get_name()
+            else:
+                model_name = unwrapped_model._get_name()
+            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                loss = self.label_smoother(outputs, labels, shift_labels=True)
+            else:
+                loss = self.label_smoother(outputs, labels)
+        else:
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+                )
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        ##### unpack gen lora dict and compute regularization loss
+        if self.gen_lora_l1_reg_coef > 0.0:
+            reg_loss = 0.0
+            for module, lora in gen_loras.items():
+                reg_loss += lora["A"].abs().mean() + lora["B"].abs().mean()
+            loss += self.gen_lora_l1_reg_coef * reg_loss
+        #####
+        return (loss, outputs) if return_outputs else loss
 
 
 def clear_gpu():
@@ -58,7 +114,8 @@ def train_model(
         checkpoint = training_args.resume_from_checkpoint
         logger.info(f"Resuming from the checkpoint: {checkpoint}")
 
-    trainer_cls = Trainer
+    is_modulated_model = bool(getattr(model, "gen_lora_l1_reg_coef", 0))
+    trainer_cls = Trainer if not is_modulated_model else ModulatedModelTrainer
     trainer_kwargs = dict(
         model=model,
         args=training_args,
@@ -67,6 +124,11 @@ def train_model(
         data_collator=train_collator,
         compute_metrics=compute_metrics,
     )
+    if is_modulated_model:
+        logger.info(f"Training with modulated model. Using CustomTrainer.")
+        trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.pop(
+            "gen_lora_l1_reg_coef"
+        )
 
     trainer = trainer_cls(**trainer_kwargs)
 

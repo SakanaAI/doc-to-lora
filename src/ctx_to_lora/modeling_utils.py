@@ -80,12 +80,12 @@ class AggregatorConfig:
     output_size: int
 
     # perceiver
-    attention_probs_dropout_prob: float = 0.0
-    num_blocks: int = 1
-    num_self_attends_per_block: int = 16
-    decoder_depth: int = 1  # 1 = only cross-attention
-    self_attention_widening_factor: int = 4
-    cross_attention_widening_factor: int = 1
+    # attention_probs_dropout_prob: float = 0.0
+    # num_blocks: int = 1
+    num_self_attends_per_block: int  # = 16
+    decoder_depth: int  # = 1  # 1 = only cross-attention
+    # self_attention_widening_factor: int = 4
+    # cross_attention_widening_factor: int = 1
     num_latent_factor: int = 8
     lora_r: int = 8
     per_rank_gen: bool = False
@@ -1246,6 +1246,7 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_len"]] = None,
         ctx_position_ids: Optional[Integer[Tensor, "bs ctx_len"]] = None,
+        return_generated_lora: Optional[bool] = False,
         # chat_ids: Optional[Integer[Tensor, "bs chat_len"]] = None,
         # chat_attn_mask: Optional[Integer[Tensor, "bs chat_len"]] = None,
         # chat_labels: Optional[Integer[Tensor, "bs chat_len"]] = None,
@@ -1323,7 +1324,10 @@ class ModulatedPretrainedModel(nn.Module):
         ):
             model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
-        return model_outputs
+        if return_generated_lora:
+            return model_outputs, (generated_loras, generated_layernorms)
+        else:
+            return model_outputs
 
     @torch.inference_mode()
     def generate(

@@ -249,6 +249,7 @@ def main():
         ]
     )
 
+    set_seed(training_args.seed)
     checkpoint_dir = training_args.resume_from_checkpoint
     if checkpoint_dir and not os.path.isdir(checkpoint_dir):
         raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
@@ -295,7 +296,6 @@ def main():
     args["deepspeed_plugin"] = None
     logger.debug(f"args: {args}")
     save_yaml(args, f"{output_dir}/args.yaml")
-    set_seed(training_args.seed)
 
     ############ Model setup
 
@@ -341,6 +341,7 @@ def main():
                 ctx_encoder_args,
                 ctx_args.use_kl_loss,
             )
+            training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
         else:
             logger.info(
                 f"Loading from checkpoint: {ctx_args.from_pretrained_checkpoint}"

@@ -326,6 +326,10 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to use KL loss."},
     )
+    gen_lora_l1_reg_coef: float = field(
+        default=0.0,
+        metadata={"help": "L1 regularization coefficient for generated LoRAs."},
+    )
 
 
 @dataclass
@@ -418,30 +422,30 @@ class AggregatorArguments:
     # output_size: int
 
     # perceiver
-    attention_probs_dropout_prob: float = field(
-        default=0.0,
-        metadata={"help": "Attention dropout probability for Perceiver."},
-    )
+    # attention_probs_dropout_prob: float = field(
+    #     default=0.0,
+    #     metadata={"help": "Attention dropout probability for Perceiver."},
+    # )
     num_latent_factor: int = field(
         default=8,
         metadata={"help": "Number of latent factors for Perceiver."},
     )
-    num_blocks: int = field(
-        default=8,
-        metadata={"help": "Number of blocks for Perceiver."},
-    )
+    # num_blocks: int = field(
+    #     default=8,
+    #     metadata={"help": "Number of blocks for Perceiver."},
+    # )
     num_self_attends_per_block: int = field(
         default=6,
         metadata={"help": "Number of self-attends per block for Perceiver."},
     )
-    self_attention_widening_factor: int = field(
-        default=4,
-        metadata={"help": "Self-attention widening factor for Perceiver."},
-    )
-    cross_attention_widening_factor: int = field(
-        default=4,
-        metadata={"help": "Cross-attention widening factor for Perceiver."},
-    )
+    # self_attention_widening_factor: int = field(
+    #     default=4,
+    #     metadata={"help": "Self-attention widening factor for Perceiver."},
+    # )
+    # cross_attention_widening_factor: int = field(
+    #     default=4,
+    #     metadata={"help": "Cross-attention widening factor for Perceiver."},
+    # )
     decoder_depth: int = field(
         default=1,
         metadata={"help": "Decoder depth for Perceiver."},
