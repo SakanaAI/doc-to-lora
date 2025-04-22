@@ -76,7 +76,7 @@ class ModulatedModelTrainer(Trainer):
             self.args.logging_strategy == IntervalStrategy.STEPS
             and self.state.global_step % self.state.logging_steps == 0
         ):
-            self.log({"ce_loss": loss.item(), "gen_lora_reg_loss": l1_norm.item()})
+            self.log({"ce_loss": loss.item(), "gen_lora_l1_norm": l1_norm.item()})
         loss += self.gen_lora_l1_reg_coef * l1_norm
         #####
 
