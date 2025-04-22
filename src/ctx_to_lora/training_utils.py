@@ -1,32 +1,14 @@
 import gc
-import json
 import logging
-from collections import defaultdict
-from dataclasses import fields
 from enum import Enum
-from typing import Optional
 
-import datasets
 import torch
-import numpy as np
-from rouge_score import rouge_scorer
-from torch.utils.data import RandomSampler, DataLoader
-from transformers import (
-    GenerationConfig,
-    Seq2SeqTrainer,
-    Seq2SeqTrainingArguments,
-    Trainer,
-)
-from transformers.trainer_utils import (
-    get_last_checkpoint,
-    has_length,
-    seed_worker,
-)
+from transformers import Trainer
 from transformers.trainer import _is_peft_model
+from transformers.trainer_utils import IntervalStrategy
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
-from transformers.trainer_pt_utils import LengthGroupedSampler
-from transformers.utils import is_datasets_available
 
+from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
 
 TRAINING_TASK = Enum("TRAINING_TASK", ["CAUSAL_LM", "COMPLETION"])
 
@@ -38,21 +20,24 @@ class ModulatedModelTrainer(Trainer):
         self.gen_lora_l1_reg_coef = kwargs.pop("gen_lora_l1_reg_coef", 0.0)
         super().__init__(*args, **kwargs)
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
         Subclass and override for custom behavior.
         """
-        if self.label_smoother is not None and "labels" in inputs:
+        if (
+            self.label_smoother is not None or self.compute_loss_func is not None
+        ) and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
             labels = None
-
-        ##### get generated LoRAs
+        if self.model_accepts_loss_kwargs:
+            loss_kwargs = {}
+            if num_items_in_batch is not None:
+                loss_kwargs["num_items_in_batch"] = num_items_in_batch
+            inputs = {**inputs, **loss_kwargs}
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
-        #####
-
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -64,7 +49,12 @@ class ModulatedModelTrainer(Trainer):
                 model_name = unwrapped_model.base_model.model._get_name()
             else:
                 model_name = unwrapped_model._get_name()
-            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+            # User-defined compute_loss function
+            if self.compute_loss_func is not None:
+                loss = self.compute_loss_func(
+                    outputs, labels, num_items_in_batch=num_items_in_batch
+                )
+            elif model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
                 loss = self.label_smoother(outputs, labels, shift_labels=True)
             else:
                 loss = self.label_smoother(outputs, labels)
@@ -78,12 +68,21 @@ class ModulatedModelTrainer(Trainer):
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
         ##### unpack gen lora dict and compute regularization loss
-        if self.gen_lora_l1_reg_coef > 0.0:
-            reg_loss = 0.0
-            for module, lora in gen_loras.items():
-                reg_loss += lora["A"].abs().mean() + lora["B"].abs().mean()
-            loss += self.gen_lora_l1_reg_coef * reg_loss
+        l1_norm = 0
+        for module, lora in gen_loras.items():
+            l1_norm += lora["A"].abs().mean() + lora["B"].abs().mean()
+        # rough estimate of the losses (we only log the values from one step)
+        if (self.state.global_step == 1 and self.args.logging_first_step) or (
+            self.args.logging_strategy == IntervalStrategy.STEPS
+            and self.state.global_step % self.state.logging_steps == 0
+        ):
+            self.log({"ce_loss": loss.item(), "gen_lora_reg_loss": l1_norm.item()})
+        loss += self.gen_lora_l1_reg_coef * l1_norm
         #####
+
+        if self.args.average_tokens_across_devices and self.model_accepts_loss_kwargs:
+            loss *= self.accelerator.num_processes
+
         return (loss, outputs) if return_outputs else loss
 
 
@@ -114,7 +113,7 @@ def train_model(
         checkpoint = training_args.resume_from_checkpoint
         logger.info(f"Resuming from the checkpoint: {checkpoint}")
 
-    is_modulated_model = bool(getattr(model, "gen_lora_l1_reg_coef", 0))
+    is_modulated_model = isinstance(model, ModulatedPretrainedModel)
     trainer_cls = Trainer if not is_modulated_model else ModulatedModelTrainer
     trainer_kwargs = dict(
         model=model,
@@ -126,9 +125,8 @@ def train_model(
     )
     if is_modulated_model:
         logger.info(f"Training with modulated model. Using CustomTrainer.")
-        trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.pop(
-            "gen_lora_l1_reg_coef"
-        )
+        trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
+        del training_args.gen_lora_l1_reg_coef
 
     trainer = trainer_cls(**trainer_kwargs)
 
