@@ -109,7 +109,7 @@ if __name__ == "__main__":
     #     base_url=f"http://{vllm_ip}:{vllm_port}/v1",
     #     api_key=api_key,
     # )
-    mm_kwargs = {"image":0} # if "gemma-3" in vllm_model else {}
+    mm_kwargs = {"image": 0}  # if "gemma-3" in vllm_model else {}
     llm_kwargs = dict(
         model=vllm_model,
         dtype="bfloat16",
@@ -117,12 +117,12 @@ if __name__ == "__main__":
         # config_format="mistral",
         # load_format="mistral",
         enable_prefix_caching=True,
-        max_model_len=11264,#2**14,
+        max_model_len=2**14,  # 11264,
         limit_mm_per_prompt=mm_kwargs,
         # enable_chunked_prefill=True,
     )
-    
-    if vllm_model=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+
+    if vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
         llm_kwargs["tokenizer_mode"] = "mistral"
         llm_kwargs["config_format"] = "mistral"
         llm_kwargs["load_format"] = "mistral"
@@ -161,7 +161,11 @@ if __name__ == "__main__":
             messages,
             sampling_params=SamplingParams(
                 max_tokens=2048,
-                temperature=0.1 if vllm_model=="mistralai/Mistral-Small-3.1-24B-Instruct-2503" else 0.7,
+                temperature=(
+                    0.1
+                    if vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+                    else 0.7
+                ),
                 # frequency_penalty=0.1,
             ),
         )
