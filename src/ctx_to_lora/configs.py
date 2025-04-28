@@ -386,6 +386,10 @@ class HypernetArguments:
         default=False,
         metadata={"help": "Whether to use per-layer processing (after preceiver)."},
     )
+    use_token_mixing: bool = field(
+        default=False,
+        metadata={"help": "Whether to use token mixing block."},
+    )
 
 
 @dataclass

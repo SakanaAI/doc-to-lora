@@ -120,6 +120,7 @@ class HypernetConfig:
     light_weight_latent_size: int
     per_rank_gen: bool
     per_layer_processing: bool
+    use_token_mixing: bool
     dropout_rate: float
 
     lora_config: LoraConfig
@@ -597,6 +598,80 @@ class ResMLPBlockPerLayer(nn.Module):
         return x + inp
 
 
+class ResMLPTokenMixingPerLayer(nn.Module):
+    def __init__(self, n_layers: int, n_modules: int, r: int, d_in: int):
+        super().__init__()
+        # input shape: [bs, n_layers, n_modules, feature_dim]
+        d_hid = d_in // 4
+        self.pre_norm = Gemma3RMSNorm(d_in)
+        self.post_norm = Gemma3RMSNorm(d_in)
+        # self.proj_down = Mix(
+        #     "bs n_layers n_modules r d_in -> bs n_layers n_modules r d_hid",
+        #     weight_shape="n_layers d_in d_hid",
+        #     bias_shape=None,  # "n_layers n_modules d_hid",
+        #     n_layers=n_layers,
+        #     # n_modules=n_modules,
+        #     d_in=d_in,
+        #     d_hid=d_hid,
+        # )
+        # concat all tokens (r, d_hid) then map them back to (r, d_in)
+        # up_proj = Mix(
+        #     "bs n_layers n_modules r d_hid -> bs n_layers n_modules r0 d_in",
+        #     weight_shape="n_layers r d_hid r0 d_in",
+        #     n_layers=n_layers,
+        #     r=r,
+        #     r0=r,
+        #     d_hid=d_hid,
+        #     d_in=d_in,
+        # )
+        # act_fn = nn.GELU(approximate="tanh")
+        # out_proj = Mix(
+        #     "bs n_layers n_modules r d_in -> bs n_layers n_modules r0 d_in0",
+        #     weight_shape="n_layers r d_in r0 d_in0",
+        #     bias_shape=None,  # "n_layers n_modules d_in0",
+        #     n_layers=n_layers,
+        #     r=r,
+        #     r0=r,
+        #     d_in=d_in,
+        #     d_in0=d_in,
+        # )
+        # self.token_mixer = nn.Sequential(up_proj, act_fn, out_proj)
+        n_token_factors = 16
+        self.proj = Mix(
+            "bs n_layers n_modules r d_in -> bs n_layers n_modules r d_in0",
+            weight_shape="d_in d_in0",
+            bias_shape=None,
+            d_in=d_in,
+            d_in0=d_in,
+        )
+        token_mix_up = Mix(
+            "bs n_layers n_modules r d_in -> bs n_layers n_modules r0 d_in",
+            weight_shape="n_layers r r0",
+            bias_shape=None,
+            n_layers=n_layers,
+            r=r,
+            r0=r * n_token_factors,
+        )
+        act_fn = nn.GELU(approximate="tanh")
+        token_mix_down = Mix(
+            "bs n_layers n_modules r0 d_in -> bs n_layers n_modules r d_in",
+            weight_shape="n_layers r0 r",
+            bias_shape=None,
+            n_layers=n_layers,
+            r=r,
+            r0=r * n_token_factors,
+        )
+        self.token_mixer = nn.Sequential(token_mix_up, act_fn, token_mix_down)
+
+    def forward(self, x):
+        inp = x
+        x = self.proj(x)
+        x = self.pre_norm(x)
+        x = self.token_mixer(x)
+        x = self.post_norm(x)
+        return x + inp
+
+
 class HyperLoRA(nn.Module):
     def __init__(self, config: HypernetConfig):
         super().__init__()
@@ -641,7 +716,7 @@ class HyperLoRA(nn.Module):
             #     ]
             # )
             if self.config.per_layer_processing:
-                self.layers = nn.Sequential(
+                layers = [
                     nn.Linear(self.d_latent, self.d_latent),
                     ResMLPBlockPerLayer(
                         self.n_layers,
@@ -649,9 +724,9 @@ class HyperLoRA(nn.Module):
                         self.lora_config.r,
                         self.d_latent,
                     ),
-                )
+                ]
             else:
-                self.layers = nn.Sequential(
+                layers = [
                     nn.Linear(self.d_latent, self.d_latent),
                     MLPResidualBlock(
                         input_size=self.config.latent_size,
@@ -659,7 +734,18 @@ class HyperLoRA(nn.Module):
                         output_size=self.config.latent_size,
                         dropout_rate=getattr(self.config, "dropout_rate", 0),
                     ),
-                )
+                ]
+            if self.config.use_token_mixing:
+                layers = [
+                    ResMLPTokenMixingPerLayer(
+                        self.n_layers,
+                        self.num_modules,
+                        self.lora_config.r,
+                        self.d_latent,
+                    )
+                ] + layers
+
+            self.layers = nn.Sequential(*layers)
 
             d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
@@ -710,9 +796,9 @@ class HyperLoRA(nn.Module):
                     if self.config.per_layer_processing:
                         self.head = Mix(
                             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_layers r d_latent d_lora",
+                            weight_shape="n_layers d_latent d_lora",
                             # bias_shape=None,  # no bias
-                            bias_shape="n_layers r d_lora",
+                            bias_shape="n_layers d_lora",
                             n_layers=len(self.layer_indices),
                             d_latent=self.config.latent_size,
                             r=self.config.lora_config.r,
@@ -721,9 +807,9 @@ class HyperLoRA(nn.Module):
                     else:
                         self.head = Mix(
                             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="r d_latent d_lora",
+                            weight_shape="d_latent d_lora",
                             # bias_shape=None,  # no bias
-                            bias_shape="r d_lora",
+                            bias_shape="d_lora",
                             # n_layers=len(self.layer_indices),
                             d_latent=self.config.latent_size,
                             r=self.config.lora_config.r,
