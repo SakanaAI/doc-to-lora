@@ -288,7 +288,7 @@ class Mixer(nn.Module):
         self.gate_proj = nn.Linear(input_size, intermediate_emb_size, bias=False)
         self.up_proj = nn.Linear(input_size, intermediate_emb_size, bias=False)
         self.down_proj = nn.Linear(intermediate_emb_size, output_size, bias=False)
-        self.act_fn = nn.GELU(approximate="tanh")
+        self.act_fn = nn.SiLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
@@ -309,14 +309,14 @@ class MLPResidualBlock(nn.Module):
         # if pre_layer_norm:
         # layers.append(nn.LayerNorm(input_size))
         layers = [
-            Gemma3RMSNorm(input_size),
+            nn.LayerNorm(input_size),
             nn.Dropout(dropout_rate),
             nn.Linear(input_size, hidden_size),
-            nn.GELU(approximate="tanh"),
+            nn.SiLU(),
             nn.Dropout(dropout_rate),
             nn.Linear(hidden_size, output_size),
-            Gemma3RMSNorm(output_size),
-            # nn.GELU(approximate="tanh"),
+            nn.LayerNorm(output_size),
+            # nn.SiLU(),
         ]
         # if post_dropout:
         #     layers.append(nn.Dropout(dropout_rate))
@@ -576,26 +576,64 @@ class MixerPerLayer(nn.Module):
         self.up_proj = UpMixPerLayer(n_layers, n_modules, r, d_in, d_in * 4)
         self.gate_proj = UpMixPerLayer(n_layers, n_modules, r, d_in, d_in * 4)
         self.down_proj = DownMixPerLayer(n_layers, n_modules, r, d_in * 4, d_in)
-        self.act_fn = nn.GELU(approximate="tanh")
+        self.act_fn = nn.SiLU()
 
     def forward(self, x):
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 
+# class ResMLPBlockPerLayer(nn.Module):
+#     def __init__(self, n_layers: int, n_modules: int, r: int, d_in: int):
+#         super().__init__()
+#         # input shape: [bs, n_layers, n_modules, feature_dim]
+#         self.pre_norm = nn.LayerNorm(d_in)
+#         self.post_norm = nn.LayerNorm(d_in)
+#         self.mixer = MixerPerLayer(n_layers, n_modules, r, d_in)
+
+#     def forward(self, x):
+#         inp = x
+#         x = self.pre_norm(x)
+#         x = self.mixer(x)
+#         x = self.post_norm(x)
+#         return x + inp
+
+
 class ResMLPBlockPerLayer(nn.Module):
-    def __init__(self, n_layers: int, n_modules: int, r: int, d_in: int):
+    def __init__(
+        self,
+        n_layers: int,
+        input_size: int,
+        hidden_size: int,
+        output_size: int,
+    ):
         super().__init__()
-        # input shape: [bs, n_layers, n_modules, feature_dim]
-        self.pre_norm = Gemma3RMSNorm(d_in)
-        self.post_norm = Gemma3RMSNorm(d_in)
-        self.mixer = MixerPerLayer(n_layers, n_modules, r, d_in)
+        layers = [
+            nn.LayerNorm(input_size),
+            # nn.Linear(input_size, hidden_size),
+            Mix(
+                "bs n_layers n_modules r d_in -> bs n_layers n_modules r d_hid",
+                weight_shape="n_layers d_in d_hid",
+                bias_shape="n_layers d_hid",
+                n_layers=n_layers,
+                d_in=input_size,
+                d_hid=hidden_size,
+            ),
+            nn.SiLU(),
+            # nn.Linear(hidden_size, output_size),
+            Mix(
+                "bs n_layers n_modules r d_hid -> bs n_layers n_modules r d_out",
+                weight_shape="n_layers d_hid d_out",
+                bias_shape="n_layers d_out",
+                n_layers=n_layers,
+                d_hid=hidden_size,
+                d_out=output_size,
+            ),
+            nn.LayerNorm(output_size),
+        ]
+        self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
-        inp = x
-        x = self.pre_norm(x)
-        x = self.mixer(x)
-        x = self.post_norm(x)
-        return x + inp
+        return x + self.layers(x)
 
 
 class ResMLPTokenMixingPerLayer(nn.Module):
@@ -603,8 +641,8 @@ class ResMLPTokenMixingPerLayer(nn.Module):
         super().__init__()
         # input shape: [bs, n_layers, n_modules, feature_dim]
         d_hid = d_in // 4
-        self.pre_norm = Gemma3RMSNorm(d_in)
-        self.post_norm = Gemma3RMSNorm(d_in)
+        self.pre_norm = nn.LayerNorm(d_in)
+        self.post_norm = nn.LayerNorm(d_in)
         # self.proj_down = Mix(
         #     "bs n_layers n_modules r d_in -> bs n_layers n_modules r d_hid",
         #     weight_shape="n_layers d_in d_hid",
@@ -624,7 +662,7 @@ class ResMLPTokenMixingPerLayer(nn.Module):
         #     d_hid=d_hid,
         #     d_in=d_in,
         # )
-        # act_fn = nn.GELU(approximate="tanh")
+        # act_fn = nn.SiLU()
         # out_proj = Mix(
         #     "bs n_layers n_modules r d_in -> bs n_layers n_modules r0 d_in0",
         #     weight_shape="n_layers r d_in r0 d_in0",
@@ -652,7 +690,7 @@ class ResMLPTokenMixingPerLayer(nn.Module):
             r=r,
             r0=r * n_token_factors,
         )
-        act_fn = nn.GELU(approximate="tanh")
+        act_fn = nn.SiLU()
         token_mix_down = Mix(
             "bs n_layers n_modules r0 d_in -> bs n_layers n_modules r d_in",
             weight_shape="n_layers r0 r",
@@ -717,17 +755,29 @@ class HyperLoRA(nn.Module):
             # )
             if self.config.per_layer_processing:
                 layers = [
-                    nn.Linear(self.d_latent, self.d_latent),
+                    # nn.Linear(self.d_latent, self.d_latent),
+                    # Mix(
+                    #     "bs n_layers n_modules r d -> bs n_layers n_modules r d0",
+                    #     weight_shape="n_layers d d0",
+                    #     bias_shape="n_layers d0",
+                    #     n_layers=self.n_layers,
+                    #     d=self.d_latent,
+                    #     d0=self.d_latent,
+                    # ),
                     ResMLPBlockPerLayer(
                         self.n_layers,
-                        self.num_modules,
-                        self.lora_config.r,
                         self.d_latent,
+                        self.d_latent * 4,
+                        self.d_latent,
+                        # self.num_modules,
+                        # self.lora_config.r,
+                        # self.d_latent,
                     ),
                 ]
             else:
                 layers = [
-                    nn.Linear(self.d_latent, self.d_latent),
+                    # nn.Linear(self.d_latent, self.d_latent),
+                    # nn.LayerNorm(self.d_latent),
                     MLPResidualBlock(
                         input_size=self.config.latent_size,
                         hidden_size=self.config.latent_size * 4,
@@ -819,9 +869,9 @@ class HyperLoRA(nn.Module):
                     if self.config.per_layer_processing:
                         self.head = Mix(
                             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_layers n_modules r d_latent d_lora",
+                            weight_shape="n_layers n_modules d_latent d_lora",
                             # bias_shape=None,  # no bias
-                            bias_shape="n_layers n_modules r d_lora",
+                            bias_shape="n_layers n_modules d_lora",
                             n_layers=len(self.layer_indices),
                             n_modules=n_modules,
                             d_latent=self.config.latent_size,
@@ -831,9 +881,9 @@ class HyperLoRA(nn.Module):
                     else:
                         self.head = Mix(
                             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_modules r d_latent d_lora",
+                            weight_shape="n_modules d_latent d_lora",
                             # bias_shape=None,  # no bias
-                            bias_shape="n_modules r d_lora",
+                            bias_shape="n_modules d_lora",
                             n_layers=len(self.layer_indices),
                             n_modules=n_modules,
                             d_latent=self.config.latent_size,
@@ -852,15 +902,16 @@ class HyperLoRA(nn.Module):
                             r=self.config.lora_config.r,
                             d_lora=d_lora,
                         )
-                    self.head = Mix(
-                        "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                        weight_shape="d_latent r d_lora",
-                        # bias_shape=None,  # no bias
-                        bias_shape="r d_lora",
-                        d_latent=self.config.latent_size,
-                        r=self.config.lora_config.r,
-                        d_lora=d_lora,
-                    )
+                    else:
+                        self.head = Mix(
+                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+                            weight_shape="d_latent r d_lora",
+                            # bias_shape=None,  # no bias
+                            bias_shape="r d_lora",
+                            d_latent=self.config.latent_size,
+                            r=self.config.lora_config.r,
+                            d_lora=d_lora,
+                        )
                 else:
                     # each module processes d -> r d_out independently
                     if self.config.per_layer_processing:

@@ -80,7 +80,7 @@ class Idefics2PerceiverConfig(PretrainedConfig):
         self,
         input_size: int,
         intermediate_size_factor: int = 1,
-        hidden_act="gelu_pytorch_tanh",
+        hidden_act="silu",
         hidden_size=4096,
         rms_norm_eps=1e-06,
         resampler_n_latents=64,
