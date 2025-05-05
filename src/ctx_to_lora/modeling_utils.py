@@ -776,8 +776,6 @@ class HyperLoRA(nn.Module):
                 ]
             else:
                 layers = [
-                    # nn.Linear(self.d_latent, self.d_latent),
-                    # nn.LayerNorm(self.d_latent),
                     MLPResidualBlock(
                         input_size=self.config.latent_size,
                         hidden_size=self.config.latent_size * 4,
@@ -1051,7 +1049,8 @@ class HyperLoRA(nn.Module):
         flat_loras = None
         if self.target_modules:
             lora_emb = self.layers(lora_emb)
-            flat_loras = self.head(lora_emb)
+            norm_lora_emb = lora_emb / torch.norm(lora_emb, dim=-1, keepdim=True)
+            flat_loras = self.head(norm_lora_emb)
 
         flat_layernorms = None
         if self.num_extra_modules:
