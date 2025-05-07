@@ -2,6 +2,7 @@
 #SBATCH --job-name=ctxlora
 #SBATCH --partition=a3
 #SBATCH --nodes=1
+#SBATCH --exclude=slurm0-a3nodeset-2
 #SBATCH --gpus=4
 #SBATCH --output=outputs/%x-%j.out
 #SBATCH --error=outputs/%x-%j.out
