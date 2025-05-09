@@ -6,11 +6,11 @@ description = ""
 readme = "README.md"
 requires-python = ">= 3.10"
 dependencies = [
-    "transformers==4.48.3",
-    "deepspeed==0.15.4",
-    "accelerate==1.2.1",
+    "transformers==4.51.3",
+    "deepspeed==0.16.7",
+    "accelerate==1.6.0",
+    "datasets==3.6.0",
     "peft",
-    "datasets",
     "bitsandbytes",
     "jupyter",
     "matplotlib",
@@ -43,5 +43,13 @@ profile = "black"
 line-length = 89
 
 [tool.pyright]
-exclude = ["train_outputs", "data", "generated_tasks", "outputs", "plots", "tmp", "wandb"]
+exclude = [
+    "train_outputs",
+    "data",
+    "generated_tasks",
+    "outputs",
+    "plots",
+    "tmp",
+    "wandb",
+]
 typeCheckingMode = "off"

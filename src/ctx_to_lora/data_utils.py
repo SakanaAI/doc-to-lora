@@ -410,11 +410,22 @@ def get_tokenized_dataset(
         ds_kwargs = get_ds_kwargs(ds_name, split)
         skip = ds_kwargs.pop("skip", None)
         take = ds_kwargs.pop("take", None)
+        # only load as stream if the dataset is local (parquet)
+        load_as_stream = (
+            ("fw_qa" in ds_name)
+            and ("tiny" not in ds_name)
+            and ("mini" not in ds_name)
+            and streaming
+            and ds_kwargs["path"] == "parquet"
+        )
         ds = load_dataset(
             **get_ds_kwargs(ds_name, split),
             trust_remote_code=True,
-            streaming=streaming,
+            streaming=load_as_stream,
         )
+        if split == "train" and streaming and (not load_as_stream):
+            # if the dataset is hosted on HF, we load it first then convert to iterable
+            ds = ds.to_iterable_dataset(num_shards=128)
         if skip is not None:
             ds = ds.skip(skip)
         if take is not None:
