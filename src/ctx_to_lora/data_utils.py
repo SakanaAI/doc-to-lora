@@ -1,4 +1,5 @@
 import logging
+from os import path
 import numpy as np
 from glob import glob
 from typing import Any, Callable, Iterator, Optional
@@ -14,6 +15,24 @@ logger = logging.getLogger()
 FW_QA_PATHS = [
     f"data/raw_datasets/fw_qa/{i:05d}.parquet" for i in [0, 1, 6, 7, 8, 10, 22, 30, 35]
 ]
+
+# approximate length of the datasets
+# needed for streaming datasets
+DS_LEN = {
+    "fw_qa_3_mini": 100_000,
+    "fw_qa_3": 270_000_000,
+    "fw_qa_xl": 27_000_000,
+    "ctx_qa": 300_000,
+    "pwc": 240_000,
+    "hotpot_qa": 100_000,
+    "squad": 90_000,
+    "drop": 77_000,
+    "narrativeqa": 40_000,
+    "quoref": 11_000,
+    "ropes": 11_000,
+    "synthetic_convqa": 40_000,
+}
+
 DS_KWARGS = {
     "hotpot_qa": dict(
         train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:]"),
@@ -101,8 +120,20 @@ DS_KWARGS = {
     "fw_qa_3_mini": dict(
         train=dict(
             path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/*[!val].parquet"),
+            data_files=glob("data/raw_datasets/fw_qa_3/000_00001.parquet"),
             split="train[:100000]",
+        ),
+    ),
+    "fw_qa_3": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_3/*[!val].parquet"),
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_3/*val.parquet"),
+            split="train",
         ),
     ),
     "ctx_qa": dict(
@@ -225,8 +256,24 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
             f"No dataset kwargs found for '{ds_name}' with split '{split}'.\n"
             f"Using default kwargs: {kwargs}"
         )
-        return kwargs
-    return DS_KWARGS[ds_name][split]
+        # return kwargs
+    else:
+        # return DS_KWARGS[ds_name][split]
+        kwargs = DS_KWARGS[ds_name][split]
+
+    # custom logic for slicing iterable datasets
+    take, skip = None, None
+    kw_split = kwargs["split"]
+    if ("[" in kw_split) and kw_split.endswith("]"):
+        kwargs["split"], slice = kw_split.split("[")
+        slice = slice.strip("]")
+        skip = slice.split(":")[0]
+        if skip:
+            kwargs["skip"] = int(skip)
+        take = slice.split(":")[1]
+        if take:
+            kwargs["take"] = int(take)
+    return kwargs
 
 
 def validate_columns(tokenized_ds):
@@ -354,12 +401,24 @@ def get_tokenized_dataset(
     add_negative_prompt: bool,
     use_kl_loss: bool,
     set_format: Optional[str] = None,
+    streaming: bool = False,
 ) -> dict[str, Any]:
 
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat
     try:
-        ds = load_dataset(**get_ds_kwargs(ds_name, split), trust_remote_code=True)
+        ds_kwargs = get_ds_kwargs(ds_name, split)
+        skip = ds_kwargs.pop("skip", None)
+        take = ds_kwargs.pop("take", None)
+        ds = load_dataset(
+            **get_ds_kwargs(ds_name, split),
+            trust_remote_code=True,
+            streaming=streaming,
+        )
+        if skip is not None:
+            ds = ds.skip(skip)
+        if take is not None:
+            ds = ds.take(take)
     except ValueError as e:
         logger.info(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}\nSkipping..."
@@ -368,10 +427,10 @@ def get_tokenized_dataset(
     cols_to_remove = [
         col for col in ds.column_names if col not in ["context", "prompt", "response"]
     ]
-    ds = ds.map(get_preprocessing_fn(ds_name), num_proc=16)
+    ds = ds.map(get_preprocessing_fn(ds_name))
     ds = ds.remove_columns(cols_to_remove)
-    ds = ds.filter(filter_none, batched=True, num_proc=16)
-    ds = ds.filter(filter_long_samples, batched=True, num_proc=16)
+    ds = ds.filter(filter_none, batched=True)
+    ds = ds.filter(filter_long_samples, batched=True)
     if split == "train":
         if add_negative_prompt:
             ds = ds.map(add_negative_prompt_fn, batched=True)
@@ -407,14 +466,11 @@ def construct_and_tokenize_ctx_qa(
     ds = ds.map(
         convert_ctx_prompt_response_to_messages,
         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-        num_proc=16,
     )
     # add "chat" field
-    ds = ds.map(
-        get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer), num_proc=16
-    )
+    ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
     # tokenize the chat + mask the assistant inputs
-    ds = ds.filter(filter_long_chat, batched=True, num_proc=16)
+    ds = ds.filter(filter_long_chat, batched=True)
 
     # add "input_ids", "attention_mask", "labels"
     tokenized_ds = ds.map(
@@ -424,7 +480,6 @@ def construct_and_tokenize_ctx_qa(
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": tokenizer_kwargs,
         },
-        num_proc=16,
     )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
@@ -447,25 +502,25 @@ def construct_and_tokenize_ctx_qa(
                 "tokenizer_kwargs": tokenizer_kwargs,
                 "for_kl_loss": True,
             },
-            num_proc=16,
         )
 
     if need_ctx_ids:
-        # TODO: can we batch this?
-        # TODO: can we cache this?
         # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
         tokenized_ds = tokenized_ds.map(
             tokenize_ctx_text,
             fn_kwargs={"tokenizer": ctx_tokenizer},
             batched=True,
-            num_proc=16,
         )
 
     tokenized_ds = tokenized_ds.remove_columns(
         ["messages", "chat", "context", "prompt", "response"]
     )
-    tokenized_ds.set_format(type=set_format)
-    validate_columns(tokenized_ds)
+    if set_format:
+        tokenized_ds.set_format(type=set_format)
+    # if isinstance(tokenized_ds, IterableDataset):
+    #     # the columns are unknown when using streaming dataset
+    #     tokenized_ds = tokenized_ds._resolve_features()
+    # validate_columns(tokenized_ds)
     return tokenized_ds
 
 

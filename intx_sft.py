@@ -3,6 +3,7 @@ import os
 import random
 import string
 import time
+from math import ceil
 from collections import defaultdict
 from copy import copy, deepcopy
 from functools import partial
@@ -15,6 +16,7 @@ import wandb
 import yaml
 
 from ctx_to_lora.data_utils import (
+    DS_LEN,
     convert_ctx_prompt_response_to_messages,
     get_preprocessing_fn,
     get_sft_prompt_formatting_fn,
@@ -282,7 +284,7 @@ def main():
         training_args.lr_scheduler_type == "cosine_with_min_lr"
         and training_args.lr_scheduler_kwargs is None
     ):
-        training_args.lr_scheduler_kwargs = {"min_lr": 1e-7}
+        training_args.lr_scheduler_kwargs = {"min_lr": 1e-8}
     args = {
         **vars(deepcopy(data_args)),
         **vars(deepcopy(ctx_args)),
@@ -380,6 +382,7 @@ def main():
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
     tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
     ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
+
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         tokenizer=tokenizer,
@@ -400,12 +403,16 @@ def main():
     ):
         if not ds_names:
             continue
+        streaming = (split == "train") and data_args.streaming
         tokenized_ds[split] = {
-            os.path.basename(ds_name): _get_tokenized_dataset(ds_name, split)
+            os.path.basename(ds_name): _get_tokenized_dataset(
+                ds_name, split, streaming=streaming
+            )
             for ds_name in ds_names
         }
 
     train_ds = tokenized_ds["train"]
+    logging.info(f"train_ds: {train_ds}")
     val_ds = dict()
     if "validation" in tokenized_ds:
         n_val_samples = data_args.max_val_samples_per_ds
@@ -419,35 +426,31 @@ def main():
             val_indices = np.random.permutation(len(ds))[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
-    # train_ds = concatenate_datasets(list(train_ds.values()))
+    max_steps = ceil(
+        sum([DS_LEN[ds] for ds in train_ds])
+        * training_args.num_train_epochs
+        / training_args.per_device_train_batch_size
+        / training_args.gradient_accumulation_steps
+        / training_args.world_size
+    )
+    training_args.max_steps = max_steps
 
-    # total_len = sum(len(ds) for ds in train_ds.values())
-    train_ds_len = [len(ds) for ds in train_ds.values()]
-    total_len = sum(train_ds_len)
+    # interleaving streaming datasets
+    # simplify the probs for smaller datasets
+    # slightly upsample those datasets
+    probs = [
+        0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
+        for ds_name in train_ds
+    ]
     train_ds = interleave_datasets(
         list(train_ds.values()),
-        probabilities=[l / total_len for l in train_ds_len],
+        probabilities=probs,
+        stopping_strategy="all_exhausted",
         seed=training_args.seed,
     )
 
-    # val_train_indices = np.random.permutation(len(train_ds))[:500]
-    # val_ds["train"] = train_ds.select(val_train_indices)
-
-    test_ds = dict()
-    if "test" in tokenized_ds:
-        n_test_samples = data_args.max_test_samples_per_ds
-        for ds_name, ds in tokenized_ds["test"].items():
-            test_ds[ds_name] = ds
-            test_indices = np.random.permutation(len(ds))[:n_test_samples]
-            test_ds[ds_name] = test_ds[ds_name].select(test_indices)
-
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
-    logger.info(f"test_ds: {test_ds}")
-
-    # TODO: change to a faster collator? e.g.,
-    # https://huggingface.co/blog/packing-with-FA2
-    # data_collator = DataCollatorForSeq2Seq(tokenizer, model, pad_to_multiple_of=8)
     flattener = DataCollatorWithFlattening()
 
     def train_packed_collator(inp_list):
@@ -549,7 +552,6 @@ def main():
         training_args,
         train_ds,
         val_ds,
-        test_ds,
         train_collator,
         # partial(generation_collator, tokenizer=tokenizer),
         compute_metrics=partial(
@@ -571,6 +573,8 @@ if __name__ == "__main__":
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
+    os.environ["OMP_NUM_THREADS"] = "16"
     if os.getenv("DEBUG", False):
         disable_caching()
     # randomly sleep to avoid run_name collision

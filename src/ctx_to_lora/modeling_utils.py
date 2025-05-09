@@ -1212,6 +1212,9 @@ class ModulatedPretrainedModel(nn.Module):
                     A = A[0:1]
                     B = B[:, 0:1]
                 biases = [A, B.T]
+                # TODO: scale the biases by the output size?
+                # e.g., rank=16 gives bigger (2x?) gradient magnitudes at initialization
+                # compared to rank=8
 
                 # bias-hyperinit
                 # init weights to zeros and bias to the base weights

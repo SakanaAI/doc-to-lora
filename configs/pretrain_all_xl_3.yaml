@@ -37,18 +37,19 @@ target_modules:
   - down_proj
 # data
 train_ds_names:
-  - fw_qa_3_mini
-  - ctx_qa
-  - pwc
-  - hotpot_qa
-  - squad
-  - drop
-  - narrativeqa
-  - quoref
-  - ropes
-  - synthetic_convqa
+  - fw_qa_3 # ~ 267M
+  - ctx_qa # 300k
+  - pwc # 240k
+  - hotpot_qa # 90k
+  - squad # 90k
+  - drop # 77k
+  - narrativeqa # 40k
+  - quoref # 11k
+  - ropes # 11k
+  - synthetic_convqa # 40k
 
 val_ds_names:
+  - fw_qa_3
   - fw_qa_xl
   - ctx_qa
   - pwc

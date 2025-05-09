@@ -338,6 +338,10 @@ class DataArguments:
         default=None,
         metadata={"help": "Training dataset names."},
     )
+    streaming: bool = field(
+        default=False,
+        metadata={"help": "Whether to use streaming dataset for training."},
+    )
     val_ds_names: Optional[list[str]] = field(
         default=None,
         metadata={"help": "Validation dataset names."},
