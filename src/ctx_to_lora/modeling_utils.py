@@ -756,14 +756,14 @@ class HyperLoRA(nn.Module):
             if self.config.per_layer_processing:
                 layers = [
                     # nn.Linear(self.d_latent, self.d_latent),
-                    Mix(
-                        "bs n_layers n_modules r d -> bs n_layers n_modules r d0",
-                        weight_shape="n_layers d d0",
-                        bias_shape="n_layers d0",
-                        n_layers=self.n_layers,
-                        d=self.d_latent,
-                        d0=self.d_latent,
-                    ),
+                    # Mix(
+                    #     "bs n_layers n_modules r d -> bs n_layers n_modules r d0",
+                    #     weight_shape="n_layers d d0",
+                    #     bias_shape="n_layers d0",
+                    #     n_layers=self.n_layers,
+                    #     d=self.d_latent,
+                    #     d0=self.d_latent,
+                    # ),
                     ResMLPBlockPerLayer(
                         self.n_layers,
                         self.d_latent,
@@ -772,27 +772,29 @@ class HyperLoRA(nn.Module):
                         # self.num_modules,
                         # self.lora_config.r,
                         # self.d_latent,
-                    ),
+                    )
+                    for _ in range(4)
                 ]
             else:
                 layers = [
-                    nn.Linear(self.d_latent, self.d_latent),
+                    # nn.Linear(self.d_latent, self.d_latent),
                     MLPResidualBlock(
                         input_size=self.config.latent_size,
                         hidden_size=self.config.latent_size * 4,
                         output_size=self.config.latent_size,
                         dropout_rate=getattr(self.config, "dropout_rate", 0),
-                    ),
-                ]
-            if self.config.use_token_mixing:
-                layers = [
-                    ResMLPTokenMixingPerLayer(
-                        self.n_layers,
-                        self.num_modules,
-                        self.lora_config.r,
-                        self.d_latent,
                     )
-                ] + layers
+                    for _ in range(4)
+                ]
+            # if self.config.use_token_mixing:
+            #     layers = [
+            #         ResMLPTokenMixingPerLayer(
+            #             self.n_layers,
+            #             self.num_modules,
+            #             self.lora_config.r,
+            #             self.d_latent,
+            #         )
+            #     ] + layers
 
             self.layers = nn.Sequential(*layers)
 

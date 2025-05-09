@@ -98,6 +98,13 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "fw_qa_3_mini": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_3/*[!val].parquet"),
+            split="train[:100000]",
+        ),
+    ),
     "ctx_qa": dict(
         train=dict(
             path="parquet",
@@ -250,7 +257,7 @@ def add_repeat_prompt_fn(samples):
     ):
         # Only process if the context is not already in the set
         if ctx in unique_contexts:
-           continue
+            continue
         # remove too long contexts
         if len(ctx) > 1000:
             continue
