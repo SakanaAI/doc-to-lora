@@ -3,6 +3,7 @@ import os
 import random
 import string
 import time
+from multiprocess import set_start_method
 from math import ceil
 from collections import defaultdict
 from copy import copy, deepcopy
@@ -284,7 +285,7 @@ def main():
         training_args.lr_scheduler_type == "cosine_with_min_lr"
         and training_args.lr_scheduler_kwargs is None
     ):
-        training_args.lr_scheduler_kwargs = {"min_lr": 1e-8}
+        training_args.lr_scheduler_kwargs = {"min_lr": 1e-7}
     args = {
         **vars(deepcopy(data_args)),
         **vars(deepcopy(ctx_args)),
@@ -316,7 +317,7 @@ def main():
             )
             if "Llama" in ctx_name and "Vision" in ctx_name:
                 ctx_encoder_model_config = ctx_encoder_model_config.text_config
-            ctx_tokenizer = get_tokenizer(ctx_name)
+            ctx_tokenizer = get_tokenizer(ctx_name, train=True)
         else:
             ctx_name = model.base_model.config.name_or_path
             ctx_encoder_model_config = model.config
@@ -353,11 +354,11 @@ def main():
                 train=True,
                 use_flash_attn=model_args.use_flash_attn,
             )
-            tokenizer = get_tokenizer(model.base_model.config.name_or_path)
+            tokenizer = get_tokenizer(model.base_model.config.name_or_path, train=True)
             ctx_name = model.ctx_encoder_args.ctx_encoder_model_name_or_path
             if ctx_name is None:
                 ctx_name = model.base_model.config.name_or_path
-            ctx_tokenizer = get_tokenizer(ctx_name)
+            ctx_tokenizer = get_tokenizer(ctx_name, train=True)
         if len([p for p in model.ctx_encoder.parameters() if p.requires_grad]):
             raise ValueError("ctx_encoder contains trainable parameters")
         if len([p for p in model.base_model.parameters() if p.requires_grad]):
@@ -573,10 +574,12 @@ if __name__ == "__main__":
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
-    os.environ["OMP_NUM_THREADS"] = "16"
+    # os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
+    # os.environ["OMP_NUM_THREADS"] = "16"
+    # os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "137438953472"  # 128 TB
     if os.getenv("DEBUG", False):
         disable_caching()
     # randomly sleep to avoid run_name collision
     # time.sleep(random.random() * 13)
+    # set_start_method("spawn", force=True)
     main()

@@ -1,9 +1,13 @@
 import logging
-from os import path
 import numpy as np
+import hashlib
+import json
+from os import path
 from glob import glob
 from typing import Any, Callable, Iterator, Optional
 
+
+import datasets
 from datasets import load_dataset, IterableDataset
 from transformers import PreTrainedTokenizerBase
 
@@ -16,10 +20,13 @@ FW_QA_PATHS = [
     f"data/raw_datasets/fw_qa/{i:05d}.parquet" for i in [0, 1, 6, 7, 8, 10, 22, 30, 35]
 ]
 
+TRANSFORMED_DATA_DIR = "data/processed_datasets"
+
 # approximate length of the datasets
 # needed for streaming datasets
 DS_LEN = {
     "fw_qa_3_mini": 100_000,
+    "fw_qa_3_medium": 121_000_000,
     "fw_qa_3": 270_000_000,
     "fw_qa_xl": 27_000_000,
     "ctx_qa": 300_000,
@@ -122,6 +129,13 @@ DS_KWARGS = {
             path="parquet",
             data_files=glob("data/raw_datasets/fw_qa_3/000_00001.parquet"),
             split="train[:100000]",
+        ),
+    ),
+    "fw_qa_3_medium": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_3/00[0-5]*[!val].parquet"),
+            split="train",
         ),
     ),
     "fw_qa_3": dict(
@@ -389,23 +403,14 @@ def filter_none(samples):
     return out
 
 
-def get_tokenized_dataset(
+def _load_and_process_dataset(
     ds_name: str,
     split: str,
-    tokenizer: PreTrainedTokenizerBase,
-    tokenizer_kwargs: dict[str, Any],
-    ctx_tokenizer: PreTrainedTokenizerBase,
-    ctx_tokenizer_kwargs: dict[str, Any],
-    add_ctx_to_chat: bool,
-    add_repeat_prompt: bool,
     add_negative_prompt: bool,
-    use_kl_loss: bool,
-    set_format: Optional[str] = None,
-    streaming: bool = False,
-) -> dict[str, Any]:
-
-    logger.debug(f"Loading dataset {ds_name} with split {split}...")
-    need_ctx_ids = not add_ctx_to_chat
+    add_repeat_prompt: bool,
+    streaming: bool,
+    ds_path: str,
+):
     try:
         ds_kwargs = get_ds_kwargs(ds_name, split)
         skip = ds_kwargs.pop("skip", None)
@@ -438,15 +443,74 @@ def get_tokenized_dataset(
     cols_to_remove = [
         col for col in ds.column_names if col not in ["context", "prompt", "response"]
     ]
-    ds = ds.map(get_preprocessing_fn(ds_name))
-    ds = ds.remove_columns(cols_to_remove)
-    ds = ds.filter(filter_none, batched=True)
-    ds = ds.filter(filter_long_samples, batched=True)
+
+    ds = ds.map(
+        get_preprocessing_fn(ds_name),
+        remove_columns=cols_to_remove,
+        num_proc=16,
+    )
+    # ds = ds.remove_columns(cols_to_remove)
+    ds = ds.filter(filter_none, batched=True, num_proc=16)
+    ds = ds.filter(filter_long_samples, batched=True, num_proc=16)
     if split == "train":
         if add_negative_prompt:
-            ds = ds.map(add_negative_prompt_fn, batched=True)
+            ds = ds.map(
+                add_negative_prompt_fn,
+                batched=True,
+                batch_size=100_000,
+                num_proc=16,
+            )
         if add_repeat_prompt and "context_numbers" not in ds_name:
-            ds = ds.map(add_repeat_prompt_fn, batched=True)
+            ds = ds.map(
+                add_repeat_prompt_fn,
+                batched=True,
+                batch_size=100_000,
+                num_proc=16,
+            )
+    ds.save_to_disk(ds_path, num_proc=16)
+    return ds
+
+
+def get_tokenized_dataset(
+    ds_name: str,
+    split: str,
+    tokenizer: PreTrainedTokenizerBase,
+    tokenizer_kwargs: dict[str, Any],
+    ctx_tokenizer: PreTrainedTokenizerBase,
+    ctx_tokenizer_kwargs: dict[str, Any],
+    add_ctx_to_chat: bool,
+    add_repeat_prompt: bool,
+    add_negative_prompt: bool,
+    use_kl_loss: bool,
+    set_format: Optional[str] = None,
+    streaming: bool = False,
+) -> dict[str, Any]:
+    assert not use_kl_loss, "KL loss is deprecated"
+    logger.debug(f"Loading dataset {ds_name} with split {split}...")
+    need_ctx_ids = not add_ctx_to_chat
+
+    load_and_process_kwargs = dict(
+        ds_name=ds_name,
+        split=split,
+        add_negative_prompt=add_negative_prompt,
+        add_repeat_prompt=add_repeat_prompt,
+        streaming=streaming,
+    )
+
+    ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
+    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
+
+    if path.exists(ds_path):
+        # load the cached ds
+        logger.info(f"Loaded processed dataset from {ds_path}")
+    else:
+        logger.info(f"Loading dataset {ds_name} with split {split}...")
+        _load_and_process_dataset(
+            **load_and_process_kwargs,
+            ds_path=ds_path,
+        )
+    ds = datasets.load_from_disk(ds_path)
+
     tokenized_ds = construct_and_tokenize_ctx_qa(
         tokenizer,
         tokenizer_kwargs,
@@ -472,16 +536,47 @@ def construct_and_tokenize_ctx_qa(
     ds,
     set_format=None,
 ):
+    kwargs = dict(
+        tokenizer=repr(tokenizer),
+        tokenizer_kwargs=json.dumps(tokenizer_kwargs),
+        ctx_tokenizer=repr(ctx_tokenizer),
+        ctx_tokenizer_kwargs=json.dumps(ctx_tokenizer_kwargs),
+        add_ctx_to_chat=add_ctx_to_chat,
+        use_kl_loss=use_kl_loss,
+        need_ctx_ids=need_ctx_ids,
+        ds=ds._fingerprint,
+        set_format=set_format,
+    )
+    kwargs_str = json.dumps(kwargs)
+    logger.debug(f"Tokenizing dataset with kwargs: {kwargs_str}")
+    ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
+    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
+    if path.exists(ds_path):
+        # load the cached ds
+        logger.info(f"Loaded tokenized dataset from {ds_path}")
+        ds = datasets.load_from_disk(ds_path)
+        return ds
     # for sft + chat_model, we need to convert the dataset to chat format
     # add "messages" field
     ds = ds.map(
         convert_ctx_prompt_response_to_messages,
         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+        num_proc=16,
     )
     # add "chat" field
-    ds = ds.map(get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer))
+    ds = ds.map(
+        get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
+        batched=True,
+        batch_size=100_000,
+        num_proc=16,
+    )
     # tokenize the chat + mask the assistant inputs
-    ds = ds.filter(filter_long_chat, batched=True)
+    ds = ds.filter(
+        filter_long_chat,
+        batched=True,
+        batch_size=100_000,
+        num_proc=16,
+    )
 
     # add "input_ids", "attention_mask", "labels"
     tokenized_ds = ds.map(
@@ -491,6 +586,7 @@ def construct_and_tokenize_ctx_qa(
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": tokenizer_kwargs,
         },
+        num_proc=16,
     )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
@@ -521,6 +617,8 @@ def construct_and_tokenize_ctx_qa(
             tokenize_ctx_text,
             fn_kwargs={"tokenizer": ctx_tokenizer},
             batched=True,
+            batch_size=100_000,
+            num_proc=16,
         )
 
     tokenized_ds = tokenized_ds.remove_columns(
@@ -532,7 +630,9 @@ def construct_and_tokenize_ctx_qa(
     #     # the columns are unknown when using streaming dataset
     #     tokenized_ds = tokenized_ds._resolve_features()
     # validate_columns(tokenized_ds)
-    return tokenized_ds
+    tokenized_ds.save_to_disk(ds_path, num_proc=16)
+    del tokenized_ds
+    return datasets.load_from_disk(ds_path)
 
 
 def get_sft_prompt_formatting_fn(

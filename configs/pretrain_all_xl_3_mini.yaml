@@ -37,7 +37,7 @@ target_modules:
   - down_proj
 # data
 train_ds_names:
-  - fw_qa_3_mini # ~ 267M
+  - fw_qa_3_mini # 100k
   - ctx_qa # 300k
   - pwc # 240k
   - hotpot_qa # 90k
