@@ -410,6 +410,7 @@ def _load_and_process_dataset(
     add_repeat_prompt: bool,
     streaming: bool,
     ds_path: str,
+    num_proc: int,
 ):
     try:
         ds_kwargs = get_ds_kwargs(ds_name, split)
@@ -447,27 +448,27 @@ def _load_and_process_dataset(
     ds = ds.map(
         get_preprocessing_fn(ds_name),
         remove_columns=cols_to_remove,
-        num_proc=16,
+        num_proc=num_proc,
     )
     # ds = ds.remove_columns(cols_to_remove)
-    ds = ds.filter(filter_none, batched=True, num_proc=16)
-    ds = ds.filter(filter_long_samples, batched=True, num_proc=16)
+    ds = ds.filter(filter_none, batched=True, num_proc=num_proc)
+    ds = ds.filter(filter_long_samples, batched=True, num_proc=num_proc)
     if split == "train":
         if add_negative_prompt:
             ds = ds.map(
                 add_negative_prompt_fn,
                 batched=True,
                 batch_size=100_000,
-                num_proc=16,
+                num_proc=num_proc,
             )
         if add_repeat_prompt and "context_numbers" not in ds_name:
             ds = ds.map(
                 add_repeat_prompt_fn,
                 batched=True,
                 batch_size=100_000,
-                num_proc=16,
+                num_proc=num_proc,
             )
-    ds.save_to_disk(ds_path, num_proc=16)
+    ds.save_to_disk(ds_path, num_proc=num_proc)
     return ds
 
 
@@ -496,6 +497,7 @@ def get_tokenized_dataset(
         add_repeat_prompt=add_repeat_prompt,
         streaming=streaming,
     )
+    num_proc = None if streaming and split == "train" else 8
 
     ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
     ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
@@ -508,6 +510,7 @@ def get_tokenized_dataset(
         _load_and_process_dataset(
             **load_and_process_kwargs,
             ds_path=ds_path,
+            num_proc=num_proc,
         )
     ds = datasets.load_from_disk(ds_path)
 
@@ -521,6 +524,7 @@ def get_tokenized_dataset(
         need_ctx_ids,
         ds,
         set_format,
+        num_proc,
     )
     return tokenized_ds
 
@@ -535,6 +539,7 @@ def construct_and_tokenize_ctx_qa(
     need_ctx_ids,
     ds,
     set_format=None,
+    num_proc=None,
 ):
     kwargs = dict(
         tokenizer=repr(tokenizer),
@@ -561,21 +566,21 @@ def construct_and_tokenize_ctx_qa(
     ds = ds.map(
         convert_ctx_prompt_response_to_messages,
         fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-        num_proc=16,
+        num_proc=num_proc,
     )
     # add "chat" field
     ds = ds.map(
         get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
         batched=True,
         batch_size=100_000,
-        num_proc=16,
+        num_proc=num_proc,
     )
     # tokenize the chat + mask the assistant inputs
     ds = ds.filter(
         filter_long_chat,
         batched=True,
         batch_size=100_000,
-        num_proc=16,
+        num_proc=num_proc,
     )
 
     # add "input_ids", "attention_mask", "labels"
@@ -586,7 +591,7 @@ def construct_and_tokenize_ctx_qa(
             "mask_assistant_inputs": True,
             "tokenizer_kwargs": tokenizer_kwargs,
         },
-        num_proc=16,
+        num_proc=num_proc,
     )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
@@ -618,7 +623,7 @@ def construct_and_tokenize_ctx_qa(
             fn_kwargs={"tokenizer": ctx_tokenizer},
             batched=True,
             batch_size=100_000,
-            num_proc=16,
+            num_proc=num_proc,
         )
 
     tokenized_ds = tokenized_ds.remove_columns(
@@ -630,7 +635,7 @@ def construct_and_tokenize_ctx_qa(
     #     # the columns are unknown when using streaming dataset
     #     tokenized_ds = tokenized_ds._resolve_features()
     # validate_columns(tokenized_ds)
-    tokenized_ds.save_to_disk(ds_path, num_proc=16)
+    tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
     del tokenized_ds
     return datasets.load_from_disk(ds_path)
 

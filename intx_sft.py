@@ -55,6 +55,7 @@ from transformers import (
     HfArgumentParser,
     set_seed,
 )
+from accelerate import Accelerator, DeepSpeedPlugin
 from peft import PeftModel
 from transformers.utils import is_liger_kernel_available
 from transformers.data import DataCollatorWithFlattening
@@ -252,6 +253,8 @@ def main():
         ]
     )
 
+    accelerator = Accelerator(deepspeed_plugins=DeepSpeedPlugin("ds_config.json"))
+    device = accelerator.device
     set_seed(training_args.seed)
     checkpoint_dir = training_args.resume_from_checkpoint
     if checkpoint_dir and not os.path.isdir(checkpoint_dir):
@@ -309,6 +312,7 @@ def main():
             train=True,
             requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
             peft_config=get_lora_config(model_name, **vars(lora_args)),
+            device=device,
         )
         ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
         if ctx_name is not None:
@@ -376,6 +380,8 @@ def main():
     logger.debug(model)
     log_num_train_params(model)
 
+    # model = accelerator.prepare(model)
+
     ############ Dataset setup
 
     logger.info("Loading dataset...")
@@ -405,12 +411,10 @@ def main():
         if not ds_names:
             continue
         streaming = (split == "train") and data_args.streaming
-        tokenized_ds[split] = {
-            os.path.basename(ds_name): _get_tokenized_dataset(
-                ds_name, split, streaming=streaming
-            )
-            for ds_name in ds_names
-        }
+        for ds_name in ds_names:
+            with accelerator.main_process_first():
+                ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
+            tokenized_ds[split] = {os.path.basename(ds_name): ds}
 
     train_ds = tokenized_ds["train"]
     logging.info(f"train_ds: {train_ds}")
@@ -575,7 +579,7 @@ if __name__ == "__main__":
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     # os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
-    # os.environ["OMP_NUM_THREADS"] = "16"
+    os.environ["OMP_NUM_THREADS"] = "23"
     # os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "137438953472"  # 128 TB
     if os.getenv("DEBUG", False):
         disable_caching()
