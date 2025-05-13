@@ -230,6 +230,76 @@
         border: 1px solid #ddd;
         border-radius: 5px;
     }
+
+    .hypernetwork-container {
+        margin-top: 20px;
+        padding: 15px;
+        background-color: #f0f8ff;
+        border: 1px solid #add8e6;
+        border-radius: 5px;
+    }
+
+    .hypernetwork-container h3 {
+        margin-top: 0;
+        margin-bottom: 15px;
+        color: #0066cc;
+    }
+
+    .hypernetwork-container label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+
+    .hypernetwork-container select,
+    .hypernetwork-container textarea {
+        width: 100%;
+        padding: 8px;
+        margin-bottom: 15px;
+        border: 1px solid #add8e6;
+        border-radius: 5px;
+    }
+
+    .hypernetwork-container textarea {
+        height: 120px;
+        resize: vertical;
+    }
+
+    .chat-controls {
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+    }
+
+    .secondary-button {
+        background-color: #607d8b;
+        color: white;
+        padding: 8px 16px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+
+    .secondary-button:hover {
+        background-color: #455a64;
+    }
+
+    .instruction-text {
+        margin: 0 0 15px 0;
+        font-style: italic;
+        color: #555;
+        font-size: 0.9em;
+    }
+
+    .ui-sequence {
+        margin-bottom: 10px;
+        padding: 10px;
+        background-color: #f5f5f5;
+        border-left: 4px solid #4CAF50;
+        color: #333;
+        font-size: 0.9em;
+    }
 </style>
 {% endblock %}
 
@@ -333,16 +403,52 @@
             selected_eval_folder }}{% else %}root{% endif %}.</p>
         {% endif %}
 
+        <!-- Step-by-step guide -->
+        <div class="ui-sequence">
+            <h3>How to use this interface:</h3>
+            <ol>
+                <li>First, click "Load Chat with {{ model_name }}" to initialize the base model</li>
+                <li>You can then chat directly with the base model</li>
+                <li>Alternatively, you can select a hypernetwork checkpoint to use context-informed responses</li>
+                <li>To reset the conversation at any time, click the "Reset Chat" button</li>
+            </ol>
+        </div>
+
         <div id="load-chat-container">
             <button id="load-chat-button">Load Chat with {{ model_name }}</button>
         </div>
+
+        <!-- Hypernetwork Section - Initially hidden -->
+        {% if checkpoints %}
+        <div class="hypernetwork-container" id="hypernetwork-container" style="display: none;">
+            <h3>Hypernetwork Context Integration</h3>
+            <p class="instruction-text">Apply a hypernetwork to modulate the base model with context information</p>
+            <label for="checkpoint-select">Select Checkpoint:</label>
+            <select id="checkpoint-select">
+                <option value="">-- Select Checkpoint --</option>
+                {% for checkpoint in checkpoints %}
+                <option value="{{ checkpoint }}">{{ checkpoint }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="context-input">Context Information:</label>
+            <textarea id="context-input"
+                placeholder="Enter context information here. This will be used by the hypernetwork to generate a LoRA for the base model."></textarea>
+
+            <button id="apply-hypernetwork-button">Apply Hypernetwork</button>
+            <div id="hypernetwork-status"></div>
+        </div>
+        {% endif %}
+
         <div class="chat-container" id="chat-container" style="display: none;">
             <h2>Chat with <span id="chat-model-name"></span></h2>
 
             <div class="system-msg-container">
                 <label for="system-msg">System Message:</label>
                 <input type="text" id="system-msg" class="chat-input" placeholder="Enter system message..." value="">
-                <!-- Removed the Update System Message button -->
+                <div class="chat-controls">
+                    <button id="reset-chat-button" class="secondary-button">Reset Chat</button>
+                </div>
             </div>
 
             <div id="chat-output" class="chat-output"></div>
@@ -451,16 +557,24 @@
                 document.getElementById('chat-input').value = '';
                 addMessageToChat('You: ' + message);
 
+                // Check if we're using hypernetwork and include context
+                let formData = new FormData();
+                formData.append('message', message);
+
+                // Get the context text if hypernetwork is being used
+                const contextInput = document.getElementById('context-input');
+                if (document.getElementById('chat-model-name').textContent.includes('Hypernetwork') && contextInput) {
+                    formData.append('context', contextInput.value);
+                }
+
                 fetch('/chat', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: 'message=' + encodeURIComponent(message)
+                    body: formData
                 })
                     .then(response => response.json())
                     .then(data => {
-                        addMessageToChat('{{ model_name }}: ' + data.response);
+                        const modelName = document.getElementById('chat-model-name').textContent || '{{ model_name }}';
+                        addMessageToChat(modelName + ': ' + data.response);
                     })
                     .catch(error => {
                         console.error("Error during chat fetch:", error);
@@ -481,6 +595,80 @@
                 }
             });
     }
+
+    // Handle hypernetwork checkpoint loading
+    document.addEventListener('DOMContentLoaded', function () {
+        const applyHypernetworkButton = document.getElementById('apply-hypernetwork-button');
+        if (applyHypernetworkButton) {
+            applyHypernetworkButton.addEventListener('click', function () {
+                const checkpoint = document.getElementById('checkpoint-select').value;
+                const context = document.getElementById('context-input').value;
+
+                if (!checkpoint) {
+                    alert('Please select a checkpoint first.');
+                    return;
+                }
+
+                if (!context.trim()) {
+                    if (!confirm('The context field is empty. Are you sure you want to continue without context?')) {
+                        return;
+                    }
+                }
+
+                const statusEl = document.getElementById('hypernetwork-status');
+                statusEl.textContent = 'Loading checkpoint...';
+                statusEl.style.color = '#1565c0'; // Blue to indicate in progress
+
+                // Disable the button while loading
+                applyHypernetworkButton.disabled = true;
+                applyHypernetworkButton.textContent = 'Loading...';
+
+                fetch('/load_checkpoint', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'run=' + encodeURIComponent('{{ run }}') +
+                        '&checkpoint=' + encodeURIComponent(checkpoint) +
+                        '&context=' + encodeURIComponent(context)
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Re-enable the button
+                        applyHypernetworkButton.disabled = false;
+                        applyHypernetworkButton.textContent = 'Apply Hypernetwork';
+
+                        if (data.success) {
+                            statusEl.textContent = 'Success: ' + data.message;
+                            statusEl.style.color = 'green';
+
+                            // Show the chat container if it's hidden
+                            document.getElementById('chat-container').style.display = 'block';
+                            document.getElementById('chat-input').disabled = false;
+                            document.getElementById('chat-model-name').textContent =
+                                'Hypernetwork: ' + checkpoint;
+
+                            // Clear any existing chat and add an instruction
+                            document.getElementById('chat-output').innerHTML = '';
+                            addMessageToChat('System: Hypernetwork applied successfully. Your messages will now be processed through the context-aware model.');
+
+                        } else {
+                            statusEl.textContent = 'Error: ' + data.error;
+                            statusEl.style.color = 'red';
+                        }
+                    })
+                    .catch(error => {
+                        // Re-enable the button on error
+                        applyHypernetworkButton.disabled = false;
+                        applyHypernetworkButton.textContent = 'Apply Hypernetwork';
+
+                        console.error('Error loading checkpoint:', error);
+                        statusEl.textContent = 'Error: ' + error.message;
+                        statusEl.style.color = 'red';
+                    });
+            });
+        }
+    });
 
     // Call initializeChat when chat is loaded
     document.getElementById('load-chat-button').addEventListener('click', function () {
@@ -508,8 +696,17 @@
                     document.getElementById('chat-container').style.display = 'block';
                     document.getElementById('chat-input').disabled = false;
 
+                    // Show the hypernetwork container now that base model is loaded
+                    const hypernetworkContainer = document.getElementById('hypernetwork-container');
+                    if (hypernetworkContainer) {
+                        hypernetworkContainer.style.display = 'block';
+                    }
+
                     console.log("Chat interface loaded successfully.");
                     initializeChat();
+
+                    // Add a message about UI flow
+                    addMessageToChat('System: Base model loaded successfully. You can now chat directly or apply a hypernetwork with context information.');
                 }
             })
             .catch(error => {
@@ -539,6 +736,40 @@
     document.getElementById('chat-input').addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
             sendMessage();
+        }
+    });
+
+    // Add the reset chat functionality
+    document.addEventListener('DOMContentLoaded', function () {
+        const resetChatButton = document.getElementById('reset-chat-button');
+        if (resetChatButton) {
+            resetChatButton.addEventListener('click', function () {
+                // Get the current system message
+                const systemMsg = document.getElementById('system-msg').value;
+
+                // Clear the chat output display
+                document.getElementById('chat-output').innerHTML = '';
+
+                fetch('/reset_chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'system_msg=' + encodeURIComponent(systemMsg)
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            console.log('Chat history reset successfully');
+                            addMessageToChat('System: Chat history has been reset.');
+                        } else {
+                            console.error('Failed to reset chat history');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error resetting chat history:', error);
+                    });
+            });
         }
     });
 

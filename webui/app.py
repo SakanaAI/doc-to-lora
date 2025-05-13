@@ -6,7 +6,9 @@ from glob import glob
 import torch
 import yaml
 from flask import Flask, abort, jsonify, render_template, request
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer
+
+from ctx_to_lora.model_loading import get_tokenizer
 
 app = Flask(__name__)
 
@@ -15,6 +17,7 @@ chat_generator = None
 chat_model_name = None
 chat_history = None
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+modulated_model = None
 
 
 def get_run_data(run_path):
@@ -116,6 +119,63 @@ def get_generated_text_data(run_path):
     return generated_data
 
 
+def get_available_checkpoints(run):
+    """
+    Finds all checkpoint directories in a run folder.
+
+    Args:
+        run: The name of the training run.
+
+    Returns:
+        A list of checkpoint directories.
+    """
+    logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
+    if not os.path.isdir(logdir):
+        return []
+
+    checkpoints = sorted(
+        [d for d in glob(os.path.join(logdir, "checkpoint-*")) if os.path.isdir(d)],
+        key=lambda d: int(d.split("-")[-1]),
+    )
+
+    return checkpoints
+
+
+def load_custom_chat_template(tokenizer, model_name):
+    """
+    Loads a custom chat template for models that have issues with the built-in templates.
+
+    Args:
+        tokenizer: The HuggingFace tokenizer.
+        model_name: The model name to find an appropriate template for.
+    """
+    # Extract model family and name for template matching
+    model_parts = model_name.split("/")[-1].split("-")
+    model_family = model_name.split("/")[0] if "/" in model_name else ""
+
+    # Check for Gemma models
+    if "gemma" in model_name.lower():
+        template_path = "chat_templates/google/gemma-2-2b-it.jinja"
+        if os.path.exists(template_path):
+            with open(template_path, "r") as f:
+                template_content = f.read()
+                tokenizer.chat_template = template_content
+                print(f"Loaded custom chat template from {template_path}")
+                return True
+
+    # Check Meta models
+    elif "meta-llama" in model_name.lower() or "llama" in model_name.lower():
+        template_path = "chat_templates/meta-llama/llama-2-7b-chat.jinja"
+        if os.path.exists(template_path):
+            with open(template_path, "r") as f:
+                template_content = f.read()
+                tokenizer.chat_template = template_content
+                print(f"Loaded custom chat template from {template_path}")
+                return True
+
+    return False
+
+
 @app.route("/")
 def index():
     """
@@ -152,6 +212,10 @@ def visualize(run):
         reverse=True,
     )
 
+    # Get available checkpoints
+    checkpoints = get_available_checkpoints(run)
+    checkpoint_names = [os.path.basename(cp) for cp in checkpoints]
+
     selected_eval_folder = request.args.get("eval_folder")
 
     if eval_folders and selected_eval_folder:
@@ -180,6 +244,7 @@ def visualize(run):
     config_path = os.path.join(logdir, "config.yaml")
     try:
         with open(config_path) as f:
+            yaml.add_constructor("!", lambda loader, node: None)
             config = yaml.safe_load(f)
             model_name = config.get("model_name_or_path")
     except FileNotFoundError:
@@ -193,6 +258,7 @@ def visualize(run):
         data=data,
         generated_data=generated_data,
         model_name=model_name,
+        checkpoints=checkpoint_names,
     )
 
 
@@ -204,26 +270,96 @@ def load_model():
     global chat_generator
     global chat_model_name
     global chat_history
+    global modulated_model
 
     print("Loading model...")
+    # Reset chat history
     chat_history = [{"role": "system", "content": ""}]
+    # Reset modulated model if it exists
+    modulated_model = None
+
     run = request.form["run"]
     logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
-    config_path = os.path.join(logdir, "config.yaml")
+    config_path = os.path.join(logdir, "args.yaml")
     try:
         with open(config_path) as f:
+            yaml.add_constructor("!", lambda loader, node: None)
+            yaml.add_multi_constructor(
+                "tag:yaml.org,2002:python/object",
+                lambda loader, suffix, node: None,
+                Loader=yaml.SafeLoader,
+            )
             config = yaml.safe_load(f)
             chat_model_name = config.get("model_name_or_path")
     except FileNotFoundError:
         chat_model_name = None
 
     if chat_model_name:
+        tokenizer = get_tokenizer(chat_model_name, train=False)
+
+        # Handle system roles by loading a custom chat template if needed
+        load_custom_chat_template(tokenizer, chat_model_name)
+
+        print(f"Using model: {chat_model_name}")
+        print(
+            f"Tokenizer chat template available: {hasattr(tokenizer, 'chat_template')}"
+        )
+
         chat_generator = pipeline(
-            "text-generation", model=chat_model_name, device=device
+            "text-generation", model=chat_model_name, tokenizer=tokenizer, device=device
         )
         return jsonify({"model_name": chat_model_name})
     else:
-        return jsonify({"error": "Model name not found in config.yaml."})
+        return jsonify({"error": "Model name not found in args.yaml."})
+
+
+@app.route("/load_checkpoint", methods=["POST"])
+def load_checkpoint():
+    """
+    Loads a checkpoint and creates a modulated model.
+    """
+    global modulated_model
+    global chat_history
+    global chat_generator
+
+    # Reset the chat history
+    chat_history = [{"role": "system", "content": ""}]
+    # Unload the regular chat model to avoid confusion
+    chat_generator = None
+
+    from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
+
+    run = request.form["run"]
+    checkpoint = request.form["checkpoint"]
+    context = request.form.get("context", "")
+
+    logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
+    checkpoint_path = os.path.join(logdir, checkpoint, "pytorch_model.bin")
+
+    try:
+        print(f"Loading checkpoint: {checkpoint_path}")
+        state_dict = torch.load(checkpoint_path)
+
+        modulated_model = ModulatedPretrainedModel.from_state_dict(
+            state_dict,
+            train=False,
+            use_flash_attn=False,
+        )
+        modulated_model = modulated_model.to(device)
+        modulated_model.eval()
+
+        result = {"success": True, "message": f"Loaded checkpoint {checkpoint}"}
+
+        if context:
+            result["context_processed"] = True
+
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error loading checkpoint: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
 
 
 @app.route("/chat", methods=["POST"])
@@ -232,20 +368,101 @@ def chat():
     Handles chat requests and generates responses.
     """
     global chat_history
+    global modulated_model
     print("Chat request received")
     message = request.form["message"]
     print(f"Received message: {message}")
+    if chat_history is None:
+        chat_history = [{"role": "system", "content": ""}]
+
     chat_history.append({"role": "user", "content": message})
 
-    if chat_generator:
+    if chat_generator or modulated_model:
         print("Generating response...")
-        response = chat_generator(chat_history, max_length=2**13)[0]["generated_text"][
-            -1
-        ]["content"]
-        print(f"Response: {response}")
+        try:
+            # Handle both regular chat_generator and modulated_model
+            if modulated_model:
+                print("Using modulated model for response generation")
+                # Process context and generate LoRA for the response
+                ctx_tokenizer = None
+                with torch.inference_mode(), torch.amp.autocast(str(device)):
+                    from transformers import AutoTokenizer
+
+                    # Get the context and tokenize it
+                    context = request.form.get("context", "")
+                    ctx_encoder_model_name_or_path = (
+                        modulated_model.ctx_encoder_args.ctx_encoder_model_name_or_path
+                        or modulated_model.base_model.config.name_or_path
+                    )
+                    ctx_tokenizer = get_tokenizer(
+                        ctx_encoder_model_name_or_path, train=False
+                    )
+
+                    # Prepare base model inputs
+                    base_tokenizer = get_tokenizer(
+                        modulated_model.base_model.config.name_or_path, train=False
+                    )
+                    # load_custom_chat_template(
+                    #     base_tokenizer, modulated_model.base_model.config.name_or_path
+                    # )
+
+                    # Tokenize the context for the ctx_encoder
+                    from ctx_to_lora.data_utils import tokenize_ctx_text
+
+                    ctx_inputs = tokenize_ctx_text(
+                        dict(context=[context]),
+                        ctx_tokenizer,
+                    )
+                    # print(f"Context inputs: {ctx_inputs}")
+                    ctx_ids = torch.tensor(ctx_inputs["ctx_ids"], device=device)
+                    ctx_attn_mask = torch.tensor(
+                        ctx_inputs["ctx_attn_mask"], device=device
+                    )
+
+                    print(f"chat_history: {chat_history}")
+
+                    # Tokenize the chat history
+                    model_inputs = base_tokenizer.apply_chat_template(
+                        chat_history, return_tensors="pt"
+                    ).to(device)
+
+                    # Generate response with context-modulated model
+                    outputs = modulated_model.generate(
+                        input_ids=model_inputs,
+                        ctx_ids=ctx_ids,
+                        ctx_attn_mask=ctx_attn_mask,
+                        max_new_tokens=512,
+                        do_sample=False,
+                    )
+
+                    # Decode the generated response
+                    response = base_tokenizer.decode(
+                        outputs[0][model_inputs.shape[1] :], skip_special_tokens=True
+                    )
+
+                print(f"Modulated model response: {response}")
+            elif chat_generator:
+                response = chat_generator(chat_history, max_length=2**13)[0][
+                    "generated_text"
+                ][-1]["content"]
+            else:
+                response = "No model loaded. Please load a model first."
+
+            print(f"Response: {response}")
+            chat_history.append({"role": "assistant", "content": response})
+            return jsonify({"response": response})
+        except Exception as e:
+            print(f"Error generating response: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            return jsonify({"response": f"Error: {str(e)}"})
     else:
-        response = "Chat model not loaded."
-    return jsonify({"response": response})
+        return jsonify(
+            {
+                "response": "No model loaded. Please load a base model or apply a hypernetwork first."
+            }
+        )
 
 
 @app.route("/update_system_msg", methods=["POST"])
@@ -320,6 +537,24 @@ def get_config(run):
             return jsonify({"config": config_file})
     except FileNotFoundError:
         return jsonify({"config": "cli_args.yaml not found."})
+
+
+@app.route("/reset_chat", methods=["POST"])
+def reset_chat():
+    """
+    Resets the chat history to start a new conversation.
+    """
+    global chat_history
+
+    print("Resetting chat history")
+    chat_history = [{"role": "system", "content": ""}]
+
+    # Get the system message if it was set previously
+    system_msg = request.form.get("system_msg", "")
+    if system_msg:
+        chat_history[0]["content"] = system_msg
+
+    return jsonify({"success": True, "message": "Chat history reset successfully"})
 
 
 if __name__ == "__main__":

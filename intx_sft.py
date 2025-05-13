@@ -253,8 +253,6 @@ def main():
         ]
     )
 
-    accelerator = Accelerator(deepspeed_plugins=DeepSpeedPlugin("ds_config.json"))
-    device = accelerator.device
     set_seed(training_args.seed)
     checkpoint_dir = training_args.resume_from_checkpoint
     if checkpoint_dir and not os.path.isdir(checkpoint_dir):
@@ -312,7 +310,6 @@ def main():
             train=True,
             requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
             peft_config=get_lora_config(model_name, **vars(lora_args)),
-            device=device,
         )
         ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
         if ctx_name is not None:
@@ -403,7 +400,7 @@ def main():
         set_format=None if ctx_args.use_sequence_packing else "pt",
         # streaming=data_args.streaming,
     )
-    tokenized_ds = {}
+    tokenized_ds = {"train": dict(), "validation": dict(), "test": dict()}
     for split, ds_names in zip(
         ["train", "validation", "test"],
         [data_args.train_ds_names, data_args.val_ds_names, data_args.test_ds_names],
@@ -412,9 +409,9 @@ def main():
             continue
         streaming = (split == "train") and data_args.streaming
         for ds_name in ds_names:
-            with accelerator.main_process_first():
-                ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
-            tokenized_ds[split] = {os.path.basename(ds_name): ds}
+            # with accelerator.main_process_first():
+            ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
+            tokenized_ds[split][os.path.basename(ds_name)] = ds
 
     train_ds = tokenized_ds["train"]
     logging.info(f"train_ds: {train_ds}")
