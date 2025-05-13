@@ -75,7 +75,7 @@ if __name__ == "__main__":
     )
     if "pytorch_model.bin" in inp:
         checkpoint_path = inp
-        state_dict = torch.load(checkpoint_path)
+        state_dict = torch.load(checkpoint_path, weights_only=False)
         print(f"Evaluating {checkpoint_path}")
 
         if "checkpoint" in checkpoint_path:

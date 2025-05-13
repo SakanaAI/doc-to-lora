@@ -331,27 +331,37 @@ def load_checkpoint():
 
     run = request.form["run"]
     checkpoint = request.form["checkpoint"]
-    context = request.form.get("context", "")
+    contexts = request.form.getlist("contexts[]")
+
+    # Filter out empty contexts
+    contexts = [ctx for ctx in contexts if ctx.strip()]
+
+    # If no contexts provided, use a single empty string
+    if not contexts:
+        contexts = [""]
+
+    print(f"Received {len(contexts)} non-empty contexts for LoRA generation")
 
     logdir = os.path.join(TRAIN_OUTPUTS_DIR, run)
     checkpoint_path = os.path.join(logdir, checkpoint, "pytorch_model.bin")
 
     try:
         print(f"Loading checkpoint: {checkpoint_path}")
-        state_dict = torch.load(checkpoint_path)
+        state_dict = torch.load(checkpoint_path, weights_only=False)
 
         modulated_model = ModulatedPretrainedModel.from_state_dict(
             state_dict,
             train=False,
-            use_flash_attn=False,
+            use_flash_attn=True,
         )
         modulated_model = modulated_model.to(device)
         modulated_model.eval()
 
-        result = {"success": True, "message": f"Loaded checkpoint {checkpoint}"}
-
-        if context:
-            result["context_processed"] = True
+        result = {
+            "success": True,
+            "message": f"Loaded checkpoint {checkpoint}",
+            "contexts_processed": len(contexts),
+        }
 
         return jsonify(result)
     except Exception as e:
@@ -360,6 +370,49 @@ def load_checkpoint():
 
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+
+def process_multiple_contexts(contexts, ctx_tokenizer):
+    """
+    Process multiple contexts for the ModulatedPretrainedModel.
+
+    Args:
+        contexts: List of context strings
+        ctx_tokenizer: The tokenizer for the context model
+        max_length: Maximum length for tokenization
+
+    Returns:
+        Dictionary with ctx_ids and ctx_attn_mask as tensors
+    """
+    # Remove empty contexts
+    contexts = [ctx for ctx in contexts if ctx.strip()]
+
+    # If no contexts provided, use a single empty string
+    if not contexts:
+        contexts = [""]
+
+    print(f"Processing {len(contexts)} non-empty contexts")
+
+    # Tokenize each context
+    all_ctx_ids = []
+    all_ctx_attn_mask = []
+
+    for context in contexts:
+        # Tokenize the single context
+        inputs = ctx_tokenizer(context, return_tensors="pt")
+
+        all_ctx_ids.append(inputs["input_ids"][0])
+        all_ctx_attn_mask.append(inputs["attention_mask"][0])
+
+    # Pad to the same length
+    ctx_ids = torch.nn.utils.rnn.pad_sequence(
+        all_ctx_ids, batch_first=True, padding_value=ctx_tokenizer.pad_token_id
+    )
+    ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
+        all_ctx_attn_mask, batch_first=True, padding_value=0
+    )
+
+    return {"ctx_ids": ctx_ids, "ctx_attn_mask": ctx_attn_mask}
 
 
 @app.route("/chat", methods=["POST"])
@@ -388,8 +441,17 @@ def chat():
                 with torch.inference_mode(), torch.amp.autocast(str(device)):
                     from transformers import AutoTokenizer
 
-                    # Get the context and tokenize it
-                    context = request.form.get("context", "")
+                    # Get the contexts and tokenize them
+                    contexts = request.form.getlist("contexts[]")
+                    if not contexts:
+                        contexts = [""]  # Use empty context if none provided
+
+                    # Ensure we have at least one context
+                    if len(contexts) == 1 and not contexts[0].strip():
+                        contexts = [""]
+
+                    print(f"Processing {len(contexts)} contexts for response generation")
+                    print(f"Contexts: {contexts}")
                     ctx_encoder_model_name_or_path = (
                         modulated_model.ctx_encoder_args.ctx_encoder_model_name_or_path
                         or modulated_model.base_model.config.name_or_path
@@ -402,22 +464,20 @@ def chat():
                     base_tokenizer = get_tokenizer(
                         modulated_model.base_model.config.name_or_path, train=False
                     )
-                    # load_custom_chat_template(
-                    #     base_tokenizer, modulated_model.base_model.config.name_or_path
-                    # )
 
-                    # Tokenize the context for the ctx_encoder
-                    from ctx_to_lora.data_utils import tokenize_ctx_text
-
-                    ctx_inputs = tokenize_ctx_text(
-                        dict(context=[context]),
+                    # Process the contexts for the ctx_encoder
+                    ctx_inputs = process_multiple_contexts(
+                        contexts,
                         ctx_tokenizer,
+                        # max_length=(
+                        #     modulated_model.ctx_encoder_args.max_ctx_len
+                        #     if hasattr(modulated_model.ctx_encoder_args, "max_ctx_len")
+                        #     else 512
+                        # ),
                     )
-                    # print(f"Context inputs: {ctx_inputs}")
-                    ctx_ids = torch.tensor(ctx_inputs["ctx_ids"], device=device)
-                    ctx_attn_mask = torch.tensor(
-                        ctx_inputs["ctx_attn_mask"], device=device
-                    )
+
+                    ctx_ids = ctx_inputs["ctx_ids"].to(device)
+                    ctx_attn_mask = ctx_inputs["ctx_attn_mask"].to(device)
 
                     print(f"chat_history: {chat_history}")
 
@@ -427,13 +487,31 @@ def chat():
                     ).to(device)
 
                     # Generate response with context-modulated model
-                    outputs = modulated_model.generate(
-                        input_ids=model_inputs,
+                    # with modulated_model.generate_and_apply_loras(
+                    #     ctx_ids=ctx_ids,
+                    #     ctx_attn_mask=ctx_attn_mask,
+                    # ) as applied_model:
+                    #     outputs = applied_model.generate(
+                    #         input_ids=model_inputs,
+                    #         max_new_tokens=512,
+                    #         do_sample=False,
+                    #     )
+
+                    outputs = modulated_model.generate_with_multi_loras(
                         ctx_ids=ctx_ids,
                         ctx_attn_mask=ctx_attn_mask,
+                        input_ids=model_inputs,
                         max_new_tokens=512,
                         do_sample=False,
                     )
+
+                    # outputs = modulated_model.generate(
+                    #     ctx_ids=ctx_ids,
+                    #     ctx_attn_mask=ctx_attn_mask,
+                    #     input_ids=model_inputs,
+                    #     max_new_tokens=512,
+                    #     do_sample=False,
+                    # )
 
                     # Decode the generated response
                     response = base_tokenizer.decode(

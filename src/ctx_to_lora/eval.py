@@ -339,7 +339,7 @@ def evaluate(
     assert split in ["validation", "test"]
     ctx_name = None
     if model_name_or_path is None:
-        state_dict = torch.load(checkpoint_path)
+        state_dict = torch.load(checkpoint_path, weights_only=False)
         ctx_name = state_dict["ctx_encoder_args"].ctx_encoder_model_name_or_path
         model = ModulatedPretrainedModel.from_state_dict(
             state_dict,

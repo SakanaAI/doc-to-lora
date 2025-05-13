@@ -19,6 +19,7 @@ from peft import (
     LoraConfig,
     PeftConfig,
     PeftModel,
+    PeftMixedModel,
     LoraRuntimeConfig,
     get_peft_model_state_dict,
     set_peft_model_state_dict,
@@ -52,6 +53,7 @@ from ctx_to_lora.hooks import (
 from ctx_to_lora.model_loading import get_lora_config, get_model, get_model_and_tokenizer
 from ctx_to_lora.pooling import POOL_FN, get_pooling_fn
 from ctx_to_lora.utils import (
+    generated_lora_to_state_dict,
     get_lora_module_names,
     get_num_layers,
     get_peft_in_out_features,
@@ -1079,7 +1081,7 @@ class HyperLoRA(nn.Module):
 class ModulatedPretrainedModel(nn.Module):
     def __init__(
         self,
-        base_model: PreTrainedModel,
+        base_model: PeftModel,
         hypernet_config: HypernetConfig,
         ctx_encoder_args: CtxEncoderArguments,
         # use_kl_loss is only used for training
@@ -1092,6 +1094,8 @@ class ModulatedPretrainedModel(nn.Module):
         self.ctx_encoder_args = ctx_encoder_args
         self.use_kl_loss = use_kl_loss
         self.use_base_input_as_ctx = use_base_input_as_ctx
+        self.lora_id = 1
+        self.active_adapters = []
 
         self.register_module("base_model", base_model)
         self._init_model()
@@ -1107,6 +1111,7 @@ class ModulatedPretrainedModel(nn.Module):
         use_flash_attn: bool = True,
     ):
         lora_config = state_dict["hypernet_config"].lora_config
+        print(f"lora_config: {lora_config}")
         model_name_or_path = state_dict["base_model_name_or_path"]
         base_model = get_model(
             model_name_or_path,
@@ -1471,9 +1476,115 @@ class ModulatedPretrainedModel(nn.Module):
         else:
             return model_outputs
 
+    # @contextmanager
+    @torch.inference_mode()
+    def generate_with_multi_loras(
+        self,
+        ctx_ids: Integer[Tensor, "bs ctx_length"],
+        ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
+        ctx_position_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
+        *model_inputs_args: Any,
+        **model_inputs_kwargs: dict[str, Any],
+    ):
+        # TODO: generate LoRA for each sample in ctx_ids
+        # apply all LoRAs to the base model
+        # the lora should be applied until removed
+        generated_loras, _ = self.generate_weights(
+            ctx_ids, ctx_attn_mask, ctx_position_ids
+        )
+        # sum loras
+        for lora_at_module in generated_loras.values():
+            if len(lora_at_module["A"]) > 1:
+                print("Multiple LoRAs are generated, summing them up")
+            lora_at_module["A"] = torch.mean(lora_at_module["A"], dim=0, keepdim=True)
+            lora_at_module["B"] = torch.mean(lora_at_module["B"], dim=0, keepdim=True)
+
+        position_ids = (
+            model_inputs_kwargs["position_ids"]
+            if "position_ids" in model_inputs_kwargs
+            else None
+        )
+
+        # apply loras
+        with apply_generated_loras(
+            self.base_model,
+            generated_loras,
+            self.hypernet.layer_indices,
+            position_ids,
+            self.training,
+        ):
+            model_outputs = self.base_model.generate(
+                *model_inputs_args, **model_inputs_kwargs
+            )
+        return model_outputs
+
+        # try:
+        #     # dict of {module:
+        #     #   {A: [bs, n_layers, r, d_inim],
+        #     #    B: [bs, n_layers, r, d_outim]}}
+        #     generated_loras, _ = self.generate_weights(
+        #         ctx_ids, ctx_attn_mask, ctx_position_ids
+        #     )
+        #     module_names = get_lora_module_names(
+        #         self.base_model,
+        #         self.hypernet.target_modules,
+        #         self.hypernet.layer_indices,
+        #     )
+
+        #     loras = [dict() for _ in range(len(ctx_ids))]
+        #     # unpacking the dict into a list of dicts
+        #     # loras: list of dict {module: {A: Tensor, B: Tensor}}
+        #     for i in range(len(ctx_ids)):
+        #         for target_module, lora_at_module in generated_loras.items():
+        #             loras[i][target_module] = dict(
+        #                 A=lora_at_module["A"][i], B=lora_at_module["B"][i]
+        #             )
+        #     # convert to lora state dict
+        #     loras_sd = [
+        #         generated_lora_to_state_dict(
+        #             lora,
+        #             module_names,
+        #             self.hypernet.target_modules,
+        #             self.hypernet.layer_indices,
+        #         )
+        #         for lora in loras
+        #     ]
+        #     peft_config = self.base_model.peft_config
+        #     base_model = self.base_model
+        #     # mixed_model = PeftMixedModel(base_model, lora_config)
+        #     for lora_sd in loras_sd:
+        #         lora_name = f"lora_{self.lora_id}"
+        #         print(f"lora_name: {lora_name}")
+
+        #         # keys = list(lora_sd.keys())
+        #         # for key in keys:
+        #         #     new_key = key.replace("model.model", "model.model.model")
+        #         #     new_key = key.replace("weight", f"{lora_name}.weight")
+        #         #     lora_sd[new_key] = lora_sd.pop(key)
+
+        #         print(f"lora_sd: {lora_sd.keys()}")
+        #         if lora_name not in peft_config:
+        #             base_model.add_adapter(lora_name, peft_config["default"])
+        #         load_result = set_peft_model_state_dict(
+        #             base_model, lora_sd, adapter_name=lora_name
+        #         )
+        #         print(f"missing_keys: {load_result.missing_keys}")
+        #         print(f"unexpected_keys: {load_result.unexpected_keys}")
+        #         self.lora_id += 1
+        #         self.active_adapters.append(lora_name)
+        #     base_model.set_adapter(self.active_adapters)
+        #     print(f"active_adapters: {self.active_adapters}")
+        #     yield base_model.base_model
+
+        # finally:
+        #     self.base_model.set_adapter("default")
+        #     self.active_adapters = []
+        #     # self.lora_id = 1
+
     @torch.inference_mode()
     def generate(
         self,
+        # TODO: allow more than one LoRA per sample
         ctx_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         ctx_attn_mask: Optional[Integer[Tensor, "bs ctx_length"]] = None,
         ctx_position_ids: Optional[Integer[Tensor, "bs ctx_length"]] = None,
@@ -1482,7 +1593,11 @@ class ModulatedPretrainedModel(nn.Module):
     ):
         generated_loras = None
         generated_layernorms = None
-        if ctx_ids is None and not self.use_base_input_as_ctx:
+        if (
+            ctx_ids is None
+            and not self.active_adapters
+            and not self.use_base_input_as_ctx
+        ):
             logger.warning(
                 (
                     "*" * 100,
@@ -1493,6 +1608,14 @@ class ModulatedPretrainedModel(nn.Module):
             # model_outputs = self.base_model(**model_inputs_kwargs)
             # model_outputs.generated_loras = None
             # return model_outputs
+        if ctx_ids is None and self.active_adapters:
+            logger.info(
+                (
+                    "*" * 100,
+                    "\n\nUsing active LoRAs for generation\n\n",
+                    "*" * 100,
+                )
+            )
         else:
             if self.use_base_input_as_ctx:
                 ctx_ids = (
@@ -1547,6 +1670,11 @@ class ModulatedPretrainedModel(nn.Module):
                 *model_inputs_args, **model_inputs_kwargs
             )
         return model_outputs
+
+
+# def combine_loras(loras: list[LoRA]) -> LoRA:
+#     # TODO: implement
+#     ...
 
 
 class ModulatedModelWithSharedInput(nn.Module):
@@ -1681,7 +1809,6 @@ def apply_generated_loras(
         hooks = []
         for module_name in generated_loras:
             for layer_idx in layer_indices:
-                # TODO: handle sequence packing???
                 hooks += add_generated_lora_hook(
                     base_model,
                     module_name,
@@ -1786,6 +1913,7 @@ if __name__ == "__main__":
 
     state_dict = torch.load(
         "train_outputs/runs/Jan15_19-10-21_slurm0-a3nodeset-11_d1842c41/checkpoint-55000/pytorch_model.bin",
+        weights_only=False,
     )
     print(state_dict.keys())
     breakpoint()

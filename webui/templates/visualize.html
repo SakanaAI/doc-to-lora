@@ -179,14 +179,62 @@
 
     .chat-container {
         margin-bottom: 20px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 15px;
+        background-color: #fafafa;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .chat-container h2 {
+        margin-top: 0;
+        margin-bottom: 15px;
+        color: #333;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 10px;
     }
 
     .chat-output {
-        min-height: 150px;
+        min-height: 200px;
+        max-height: 400px;
         border: 1px solid #ddd;
+        border-radius: 8px;
         padding: 10px;
         margin-bottom: 10px;
         overflow-y: auto;
+        background-color: white;
+    }
+
+    .chat-output p {
+        margin: 8px 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        line-height: 1.4;
+    }
+
+    .chat-message {
+        padding: 8px 12px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        max-width: 85%;
+    }
+
+    .chat-message.user {
+        background-color: #e3f2fd;
+        margin-left: auto;
+    }
+
+    .chat-message.assistant {
+        background-color: #f5f5f5;
+        margin-right: auto;
+    }
+
+    .chat-message.system {
+        background-color: #fffde7;
+        font-style: italic;
+        width: 100%;
+        text-align: center;
+        font-size: 0.9em;
     }
 
     .chat-input {
@@ -299,6 +347,104 @@
         border-left: 4px solid #4CAF50;
         color: #333;
         font-size: 0.9em;
+    }
+
+    .context-field {
+        margin-bottom: 15px;
+        padding: 15px;
+        border: 1px solid #e0e0e0;
+        border-radius: 5px;
+        background-color: #f9f9f9;
+    }
+
+    .context-field label {
+        margin-bottom: 8px;
+        color: #333;
+        font-weight: bold;
+    }
+
+    .context-input {
+        width: 100%;
+        height: 100px;
+        resize: vertical;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+    }
+
+    .context-controls {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+
+    .tertiary-button {
+        background-color: #ff5252;
+        color: white;
+        padding: 8px 16px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+
+    .tertiary-button:hover {
+        background-color: #d32f2f;
+    }
+
+    .tertiary-button:disabled {
+        background-color: #ffcdd2;
+        cursor: not-allowed;
+    }
+
+    .context-header {
+        margin-bottom: 15px;
+    }
+
+    .context-header h4 {
+        margin: 0 0 5px 0;
+        color: #333;
+    }
+
+    .chat-input.textarea {
+        min-height: 60px;
+        max-height: 200px;
+        resize: vertical;
+        overflow-y: auto;
+        font-family: inherit;
+        font-size: inherit;
+        padding: 10px;
+        box-sizing: border-box;
+    }
+
+    .chat-input-container {
+        display: flex;
+        gap: 10px;
+        margin-top: 10px;
+    }
+
+    .chat-input-container textarea {
+        flex: 1;
+    }
+
+    .primary-button {
+        background-color: #2196F3;
+        color: white;
+        padding: 8px 16px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+        align-self: flex-end;
+    }
+
+    .primary-button:hover {
+        background-color: #0d8aee;
+    }
+
+    .primary-button:disabled {
+        background-color: #bbdefb;
+        cursor: not-allowed;
     }
 </style>
 {% endblock %}
@@ -431,9 +577,25 @@
                 {% endfor %}
             </select>
 
-            <label for="context-input">Context Information:</label>
-            <textarea id="context-input"
-                placeholder="Enter context information here. This will be used by the hypernetwork to generate a LoRA for the base model."></textarea>
+            <div id="contexts-container">
+                <div class="context-header">
+                    <h4>Context Inputs</h4>
+                    <p class="instruction-text">Add one or more context inputs to generate corresponding LoRAs.</p>
+                </div>
+
+                <div class="context-controls">
+                    <button id="add-context-button" class="secondary-button">Add Context</button>
+                    <button id="remove-context-button" class="tertiary-button" disabled>Remove Last</button>
+                </div>
+
+                <div class="context-fields">
+                    <div class="context-field">
+                        <label for="context-input-0">Context 1:</label>
+                        <textarea id="context-input-0" class="context-input"
+                            placeholder="Enter context information here. This will be used by the hypernetwork to generate a LoRA for the base model."></textarea>
+                    </div>
+                </div>
+            </div>
 
             <button id="apply-hypernetwork-button">Apply Hypernetwork</button>
             <div id="hypernetwork-status"></div>
@@ -452,7 +614,12 @@
             </div>
 
             <div id="chat-output" class="chat-output"></div>
-            <input type="text" id="chat-input" class="chat-input" placeholder="Enter your message..." disabled>
+
+            <div class="chat-input-container">
+                <textarea id="chat-input" class="chat-input textarea"
+                    placeholder="Enter your message... (Shift+Enter for new line)" disabled></textarea>
+                <button id="send-message-button" class="primary-button" disabled>Send</button>
+            </div>
         </div>
     </div>
 </div>
@@ -557,14 +724,18 @@
                 document.getElementById('chat-input').value = '';
                 addMessageToChat('You: ' + message);
 
-                // Check if we're using hypernetwork and include context
+                // Prepare form data
                 let formData = new FormData();
                 formData.append('message', message);
 
-                // Get the context text if hypernetwork is being used
-                const contextInput = document.getElementById('context-input');
-                if (document.getElementById('chat-model-name').textContent.includes('Hypernetwork') && contextInput) {
-                    formData.append('context', contextInput.value);
+                // Check if we're using hypernetwork and include contexts
+                if (document.getElementById('chat-model-name').textContent.includes('Hypernetwork')) {
+                    const contextInputs = document.querySelectorAll('.context-input');
+
+                    // Add all contexts to the form data
+                    Array.from(contextInputs).forEach(input => {
+                        formData.append('contexts[]', input.value);
+                    });
                 }
 
                 fetch('/chat', {
@@ -602,15 +773,20 @@
         if (applyHypernetworkButton) {
             applyHypernetworkButton.addEventListener('click', function () {
                 const checkpoint = document.getElementById('checkpoint-select').value;
-                const context = document.getElementById('context-input').value;
+                const contextInputs = document.querySelectorAll('.context-input');
+
+                // Collect all contexts
+                const contexts = Array.from(contextInputs).map(input => input.value);
 
                 if (!checkpoint) {
                     alert('Please select a checkpoint first.');
                     return;
                 }
 
-                if (!context.trim()) {
-                    if (!confirm('The context field is empty. Are you sure you want to continue without context?')) {
+                // Check if all contexts are empty
+                const allEmpty = contexts.every(context => !context.trim());
+                if (allEmpty) {
+                    if (!confirm('All context fields are empty. Are you sure you want to continue without any context?')) {
                         return;
                     }
                 }
@@ -623,14 +799,19 @@
                 applyHypernetworkButton.disabled = true;
                 applyHypernetworkButton.textContent = 'Loading...';
 
+                // Build the form data with all contexts
+                const formData = new FormData();
+                formData.append('run', '{{ run }}');
+                formData.append('checkpoint', checkpoint);
+
+                // Add all contexts to the form data
+                contexts.forEach(context => {
+                    formData.append('contexts[]', context);
+                });
+
                 fetch('/load_checkpoint', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: 'run=' + encodeURIComponent('{{ run }}') +
-                        '&checkpoint=' + encodeURIComponent(checkpoint) +
-                        '&context=' + encodeURIComponent(context)
+                    body: formData
                 })
                     .then(response => response.json())
                     .then(data => {
@@ -639,18 +820,31 @@
                         applyHypernetworkButton.textContent = 'Apply Hypernetwork';
 
                         if (data.success) {
-                            statusEl.textContent = 'Success: ' + data.message;
+                            const contextCount = data.contexts_processed || 0;
+                            statusEl.textContent = `Success: ${data.message} (${contextCount} contexts processed)`;
                             statusEl.style.color = 'green';
 
                             // Show the chat container if it's hidden
                             document.getElementById('chat-container').style.display = 'block';
-                            document.getElementById('chat-input').disabled = false;
+
+                            // Enable the chat input
+                            const chatInput = document.getElementById('chat-input');
+                            const sendButton = document.getElementById('send-message-button');
+                            if (chatInput) {
+                                chatInput.disabled = false;
+                                // Still disabled until text is entered
+                                if (sendButton) sendButton.disabled = true;
+                            }
+
                             document.getElementById('chat-model-name').textContent =
                                 'Hypernetwork: ' + checkpoint;
 
                             // Clear any existing chat and add an instruction
                             document.getElementById('chat-output').innerHTML = '';
                             addMessageToChat('System: Hypernetwork applied successfully. Your messages will now be processed through the context-aware model.');
+                            if (contextCount > 1) {
+                                addMessageToChat(`System: ${contextCount} contexts were processed to generate combined LoRAs.`);
+                            }
 
                         } else {
                             statusEl.textContent = 'Error: ' + data.error;
@@ -694,7 +888,12 @@
                     document.getElementById('chat-model-name').textContent = data.model_name;
                     document.getElementById('load-chat-container').style.display = 'none';
                     document.getElementById('chat-container').style.display = 'block';
-                    document.getElementById('chat-input').disabled = false;
+
+                    // Enable the input and send button
+                    const chatInput = document.getElementById('chat-input');
+                    const sendButton = document.getElementById('send-message-button');
+                    chatInput.disabled = false;
+                    if (sendButton) sendButton.disabled = true; // Still disabled until text is entered
 
                     // Show the hypernetwork container now that base model is loaded
                     const hypernetworkContainer = document.getElementById('hypernetwork-container');
@@ -717,8 +916,42 @@
 
     function addMessageToChat(message) {
         var chatOutput = document.getElementById('chat-output');
-        var newMessage = document.createElement('p');
-        newMessage.textContent = message;
+        var newMessage = document.createElement('div');
+
+        // Determine message type
+        if (message.startsWith('You: ')) {
+            newMessage.className = 'chat-message user';
+            newMessage.textContent = message.replace('You: ', '');
+        } else if (message.startsWith('System: ')) {
+            newMessage.className = 'chat-message system';
+            newMessage.textContent = message.replace('System: ', '');
+        } else {
+            newMessage.className = 'chat-message assistant';
+            const colonIndex = message.indexOf(': ');
+            if (colonIndex !== -1) {
+                const sender = message.substring(0, colonIndex);
+                const content = message.substring(colonIndex + 2);
+
+                // Add a small label for the model name
+                const modelLabel = document.createElement('div');
+                modelLabel.className = 'model-label';
+                modelLabel.style.fontSize = '0.8em';
+                modelLabel.style.fontWeight = 'bold';
+                modelLabel.style.marginBottom = '5px';
+                modelLabel.style.color = '#555';
+                modelLabel.textContent = sender;
+
+                newMessage.appendChild(modelLabel);
+
+                // Add the message content in a separate div
+                const messageContent = document.createElement('div');
+                messageContent.textContent = content;
+                newMessage.appendChild(messageContent);
+            } else {
+                newMessage.textContent = message;
+            }
+        }
+
         chatOutput.appendChild(newMessage);
         chatOutput.scrollTop = chatOutput.scrollHeight;
     }
@@ -769,6 +1002,91 @@
                     .catch(error => {
                         console.error('Error resetting chat history:', error);
                     });
+            });
+        }
+    });
+
+    // Add JavaScript to manage multiple context fields
+    document.addEventListener('DOMContentLoaded', function () {
+        const addContextButton = document.getElementById('add-context-button');
+        const removeContextButton = document.getElementById('remove-context-button');
+        const contextFieldsContainer = document.querySelector('.context-fields');
+
+        let contextCount = 1; // We start with one context field
+
+        // Add a new context field
+        addContextButton.addEventListener('click', function () {
+            const newFieldIndex = contextCount;
+            contextCount++;
+
+            const newField = document.createElement('div');
+            newField.className = 'context-field';
+            newField.innerHTML = `
+                <label for="context-input-${newFieldIndex}">Context ${contextCount}:</label>
+                <textarea id="context-input-${newFieldIndex}" class="context-input" 
+                    placeholder="Enter additional context information here."></textarea>
+            `;
+
+            contextFieldsContainer.appendChild(newField);
+
+            // Enable the remove button if we have more than one context
+            if (contextCount > 1) {
+                removeContextButton.disabled = false;
+            }
+        });
+
+        // Remove the last context field
+        removeContextButton.addEventListener('click', function () {
+            if (contextCount > 1) {
+                contextFieldsContainer.removeChild(contextFieldsContainer.lastChild);
+                contextCount--;
+
+                // Disable the remove button if we're back to just one context
+                if (contextCount === 1) {
+                    removeContextButton.disabled = true;
+                }
+            }
+        });
+    });
+
+    // Add event handler for the send button
+    document.addEventListener('DOMContentLoaded', function () {
+        const sendButton = document.getElementById('send-message-button');
+        const chatInput = document.getElementById('chat-input');
+
+        if (sendButton && chatInput) {
+            // Enable/disable the button based on chat input state
+            const updateSendButtonState = function () {
+                sendButton.disabled = chatInput.disabled || !chatInput.value.trim();
+            };
+
+            // Initial state
+            updateSendButtonState();
+
+            // Add event listener for input changes
+            chatInput.addEventListener('input', updateSendButtonState);
+
+            // Add event listener for send button click
+            sendButton.addEventListener('click', function () {
+                if (!chatInput.disabled && chatInput.value.trim()) {
+                    sendMessage();
+                }
+            });
+
+            // Update the event listener for chat input to handle Shift+Enter
+            chatInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    if (e.shiftKey) {
+                        // Let Shift+Enter add a new line - no need to do anything
+                        return;
+                    } else {
+                        // Just Enter triggers send
+                        e.preventDefault();
+                        if (!chatInput.disabled && chatInput.value.trim()) {
+                            sendMessage();
+                        }
+                    }
+                }
             });
         }
     });

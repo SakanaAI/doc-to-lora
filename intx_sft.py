@@ -351,7 +351,7 @@ def main():
                 f"Loading from checkpoint: {ctx_args.from_pretrained_checkpoint}"
             )
             model = ModulatedPretrainedModel.from_state_dict(
-                torch.load(ctx_args.from_pretrained_checkpoint),
+                torch.load(ctx_args.from_pretrained_checkpoint, weights_only=False),
                 train=True,
                 use_flash_attn=model_args.use_flash_attn,
             )
