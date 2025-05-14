@@ -8,6 +8,7 @@ import yaml
 from flask import Flask, abort, jsonify, render_template, request
 from transformers import pipeline, AutoTokenizer
 
+from ctx_to_lora.data_utils import tokenize_ctx_text
 from ctx_to_lora.model_loading import get_tokenizer
 
 app = Flask(__name__)
@@ -354,7 +355,7 @@ def load_checkpoint():
             train=False,
             use_flash_attn=True,
         )
-        modulated_model = modulated_model.to(device)
+        modulated_model = modulated_model.to(device).to(torch.bfloat16)
         modulated_model.eval()
 
         result = {
@@ -393,23 +394,18 @@ def process_multiple_contexts(contexts, ctx_tokenizer):
 
     print(f"Processing {len(contexts)} non-empty contexts")
 
-    # Tokenize each context
-    all_ctx_ids = []
-    all_ctx_attn_mask = []
-
-    for context in contexts:
-        # Tokenize the single context
-        inputs = ctx_tokenizer(context, return_tensors="pt")
-
-        all_ctx_ids.append(inputs["input_ids"][0])
-        all_ctx_attn_mask.append(inputs["attention_mask"][0])
-
-    # Pad to the same length
+    tokenized_contexts = tokenize_ctx_text({"context": contexts}, ctx_tokenizer)
+    ctx_ids = tokenized_contexts["ctx_ids"]
+    ctx_attn_mask = tokenized_contexts["ctx_attn_mask"]
     ctx_ids = torch.nn.utils.rnn.pad_sequence(
-        all_ctx_ids, batch_first=True, padding_value=ctx_tokenizer.pad_token_id
+        torch.tensor(ctx_ids, dtype=torch.long, device=device),
+        batch_first=True,
+        padding_value=0,
     )
     ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
-        all_ctx_attn_mask, batch_first=True, padding_value=0
+        torch.tensor(ctx_attn_mask, dtype=torch.long, device=device),
+        batch_first=True,
+        padding_value=0,
     )
 
     return {"ctx_ids": ctx_ids, "ctx_attn_mask": ctx_attn_mask}
@@ -483,7 +479,7 @@ def chat():
 
                     # Tokenize the chat history
                     model_inputs = base_tokenizer.apply_chat_template(
-                        chat_history, return_tensors="pt"
+                        chat_history, return_tensors="pt", add_generation_prompt=True
                     ).to(device)
 
                     # Generate response with context-modulated model
