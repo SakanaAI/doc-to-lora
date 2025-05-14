@@ -237,6 +237,12 @@
         font-size: 0.9em;
     }
 
+    .chat-message .message-content {
+        white-space: pre-wrap !important;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+
     .chat-input {
         width: 100%;
         padding: 10px;
@@ -921,10 +927,16 @@
         // Determine message type
         if (message.startsWith('You: ')) {
             newMessage.className = 'chat-message user';
-            newMessage.textContent = message.replace('You: ', '');
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.textContent = message.replace('You: ', '');
+            newMessage.appendChild(messageContent);
         } else if (message.startsWith('System: ')) {
             newMessage.className = 'chat-message system';
-            newMessage.textContent = message.replace('System: ', '');
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.textContent = message.replace('System: ', '');
+            newMessage.appendChild(messageContent);
         } else {
             newMessage.className = 'chat-message assistant';
             const colonIndex = message.indexOf(': ');
@@ -945,10 +957,14 @@
 
                 // Add the message content in a separate div
                 const messageContent = document.createElement('div');
+                messageContent.className = 'message-content';
                 messageContent.textContent = content;
                 newMessage.appendChild(messageContent);
             } else {
-                newMessage.textContent = message;
+                const messageContent = document.createElement('div');
+                messageContent.className = 'message-content';
+                messageContent.textContent = message;
+                newMessage.appendChild(messageContent);
             }
         }
 

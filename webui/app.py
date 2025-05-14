@@ -396,14 +396,21 @@ def process_multiple_contexts(contexts, ctx_tokenizer):
 
     tokenized_contexts = tokenize_ctx_text({"context": contexts}, ctx_tokenizer)
     ctx_ids = tokenized_contexts["ctx_ids"]
+    ctx_ids = [
+        torch.tensor(ctx_id, dtype=torch.long, device=device) for ctx_id in ctx_ids
+    ]
     ctx_attn_mask = tokenized_contexts["ctx_attn_mask"]
+    ctx_attn_mask = [
+        torch.tensor(ctx_attn_mask, dtype=torch.long, device=device)
+        for ctx_attn_mask in ctx_attn_mask
+    ]
     ctx_ids = torch.nn.utils.rnn.pad_sequence(
-        torch.tensor(ctx_ids, dtype=torch.long, device=device),
+        ctx_ids,
         batch_first=True,
         padding_value=0,
     )
     ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
-        torch.tensor(ctx_attn_mask, dtype=torch.long, device=device),
+        ctx_attn_mask,
         batch_first=True,
         padding_value=0,
     )
