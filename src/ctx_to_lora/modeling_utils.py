@@ -982,6 +982,7 @@ class HyperLoRA(nn.Module):
         #             hidden_size=self.config.base_hidden_size,
         #         )
 
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
     ) -> dict[str, dict[str, Float[Tensor, "bs n_layers r _"]]]:
@@ -1035,6 +1036,7 @@ class HyperLoRA(nn.Module):
         )
         return {k: v for k, v in zip(self.extra_modules, layernorms)}
 
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def forward(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
@@ -1065,6 +1067,7 @@ class HyperLoRA(nn.Module):
 
         return flat_loras, flat_layernorms
 
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def generate_weights(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
@@ -1486,9 +1489,7 @@ class ModulatedPretrainedModel(nn.Module):
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
-        # TODO: generate LoRA for each sample in ctx_ids
-        # apply all LoRAs to the base model
-        # the lora should be applied until removed
+        # TODO: make this persistent
         generated_loras, _ = self.generate_weights(
             ctx_ids, ctx_attn_mask, ctx_position_ids
         )
@@ -1670,11 +1671,6 @@ class ModulatedPretrainedModel(nn.Module):
                 *model_inputs_args, **model_inputs_kwargs
             )
         return model_outputs
-
-
-# def combine_loras(loras: list[LoRA]) -> LoRA:
-#     # TODO: implement
-#     ...
 
 
 class ModulatedModelWithSharedInput(nn.Module):

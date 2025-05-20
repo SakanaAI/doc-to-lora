@@ -122,9 +122,9 @@ class ArgumentParser(HfArgumentParser):
 
 
 class ExperimentSetup(str, Enum):
-    LORA = "lora"
-    HYPER_LORA = "hyper_lora"
-    FULL_FINETUNE = "full_finetune"
+    # LORA = "lora"
+    HYPERLORA = "hyper_lora"
+    # FULL_FINETUNE = "full_finetune"
 
 
 @dataclass
@@ -277,7 +277,7 @@ class LoRAArguments:
 @dataclass
 class CtxTrainingArguments:
     exp_setup: ExperimentSetup = field(
-        default=ExperimentSetup.LORA,
+        default=ExperimentSetup.HYPERLORA,
         metadata={"help": "Experiment setup - LoRA, HyperLoRA, or full finetuning"},
     )
     from_pretrained_checkpoint: str = field(

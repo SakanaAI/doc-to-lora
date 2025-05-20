@@ -1,266 +1,236 @@
 import logging
-import numpy as np
 import hashlib
 import json
+import random
+from functools import partial
 from os import path
 from glob import glob
 from typing import Any, Callable, Iterator, Optional
 
 
 import datasets
+import numpy as np
 from datasets import load_dataset, IterableDataset
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.training_utils import TRAINING_TASK
-
-IGNORE_INDEX = -100
+from ctx_to_lora.data_definitions import (
+    DS_KWARGS,
+    EVAL_INTX_TEMPLATES,
+    TRANSFORMED_DATA_DIR,
+    IGNORE_INDEX,
+    CLOSED_QA_INTX_TEMPLATES,
+)
 
 logger = logging.getLogger()
-FW_QA_PATHS = [
-    f"data/raw_datasets/fw_qa/{i:05d}.parquet" for i in [0, 1, 6, 7, 8, 10, 22, 30, 35]
-]
 
-TRANSFORMED_DATA_DIR = "data/processed_datasets"
+# TODO: add continued pre-training pipeline
 
-# approximate length of the datasets
-# needed for streaming datasets
-DS_LEN = {
-    "fw_qa_3_mini": 100_000,
-    "fw_qa_3_medium": 121_000_000,
-    "fw_qa_3": 270_000_000,
-    "fw_qa_xl": 27_000_000,
-    "ctx_qa": 300_000,
-    "pwc": 240_000,
-    "hotpot_qa": 100_000,
-    "squad": 90_000,
-    "drop": 77_000,
-    "narrativeqa": 40_000,
-    "quoref": 11_000,
-    "ropes": 11_000,
-    "synthetic_convqa": 40_000,
-}
 
-DS_KWARGS = {
-    "hotpot_qa": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:]"),
-        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:900]"),
-        test=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
-    ),
-    "hotpot_qa_tiny": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:2000]"),
-        validation=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:900]"),
-    ),
-    "pwc": dict(
-        train=dict(path="sggetao/PwC", split="train[900:]"),
-        validation=dict(path="sggetao/PwC", split="train[:900]"),
-        test=dict(path="sggetao/PwC", split="test"),
-    ),
-    "pwc_tiny": dict(
-        train=dict(path="sggetao/PwC", split="train[900:2000]"),
-        validation=dict(path="sggetao/PwC", split="train[:900]"),
-    ),
-    "squad": dict(
-        train=dict(path="rajpurkar/squad", split="train[900:]"),
-        validation=dict(path="rajpurkar/squad", split="train[:900]"),
-        test=dict(path="rajpurkar/squad", split="validation"),
-    ),
-    "fw_qa_tiny": dict(
-        train=dict(
-            path="parquet",
-            data_files="data/raw_datasets/fw_qa/00000.parquet",
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files="data/raw_datasets/fw_qa/00000_val.parquet",
-            split="train",
-        ),
-    ),
-    "fw_qa": dict(
-        train=dict(
-            path="parquet",
-            data_files=FW_QA_PATHS,
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files="data/raw_datasets/fw_qa/*_val.parquet",
-            split="train",
-        ),
-    ),
-    "fw_qa_large": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_large/*res.parquet"),
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_large/*val.parquet"),
-            split="train",
-        ),
-    ),
-    "fw_qa_xl": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_xl/*[!val].parquet"),
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_xl/*val.parquet"),
-            split="train",
-        ),
-    ),
-    "fw_qa_2": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_2/*[!val].parquet"),
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_2/*val.parquet"),
-            split="train",
-        ),
-    ),
-    "fw_qa_3_mini": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/000_00001.parquet"),
-            split="train[:100000]",
-        ),
-    ),
-    "fw_qa_3_medium": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/00[0-5]*[!val].parquet"),
-            split="train",
-        ),
-    ),
-    "fw_qa_3": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/*[!val].parquet"),
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/*val.parquet"),
-            split="train",
-        ),
-    ),
-    "ctx_qa": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/ctx_qa/*res.parquet"),
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/ctx_qa/*val.parquet"),
-            split="train",
-        ),
-    ),
-    "drop": dict(
-        train=dict(
-            path="ucinlp/drop",
-            split="train",
-        ),
-    ),
-    "narrativeqa": dict(
-        train=dict(
-            path="nvidia/ChatQA-Training-Data",
-            name="narrativeqa",
-            split="train",
-        ),
-    ),
-    "quoref": dict(
-        train=dict(
-            path="nvidia/ChatQA-Training-Data",
-            name="quoref",
-            split="train",
-        ),
-    ),
-    "ropes": dict(
-        train=dict(
-            path="nvidia/ChatQA-Training-Data",
-            name="ropes",
-            split="train",
-        ),
-    ),
-    "synthetic_convqa": dict(
-        train=dict(
-            path="nvidia/ChatQA-Training-Data",
-            name="synthetic_convqa",
-            split="train",
-        ),
-    ),
-    "booksum": dict(
-        train=dict(
-            path="kmfoda/booksum",
-            split="train+validation+test",
-        )
-    ),
-    "gov_report": dict(
-        train=dict(
-            path="ccdv/govreport-summarization",
-            split="train",
-        ),
-        validation=dict(
-            path="ccdv/govreport-summarization",
-            split="validation",
-        ),
-        test=dict(
-            path="ccdv/govreport-summarization",
-            split="test",
-        ),
-    ),
-    # "wikitext-2": dict(
-    #     train=dict(
-    #         path="EleutherAI/wikitext_document_level",
-    #         name="wikitext-2-raw-v1",
-    #         split="train",
-    #     ),
-    # ),
-    # "wikitext-103": dict(
-    #     train=dict(
-    #         path="EleutherAI/wikitext_document_level",
-    #         name="wikitext-103-raw-v1",
-    #         split="train",
-    #     ),
-    # ),
-    "gsm8k": dict(
-        train=dict(
-            path="openai/gsm8k",
-            name="main",
-            split="train[100:]",
-        ),
-        validation=dict(
-            path="openai/gsm8k",
-            name="main",
-            split="train[:100]",
-        ),
-    ),
-    "openmathintx-2": dict(
-        train=dict(
-            path="nvidia/OpenMathInstruct-2",
-            split="train_1M[:100000]",
-        ),
-    ),
-    "opencoder-edu": dict(
-        train=dict(
-            path="OpenCoder-LLM/opc-sft-stage2",
-            name="educational_instruct",
-            split="train[900:]",
-        ),
-        validation=dict(
-            path="OpenCoder-LLM/opc-sft-stage2",
-            name="educational_instruct",
-            split="train[:900]",
-        ),
-    ),
-}
+def closed_qa_prompting(prompt: str):
+    template = random.choice(CLOSED_QA_INTX_TEMPLATES)
+    return template.format(input=prompt)
+
+
+def get_preprocessing_fn(
+    ds_name: str, is_eval: bool
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """
+    Get preprocessing function for a specific dataset.
+
+    Args:
+        ds_name: Name of the dataset
+
+    Returns:
+        A preprocessing function that takes and returns a dictionary
+    """
+    f = lambda x: x
+
+    if ds_name.startswith("pwc"):
+
+        def f(sample):
+            return {
+                "context": sample["input"],
+                "prompt": sample["prompt"],
+                "response": sample["answer"],
+            }
+
+    elif ds_name.startswith("hotpot_qa"):
+
+        def f(sample):
+            txt = ""
+            for p in sample["context"]["sentences"]:
+                txt += " " + "".join(p)
+
+            q = sample["question"]
+            prompt = closed_qa_prompting(q) if not is_eval else q
+
+            return {
+                "context": txt.strip(),
+                "prompt": prompt,
+                "response": sample["answer"],
+            }
+
+    elif "squad" in ds_name:
+
+        def f(sample):
+            q = sample["question"]
+            prompt = closed_qa_prompting(q) if not is_eval else q
+            return {
+                "context": sample["context"],
+                "prompt": prompt,
+                "response": sample["answers"]["text"][0],
+            }
+
+    elif ds_name == "drop":
+
+        def f(sample):
+            q = sample["question"]
+            prompt = closed_qa_prompting(q) if not is_eval else q
+            return {
+                "context": sample["passage"],
+                "prompt": prompt,
+                "response": ", ".join(sample["answers_spans"]["spans"]),
+            }
+
+    elif ds_name in ["narrativeqa", "quoref", "ropes"]:
+
+        def f(sample):
+            response = sample["answers"][0]
+            if isinstance(response, list):
+                response = response[0]
+            q = sample["messages"][-1]["content"]
+            prompt = closed_qa_prompting(q) if not is_eval else q
+            return {
+                "context": sample["document"],
+                "prompt": prompt,
+                "response": response,
+            }
+
+    elif ds_name == "synthetic_convqa":
+
+        def f(sample):
+            response = sample["answers"][0]
+            if isinstance(response, list):
+                response = response[0]
+            return {
+                "context": sample["document"],
+                "prompt": sample["messages"][-1]["content"],
+                "response": response,
+            }
+
+    elif ds_name == "booksum":
+        prompt_templates = [
+            "Summarization the provided text.",
+            "# Summary",
+            "### Summary",
+            "Summary of the text",
+        ]
+        # TODO: use these templates for training
+        # analysis_templates = []
+        # summary_templates = []
+
+        def f(sample):
+            return {
+                "context": sample["chapter"],
+                "prompt": "Summarize the provided text.",
+                "response": sample["summary_text"],
+            }
+
+    elif ds_name == "gov_report":
+
+        def f(sample):
+            return {
+                "context": sample["report"],
+                "prompt": "Summarize the provided text.",
+                "response": sample["summary"],
+            }
+
+    elif "wikitext" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["page"],
+                "prompt": "PLAECHOLDER",
+                "response": "PLAECHOLDER",
+            }
+
+    elif ds_name == "openmathintx-2":
+
+        def f(sample):
+            return {
+                "context": sample["problem"],
+                "prompt": sample["problem"],
+                "response": sample["generated_solution"],
+            }
+
+    elif "gsm8k" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["question"],
+                "prompt": sample["question"],
+                "response": sample["answer"],
+            }
+
+    elif "opencoder-edu" in ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["instruction"],
+                "prompt": sample["instruction"],
+                "response": "```python\n" + sample["code"].strip() + "\n```",
+            }
+
+    elif ds_name.startswith("longbench"):
+
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["input"],
+                "response": sample["answers"][0],
+            }
+
+    elif "natural_questions" in ds_name:
+        pass
+        # ctx = " ".join(
+        #     [
+        #         token
+        #         for is_html, token in zip(
+        #             ds[0]["document"]["tokens"]["is_html"],
+        #             ds[0]["document"]["tokens"]["token"],
+        #         )
+        #         if not is_html
+        #     ]
+        # )
+    elif ds_name == "triviaqa_retrieved":
+
+        # maybe needed for training (negative sample for training)
+        # def f(sample):
+        #     ctx = sample["entity_page"]["wiki_context"]
+        #     if not ctx:
+        #         return None
+
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["prompt"],
+                "response": sample["answer"],
+            }
+
+    if is_eval and ds_name in EVAL_INTX_TEMPLATES:
+
+        prompt_template = EVAL_INTX_TEMPLATES[ds_name]
+
+        def eval_intx_decorator(f):
+            def g(sample):
+                sample = f(sample)
+                sample["prompt"] = prompt_template.format(input=sample["prompt"])
+                return sample
+
+            return g
+
+    return eval_intx_decorator(f) if is_eval else f
 
 
 def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
@@ -425,7 +395,7 @@ def _load_and_process_dataset(
             and ds_kwargs["path"] == "parquet"
         )
         ds = load_dataset(
-            **get_ds_kwargs(ds_name, split),
+            **ds_kwargs,
             trust_remote_code=True,
             streaming=load_as_stream,
         )
@@ -437,24 +407,27 @@ def _load_and_process_dataset(
         if take is not None:
             ds = ds.take(take)
     except ValueError as e:
-        logger.info(
+        logger.warning(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}\nSkipping..."
         )
         return None
     cols_to_remove = [
         col for col in ds.column_names if col not in ["context", "prompt", "response"]
     ]
-
+    is_eval = split != "train"
     ds = ds.map(
-        get_preprocessing_fn(ds_name),
+        get_preprocessing_fn(ds_name, is_eval),
         remove_columns=cols_to_remove,
         num_proc=num_proc,
     )
     # ds = ds.remove_columns(cols_to_remove)
     ds = ds.filter(filter_none, batched=True, num_proc=num_proc)
-    ds = ds.filter(filter_long_samples, batched=True, num_proc=num_proc)
+
     if split == "train":
+        # TODO: drop samples or split into multiple contexts
+        ds = ds.filter(filter_long_samples, batched=True, num_proc=num_proc)
         if add_negative_prompt:
+            # TODO: make explicit dataset for this
             ds = ds.map(
                 add_negative_prompt_fn,
                 batched=True,
@@ -462,21 +435,24 @@ def _load_and_process_dataset(
                 num_proc=num_proc,
             )
         if add_repeat_prompt and "context_numbers" not in ds_name:
+            # TODO: convert to AE/LM
             ds = ds.map(
                 add_repeat_prompt_fn,
                 batched=True,
                 batch_size=100_000,
                 num_proc=num_proc,
             )
-    ds.save_to_disk(ds_path, num_proc=num_proc)
+        ds.save_to_disk(ds_path, num_proc=num_proc)
     return ds
 
 
 def get_tokenized_dataset(
     ds_name: str,
     split: str,
+    base_model_max_len: int,
     tokenizer: PreTrainedTokenizerBase,
     tokenizer_kwargs: dict[str, Any],
+    ctx_model_max_len: int,
     ctx_tokenizer: PreTrainedTokenizerBase,
     ctx_tokenizer_kwargs: dict[str, Any],
     add_ctx_to_chat: bool,
@@ -486,6 +462,8 @@ def get_tokenized_dataset(
     set_format: Optional[str] = None,
     streaming: bool = False,
 ) -> dict[str, Any]:
+    # TODO: update hash function to include max_len
+    # TODO: max_len could be included in the kwargs
     assert not use_kl_loss, "KL loss is deprecated"
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat
@@ -502,27 +480,32 @@ def get_tokenized_dataset(
     ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
     ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
 
-    if path.exists(ds_path):
+    if path.exists(ds_path) and split == "train":
         # load the cached ds
         logger.info(f"Loaded processed dataset from {ds_path}")
     else:
         logger.info(f"Loading dataset {ds_name} with split {split}...")
-        _load_and_process_dataset(
+        ds = _load_and_process_dataset(
             **load_and_process_kwargs,
             ds_path=ds_path,
             num_proc=num_proc,
         )
-    ds = datasets.load_from_disk(ds_path)
+    if split == "train":
+        # force loading the cached version for newly created ds
+        ds = datasets.load_from_disk(ds_path)
 
     tokenized_ds = construct_and_tokenize_ctx_qa(
+        base_model_max_len,
         tokenizer,
         tokenizer_kwargs,
+        ctx_model_max_len,
         ctx_tokenizer,
         ctx_tokenizer_kwargs,
         add_ctx_to_chat,
         use_kl_loss,
         need_ctx_ids,
         ds,
+        split,
         set_format,
         num_proc,
     )
@@ -530,17 +513,23 @@ def get_tokenized_dataset(
 
 
 def construct_and_tokenize_ctx_qa(
+    base_model_max_len,
     tokenizer,
     tokenizer_kwargs,
+    ctx_model_max_len,
     ctx_tokenizer,
     ctx_tokenizer_kwargs,
     add_ctx_to_chat,
     use_kl_loss,
     need_ctx_ids,
     ds,
+    split,
     set_format=None,
     num_proc=None,
 ):
+    is_eval = split != "train"
+    # TODO: update hash function to include max_len
+    # TODO: max_len could be included in the kwargs
     kwargs = dict(
         tokenizer=repr(tokenizer),
         tokenizer_kwargs=json.dumps(tokenizer_kwargs),
@@ -550,13 +539,14 @@ def construct_and_tokenize_ctx_qa(
         use_kl_loss=use_kl_loss,
         need_ctx_ids=need_ctx_ids,
         ds=ds._fingerprint,
+        # TODO: add split (after moving to continued pre-training pipeline)
         set_format=set_format,
     )
     kwargs_str = json.dumps(kwargs)
     logger.debug(f"Tokenizing dataset with kwargs: {kwargs_str}")
     ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
     ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
-    if path.exists(ds_path):
+    if path.exists(ds_path) and split == "train":
         # load the cached ds
         logger.info(f"Loaded tokenized dataset from {ds_path}")
         ds = datasets.load_from_disk(ds_path)
@@ -576,12 +566,14 @@ def construct_and_tokenize_ctx_qa(
         num_proc=num_proc,
     )
     # tokenize the chat + mask the assistant inputs
-    ds = ds.filter(
-        filter_long_chat,
-        batched=True,
-        batch_size=100_000,
-        num_proc=num_proc,
-    )
+    # TODO: drop samples or split into multiple contexts
+    if split == "train":
+        ds = ds.filter(
+            filter_long_chat,
+            batched=True,
+            batch_size=100_000,
+            num_proc=num_proc,
+        )
 
     # add "input_ids", "attention_mask", "labels"
     tokenized_ds = ds.map(
@@ -593,6 +585,21 @@ def construct_and_tokenize_ctx_qa(
         },
         num_proc=num_proc,
     )
+    if split == "train":
+        # drop?
+        # currently the above function would raise if the chat is too long
+        ...
+    else:
+        tokenized_ds = tokenized_ds.map(
+            truncate_middle_if_too_long,
+            fn_kwargs={
+                "max_length": base_model_max_len,
+                "columns": ["input_ids", "attention_mask"],
+            },
+            batched=True,
+            batch_size=100_000,
+            num_proc=num_proc,
+        )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
     if use_kl_loss:
@@ -625,7 +632,23 @@ def construct_and_tokenize_ctx_qa(
             batch_size=100_000,
             num_proc=num_proc,
         )
+        if split == "train":
+            # TODO: do something if ctx length is longer than the ctx model length
+            # e.g., drop or split for multi-lora training
+            ...
 
+        else:
+            # truncate in the middle
+            tokenized_ds = tokenized_ds.map(
+                truncate_middle_if_too_long,
+                fn_kwargs={
+                    "max_length": ctx_model_max_len,
+                    "columns": ["ctx_ids", "ctx_attn_mask"],
+                },
+                batched=True,
+                batch_size=100_000,
+                num_proc=num_proc,
+            )
     tokenized_ds = tokenized_ds.remove_columns(
         ["messages", "chat", "context", "prompt", "response"]
     )
@@ -635,9 +658,11 @@ def construct_and_tokenize_ctx_qa(
     #     # the columns are unknown when using streaming dataset
     #     tokenized_ds = tokenized_ds._resolve_features()
     # validate_columns(tokenized_ds)
-    tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
-    del tokenized_ds
-    return datasets.load_from_disk(ds_path)
+    if split == "train":
+        tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
+        del tokenized_ds
+        return datasets.load_from_disk(ds_path)
+    return tokenized_ds
 
 
 def get_sft_prompt_formatting_fn(
@@ -732,127 +757,6 @@ def convert_ctx_prompt_response_to_messages(
     ]
 
     return dict(messages=messages)
-
-
-def get_preprocessing_fn(ds_name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """
-    Get preprocessing function for a specific dataset.
-
-    Args:
-        ds_name: Name of the dataset
-
-    Returns:
-        A preprocessing function that takes and returns a dictionary
-    """
-    f = lambda x: x
-
-    if ds_name.startswith("pwc"):
-
-        def f(sample):
-            return {
-                "context": sample["input"],
-                "prompt": sample["prompt"],
-                "response": sample["answer"],
-            }
-
-    elif ds_name.startswith("hotpot_qa"):
-
-        def f(sample):
-            txt = ""
-            for p in sample["context"]["sentences"]:
-                txt += " " + "".join(p)
-
-            return {
-                "context": txt.strip(),
-                "prompt": sample["question"],
-                "response": sample["answer"],
-            }
-
-    elif "squad" in ds_name:
-
-        def f(sample):
-            return {
-                "context": sample["context"],
-                "prompt": sample["question"],
-                "response": sample["answers"]["text"][0],
-            }
-
-    elif ds_name == "drop":
-
-        def f(sample):
-            return {
-                "context": sample["passage"],
-                "prompt": sample["question"],
-                "response": ", ".join(sample["answers_spans"]["spans"]),
-            }
-
-    elif ds_name in ["narrativeqa", "quoref", "ropes", "synthetic_convqa"]:
-
-        def f(sample):
-            response = sample["answers"][0]
-            if isinstance(response, list):
-                response = response[0]
-            return {
-                "context": sample["document"],
-                "prompt": sample["messages"][0]["content"],
-                "response": response,
-            }
-
-    elif ds_name == "booksum":
-
-        def f(sample):
-            return {
-                "context": sample["chapter"],
-                "prompt": "Summarize the provided text.",
-                "response": sample["summary_text"],
-            }
-
-    elif ds_name == "gov_report":
-
-        def f(sample):
-            return {
-                "context": sample["report"],
-                "prompt": "Summarize the provided text.",
-                "response": sample["summary"],
-            }
-
-    elif "wikitext" in ds_name:
-
-        def f(sample):
-            return {
-                "context": sample["page"],
-                "prompt": "PLAECHOLDER",
-                "response": "PLAECHOLDER",
-            }
-
-    elif ds_name == "openmathintx-2":
-
-        def f(sample):
-            return {
-                "context": sample["problem"],
-                "prompt": sample["problem"],
-                "response": sample["generated_solution"],
-            }
-
-    elif "gsm8k" in ds_name:
-
-        def f(sample):
-            return {
-                "context": sample["question"],
-                "prompt": sample["question"],
-                "response": sample["answer"],
-            }
-
-    elif "opencoder-edu" in ds_name:
-
-        def f(sample):
-            return {
-                "context": sample["instruction"],
-                "prompt": sample["instruction"],
-                "response": "```python\n" + sample["code"].strip() + "\n```",
-            }
-
-    return f
 
 
 # adapted from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
@@ -983,6 +887,31 @@ def tokenize_chat_messages(
         conversation_ids["chat_attn_mask"] = conversation_ids.pop("attention_mask")
         conversation_ids["chat_labels"] = conversation_ids.pop("labels")
     return conversation_ids
+
+
+def truncate_middle_if_too_long(
+    samples: dict[str, any],
+    max_length: int,
+    columns: list[str],
+) -> dict[str, any]:
+    """
+    Truncate the middle of a list of tokens to fit within a maximum length.
+
+    Args:
+        tokens: List of token IDs
+        max_length: Maximum length for the truncated tokens
+
+    Returns:
+        List of truncated token IDs
+    """
+    half = max_length // 2
+    for col in columns:
+        # if len(samples[col]) <= max_length:
+        #     return samples[col]
+        samples[col] = [
+            t[:half] + t[-half:] if len(t) > max_length else t for t in samples[col]
+        ]
+    return samples
 
 
 def tokenize_ctx_text(

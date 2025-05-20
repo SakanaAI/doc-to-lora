@@ -114,7 +114,7 @@ def train_model(
         logger.info(f"Resuming from the checkpoint: {checkpoint}")
 
     is_modulated_model = isinstance(model, ModulatedPretrainedModel)
-    trainer_cls = Trainer  # if not is_modulated_model else ModulatedModelTrainer
+    trainer_cls = Trainer if not is_modulated_model else ModulatedModelTrainer
     trainer_kwargs = dict(
         model=model,
         args=training_args,
@@ -123,10 +123,10 @@ def train_model(
         data_collator=train_collator,
         compute_metrics=compute_metrics,
     )
-    # if is_modulated_model:
-    #     logger.info(f"Training with modulated model. Using CustomTrainer.")
-    #     trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
-    #     del training_args.gen_lora_l1_reg_coef
+    if is_modulated_model:
+        logger.info(f"Training with modulated model. Using CustomTrainer.")
+        trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
+        del training_args.gen_lora_l1_reg_coef
 
     trainer = trainer_cls(**trainer_kwargs)
 

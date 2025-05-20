@@ -21,9 +21,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 modulated_model = None
 
 
+# TODO: grab the results on-deman
+# TODO: cache the grabed results
+
+
 def get_run_data(run_path):
     """
     Loads and processes data from all_results.json and *_results.json for a given run.
+    Also recursively searches for results files in subfolders.
 
     Args:
         run_path: Path to the directory containing the results files.
@@ -38,7 +43,7 @@ def get_run_data(run_path):
     except FileNotFoundError:
         data = {}
 
-    # Load data from *_results.json files
+    # Load data from *_results.json files in the current directory
     for results_json_file in glob(os.path.join(run_path, "*_results.json")):
         try:
             with open(results_json_file) as f:
@@ -54,6 +59,24 @@ def get_run_data(run_path):
                     data[new_key] = value
         except FileNotFoundError:
             print(f"Warning: {results_json_file} not found.")
+
+    # Recursively search for *_results.json files in subdirectories
+    for subdir in [d for d in glob(os.path.join(run_path, "*")) if os.path.isdir(d)]:
+        subdir_name = os.path.basename(subdir)
+        # Look for *_results.json files in the subdirectory
+        for results_json_file in glob(os.path.join(subdir, "*_results.json")):
+            try:
+                with open(results_json_file) as f:
+                    split_data = json.load(f)
+                    # Use a prefix that includes the subfolder name
+                    file_prefix = f"{subdir_name}_{os.path.basename(results_json_file).replace('_results.json', '')}"
+                    for key, value in split_data.items():
+                        if isinstance(value, float):
+                            value = round(value, 4)
+                        new_key = f"{file_prefix}_{key}"
+                        data[new_key] = value
+            except FileNotFoundError:
+                print(f"Warning: {results_json_file} not found.")
 
     grouped_data = {}
     for key, value in data.items():
@@ -96,6 +119,7 @@ def get_run_data(run_path):
 def get_generated_text_data(run_path):
     """
     Loads generated text data from all *_generated_text.jsonl files.
+    Also recursively searches for generated text files in subfolders.
 
     Args:
         run_path: Path to the directory containing the .jsonl files.
@@ -106,7 +130,7 @@ def get_generated_text_data(run_path):
     generated_data = {}
     files = sorted(glob(f"{run_path}/*_generated_text.jsonl"))
     print(files)
-    # Find all *_generated_text.jsonl files
+    # Find all *_generated_text.jsonl files in the current directory
     for filename in files:
         # Extract split name from filename (remove _generated_text.jsonl)
         split = filename.split("/")[-1].split("_generated_text.jsonl")[0]
@@ -117,6 +141,23 @@ def get_generated_text_data(run_path):
             generated_data[split] = data
         except FileNotFoundError:
             generated_data[split] = None
+
+    # Recursively search for *_generated_text.jsonl files in subdirectories
+    for subdir in [d for d in glob(os.path.join(run_path, "*")) if os.path.isdir(d)]:
+        subdir_name = os.path.basename(subdir)
+        subdir_files = sorted(glob(f"{subdir}/*_generated_text.jsonl"))
+        for filename in subdir_files:
+            # Extract split name from filename and include subfolder name
+            base_split = filename.split("/")[-1].split("_generated_text.jsonl")[0]
+            split = f"{subdir_name}_{base_split}"
+            try:
+                with open(filename) as f:
+                    lines = f.readlines()
+                    data = [json.loads(line) for line in lines]
+                generated_data[split] = data
+            except FileNotFoundError:
+                generated_data[split] = None
+
     return generated_data
 
 

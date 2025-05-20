@@ -1,18 +1,18 @@
+import re
+import string
 import yaml
-import sys
 import gc
 import json
 import os
-import random
-import shutil
+import logging
 from argparse import Namespace
 from dataclasses import fields
 from functools import partial
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Callable
 
-import numpy as np
 import torch
+import numpy as np
 from datasets import disable_caching
 from peft import PeftModel
 from rouge_score import rouge_scorer
@@ -28,9 +28,78 @@ from transformers import (
 from transformers.utils import is_liger_kernel_available
 
 
+from ctx_to_lora.data_definitions import LONGBENCH_E_TASKS, LONGBENCH_TASKS
 from ctx_to_lora.data_utils import get_tokenized_dataset
 from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
 from ctx_to_lora.model_loading import get_tokenizer, get_model
+
+logger = logging.getLogger()
+
+
+# TODO: add negative samples eval (per-sample?)
+# TODO: add length info for more fine grain eval
+
+
+# longbench metrics
+def normalize_answer(s):
+    """Lower text and remove punctuation, articles and extra whitespace."""
+
+    def remove_articles(text):
+        return re.sub(r"\b(a|an|the)\b", " ", text)
+
+    def white_space_fix(text):
+        return " ".join(text.split())
+
+    def remove_punc(text):
+        exclude = set(string.punctuation)
+        return "".join(ch for ch in text if ch not in exclude)
+
+    def lower(text):
+        return text.lower()
+
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
+
+
+def f1_score(prediction: str, ground_truth: str):
+    common = Counter(prediction) & Counter(ground_truth)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0
+    precision = 1.0 * num_same / len(prediction)
+    recall = 1.0 * num_same / len(ground_truth)
+    f1 = (2 * precision * recall) / (precision + recall)
+    return f1
+
+
+def compute_qa_f1_score(pred_texts: list[str], label_texts: list[str]):
+    """
+    Word-level F1 score for evaluating question answering systems.
+    Order of the words does not matter.
+    """
+    res = []
+    for prediction, label in zip(pred_texts, label_texts):
+        normalized_prediction = normalize_answer(prediction)
+        normalized_label = normalize_answer(label)
+
+        prediction_words = normalized_prediction.split()
+        label_words = normalized_label.split()
+        res.append(f1_score(prediction_words, label_words))
+    return dict(qa_f1=np.mean(res))
+
+
+CLOSED_QA_DATASETS = {
+    "longbench/narrativeqa",
+    "longbench/qasper",
+    "longbench/multifieldqa_en",
+    "longbench/hotpotqa",
+    "longbench/2wikimqa",
+    "longbench/musique",
+    "squad",
+    "triviaqa_retrieved",
+}
+
+for ds_name in list(CLOSED_QA_DATASETS):
+    CLOSED_QA_DATASETS.add(f"{ds_name}_e")
 
 
 def clear_gpu():
@@ -38,6 +107,15 @@ def clear_gpu():
     torch.cuda.empty_cache()
     torch.cuda.reset_max_memory_allocated()
     torch.cuda.reset_max_memory_cached()
+
+
+def add_longbench_tasks(ds_names: list[str]):
+    if "longbench" in ds_names:
+        ds_names.remove("longbench")
+        ds_names += LONGBENCH_TASKS
+    if "longbench_e" in ds_names:
+        ds_names.remove("longbench_e")
+        ds_names += LONGBENCH_E_TASKS
 
 
 def compute_rouge(pred_texts, label_texts):
@@ -142,6 +220,11 @@ def compute_metrics(
 
 def save_generated_text(samples, output_dir, split):
     os.makedirs(output_dir, exist_ok=True)
+    # Create any necessary subdirectories if split contains path separators
+    if "/" in split:
+        split_dir = os.path.join(output_dir, os.path.dirname(split))
+        os.makedirs(split_dir, exist_ok=True)
+
     with open(f"{output_dir}/{split}_generated_text.jsonl", "w") as f:
         for sample in samples:
             f.write(json.dumps(sample) + "\n")
@@ -160,7 +243,7 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
             # replace them with the pad token id
             label_toks = np.where(label_toks == -100, tokenizer.pad_token_id, label_toks)
             label_text = tokenizer.decode(label_toks, skip_special_tokens=True)
-            d["label"] = label_text
+            d["label"] = label_text.strip()
 
         # remove the label part
         input_toks = sample["input_ids"][:start_idx]
@@ -170,7 +253,7 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
         gen_toks = np.where(gen_toks == -100, tokenizer.pad_token_id, gen_toks)
 
         d["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
-        d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True)
+        d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True).strip()
         if "ctx_ids" in sample:
             d["context"] = ctx_tokenizer.decode(
                 sample["ctx_ids"], skip_special_tokens=True
@@ -186,6 +269,7 @@ def eval_generation(eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen
         datasets = {"": datasets}
     out = {}
     for ds_name, ds in datasets.items():
+        print(f"Evaluating: {ds_name}")
         split_name = f"{split}_{ds_name}" if ds_name else split
         eval_result = eval_trainer.predict(
             ds,
@@ -193,12 +277,21 @@ def eval_generation(eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen
             **gen_kwargs,
         )
         decoded_txts = decode_test_result(ds, eval_result, tokenizer, ctx_tokenizer)
-        rouge_metrics = compute_rouge(
-            [txt["generated"] for txt in decoded_txts],
-            [txt["label"] for txt in decoded_txts],
-        )
+        pred_texts = [txt["generated"] for txt in decoded_txts]
+        label_texts = [txt["label"] for txt in decoded_txts]
+        rouge_metrics = compute_rouge(pred_texts, label_texts)
         for k, v in rouge_metrics.items():
             eval_result.metrics[f"{split_name}_{k}"] = v
+
+        if ds_name in CLOSED_QA_DATASETS:
+            print("Computing QA F1 Score")
+            qa_f1_metric = compute_qa_f1_score(
+                [txt["generated"] for txt in decoded_txts],
+                [txt["label"] for txt in decoded_txts],
+            )
+            for k, v in qa_f1_metric.items():
+                eval_result.metrics[f"{split_name}_{k}"] = v
+
         save_generated_text(
             decoded_txts,
             split=split_name,
@@ -346,8 +439,8 @@ def evaluate(
             train=False,
             use_flash_attn=True,
         )
-        if generative:
-            model = model.to(torch.bfloat16)
+        # if generative:
+        #     model = model.to(torch.bfloat16)
     else:
         model = get_model(model_name_or_path, train=False, requires_grad=False)
     # NOTE: there is still some randomness in the eval result
@@ -392,8 +485,10 @@ def evaluate(
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
+        base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,
+        ctx_model_max_len=model.ctx_encoder.config.max_position_embeddings,
         ctx_tokenizer=ctx_tokenizer,
         ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
@@ -405,6 +500,7 @@ def evaluate(
 
     datasets = dict()
     ds_names = args.val_ds_names if split == "validation" else args.test_ds_names
+    add_longbench_tasks(ds_names)
     for ds_name in ds_names:
         datasets[ds_name] = _get_tokenized_dataset(ds_name, split)
     print(datasets)
@@ -526,6 +622,7 @@ if __name__ == "__main__":
     )
 
     cli_args = parser.parse_args()
+    # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
 
     assert bool(cli_args.model_name_or_path) ^ bool(
         cli_args.checkpoint_path

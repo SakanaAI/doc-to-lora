@@ -23,3 +23,5 @@ plots/
 watcher_state.yaml
 ds_config.json
 eval_results/
+.github/
+*.code-workspace

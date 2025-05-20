@@ -308,7 +308,7 @@ def main():
         model, tokenizer = get_model_and_tokenizer(
             **vars(model_args),
             train=True,
-            requires_grad=ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
+            requires_grad=False,  # ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
             peft_config=get_lora_config(model_name, **vars(lora_args)),
         )
         ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
@@ -324,7 +324,7 @@ def main():
             ctx_encoder_model_config = model.config
             ctx_tokenizer = tokenizer
 
-    if ctx_args.exp_setup == ExperimentSetup.HYPER_LORA:
+    if ctx_args.exp_setup == ExperimentSetup.HYPERLORA:
         # TODO: handle only extra_modules case (no target_modules)
         logger.info("Using HyperLoRA")
         if not ctx_args.from_pretrained_checkpoint:
@@ -384,15 +384,17 @@ def main():
     logger.info("Loading dataset...")
 
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
-    tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
-    ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
+    # tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
+    # ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
+        base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
-        tokenizer_kwargs=tokenizer_kwargs,
+        tokenizer_kwargs={},
+        ctx_model_max_len=model.ctx_encoder.config.max_position_embeddings,
         ctx_tokenizer=ctx_tokenizer,
-        ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
+        ctx_tokenizer_kwargs={},
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
         add_negative_prompt=ctx_args.add_negative_prompt,
@@ -415,6 +417,7 @@ def main():
 
     train_ds = tokenized_ds["train"]
     logging.info(f"train_ds: {train_ds}")
+
     val_ds = dict()
     if "validation" in tokenized_ds:
         n_val_samples = data_args.max_val_samples_per_ds

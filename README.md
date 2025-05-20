@@ -51,7 +51,7 @@ run python intx_sft.py configs/...yaml ... --from_pretrained_checkpoint=train_ou
 LongBench
 ```bash
 # generative
- run python src/ctx_to_lora/eval.py --checkpoint_path train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/checkpoint-105000/pytorch_model.bin
+run python src/ctx_to_lora/eval.py --checkpoint_path train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/checkpoint-105000/pytorch_model.bin
 
 # benchmark
 cd LongBench/LongBench
