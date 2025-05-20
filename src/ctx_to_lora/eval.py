@@ -27,7 +27,6 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available
 
-
 from ctx_to_lora.data_definitions import LONGBENCH_E_TASKS, LONGBENCH_TASKS
 from ctx_to_lora.data_utils import get_tokenized_dataset
 from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
@@ -479,16 +478,21 @@ def evaluate(
         if ctx_tokenizer.pad_token_id is None:
             ctx_tokenizer.pad_token_id = ctx_tokenizer.eos_token_id
 
-    tokenizer_kwargs = {"max_length": args.max_base_len}
-    ctx_tokenizer_kwargs = {"max_length": args.max_ctx_len}
+    tokenizer_kwargs = {}
+    ctx_tokenizer_kwargs = {}
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
+    ctx_model_max_len = (
+        model.ctx_encoder.config.max_position_embeddings
+        if isinstance(model, ModulatedPretrainedModel)
+        else None
+    )
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,
-        ctx_model_max_len=model.ctx_encoder.config.max_position_embeddings,
+        ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=ctx_tokenizer,
         ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
@@ -550,7 +554,6 @@ def evaluate(
     }
     out = {}
     if not generative:
-
         trainer_kwargs["compute_metrics"] = partial(
             compute_metrics,
             evaluator=Evaluator(
@@ -624,9 +627,9 @@ if __name__ == "__main__":
     cli_args = parser.parse_args()
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
 
-    assert bool(cli_args.model_name_or_path) ^ bool(
-        cli_args.checkpoint_path
-    ), "Either --model_name_or_path or --checkpoint_path must be provided"
+    assert bool(cli_args.model_name_or_path) ^ bool(cli_args.checkpoint_path), (
+        "Either --model_name_or_path or --checkpoint_path must be provided"
+    )
 
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
@@ -658,8 +661,8 @@ if __name__ == "__main__":
             output_dir=f"eval_results/{cli_args.model_name_or_path}",
             logging_dir=f"eval_results/{cli_args.model_name_or_path}",
             run_name=f"eval_results/{cli_args.model_name_or_path}",
-            max_base_len=2**13,
-            max_ctx_len=-1,  # not used
+            # max_base_len=2**13,
+            # max_ctx_len=-1,  # not used
             val_ds_names=[],
             test_ds_names=[],
         )
