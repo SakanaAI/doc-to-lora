@@ -32,6 +32,7 @@ def closed_qa_prompting(prompt: str):
     return template.format(input=prompt)
 
 
+# TODO: dont use closed_qa_prompting when training on self-generated responses
 def get_preprocessing_fn(
     ds_name: str, is_eval: bool
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -204,7 +205,6 @@ def get_preprocessing_fn(
         #     ]
         # )
     elif ds_name == "triviaqa_retrieved":
-
         # maybe needed for training (negative sample for training)
         # def f(sample):
         #     ctx = sample["entity_page"]["wiki_context"]
@@ -219,7 +219,6 @@ def get_preprocessing_fn(
             }
 
     if is_eval and ds_name in EVAL_INTX_TEMPLATES:
-
         prompt_template = EVAL_INTX_TEMPLATES[ds_name]
 
         def eval_intx_decorator(f):
@@ -267,9 +266,9 @@ def validate_columns(tokenized_ds):
     if "chat_ids" in tokenized_ds.column_names:
         cols += ["chat_ids", "chat_attn_mask", "chat_labels"]
     ref_cols = set(cols)
-    assert (
-        set(tokenized_ds.column_names) == ref_cols
-    ), f"Columns mismatch: {set(tokenized_ds.column_names)} != {ref_cols}"
+    assert set(tokenized_ds.column_names) == ref_cols, (
+        f"Columns mismatch: {set(tokenized_ds.column_names)} != {ref_cols}"
+    )
 
 
 def filter_long_samples(samples):
@@ -297,7 +296,7 @@ def add_repeat_prompt_fn(samples):
         responses.append(ctx)
         prompts.append("Repeat the text above.")
 
-    logger.debug(f"Adding repeat prompt...")
+    logger.debug("Adding repeat prompt...")
     logger.debug(f"# unique contexts: {len(unique_contexts)}")
 
     return dict(
@@ -466,7 +465,7 @@ def get_tokenized_dataset(
     # TODO: max_len could be included in the kwargs
     assert not use_kl_loss, "KL loss is deprecated"
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
-    need_ctx_ids = not add_ctx_to_chat
+    need_ctx_ids = not add_ctx_to_chat and ctx_model_max_len
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,

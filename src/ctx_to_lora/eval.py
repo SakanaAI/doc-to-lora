@@ -263,13 +263,17 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
 
 
 @torch.inference_mode()
-def eval_generation(eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen_kwargs):
+def eval_generation(
+    eval_trainer, tokenizer, ctx_tokenizer, datasets, split, remove_context, gen_kwargs
+):
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
     out = {}
     for ds_name, ds in datasets.items():
         print(f"Evaluating: {ds_name}")
         split_name = f"{split}_{ds_name}" if ds_name else split
+        if remove_context:
+            split_name += "_no_context"
         eval_result = eval_trainer.predict(
             ds,
             metric_key_prefix=split_name,
@@ -304,12 +308,14 @@ def eval_generation(eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen
 
 
 @torch.no_grad()
-def eval_teacher_forcing(eval_trainer, datasets, split):
+def eval_teacher_forcing(eval_trainer, datasets, split, remove_context):
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
     out = {}
     for ds_name, ds in datasets.items():
         split_name = f"{split}_{ds_name}" if ds_name else split
+        if remove_context:
+            split_name += "_no_context"
         metrics = eval_trainer.evaluate(ds, metric_key_prefix=split_name)
         out[split_name] = metrics
         eval_trainer.log_metrics(split_name, metrics)
@@ -426,7 +432,12 @@ def generation_collator(inp_list, tokenizer):
 
 
 def evaluate(
-    checkpoint_path, model_name_or_path, eval_batch_size, args, split, generative
+    checkpoint_path,
+    model_name_or_path,
+    eval_batch_size,
+    args,
+    split,
+    generative,
 ):
     assert split in ["validation", "test"]
     ctx_name = None
@@ -480,7 +491,9 @@ def evaluate(
 
     tokenizer_kwargs = {}
     ctx_tokenizer_kwargs = {}
-    add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
+    add_ctx_to_chat = (
+        not isinstance(model, ModulatedPretrainedModel) and not args.remove_context
+    )
     ctx_model_max_len = (
         model.ctx_encoder.config.max_position_embeddings
         if isinstance(model, ModulatedPretrainedModel)
@@ -566,12 +579,20 @@ def evaluate(
         # spents a few hours on this but couldn't find the reason
         for ds_name, ds in datasets.items():
             eval_trainer = Trainer(**trainer_kwargs)
-            metrics = eval_teacher_forcing(eval_trainer, {ds_name: ds}, split)
+            metrics = eval_teacher_forcing(
+                eval_trainer, {ds_name: ds}, split, args.remove_context
+            )
             out.update(metrics)
     else:
         eval_trainer = Seq2SeqTrainer(**trainer_kwargs)
         metrics = eval_generation(
-            eval_trainer, tokenizer, ctx_tokenizer, datasets, split, gen_kwargs
+            eval_trainer,
+            tokenizer,
+            ctx_tokenizer,
+            datasets,
+            split,
+            args.remove_context,
+            gen_kwargs,
         )
         out.update(metrics)
 
@@ -623,6 +644,11 @@ if __name__ == "__main__":
         default=32,
         help="Eval batch size for generation",
     )
+    parser.add_argument(
+        "--remove_context",
+        action="store_true",
+        help="Remove context when evaluating the base model.",
+    )
 
     cli_args = parser.parse_args()
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
@@ -655,6 +681,7 @@ if __name__ == "__main__":
         args.output_dir = f"{run_dir}/eval-results-{cur_it}"
         args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
         args.run_name = run_dir.split("/")[-1]
+        args.remove_context = True
     else:
         args = Namespace(
             model_name_or_path=cli_args.model_name_or_path,
@@ -665,6 +692,7 @@ if __name__ == "__main__":
             # max_ctx_len=-1,  # not used
             val_ds_names=[],
             test_ds_names=[],
+            remove_context=cli_args.remove_context,
         )
 
     # Override dataset names if provided via CLI

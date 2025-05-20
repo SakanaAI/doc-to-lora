@@ -341,21 +341,22 @@ CLOSED_QA_INTX_TEMPLATES = [
 
 
 EVAL_INTX_TEMPLATES = {
-    "triviaqa_retrieved": "Only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "hotpot_qa": "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "squad": "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "longbench/qasper": 'You are given a scientific article and a question. Answer the question as concisely as you can, using a single phrase or sentence if possible.\nIf the question cannot be answered based on the information in the article, write "unanswerable".\nIf the question is a yes/no question, answer "yes", "no", or "unanswerable". Do not provide any explanation.\n\nQuestion: {input}',
+    "triviaqa_retrieved": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "hotpot_qa": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "squad": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "longbench/qasper": 'Answer the question as concisely as you can, using a single phrase or sentence if possible.\nIf the question cannot be answered based on the information in the article, write "unanswerable".\nIf the question is a yes/no question, answer "yes", "no", or "unanswerable". Do not provide any explanation.\n\nQuestion: {input}',
     "longbench/narrativeqa": "Answer the question as concisely as you can, using a single phrase if possible. Do not provide any explanation.\n\nQuestion: {input}",
-    "longbench/multifieldqa_en": "Answer the following question based on the above text, only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "longbench/multifieldqa_zh": "阅读以下文字并用中文简短回答：\n\n现在请基于上面的文章回答下面的问题，只告诉我答案，不要输出任何其他字词。\n\n问题：{input}",
-    "longbench/hotpotqa": "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "longbench/2wikimqa": "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "longbench/musique": "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}",
-    "longbench/dureader": "请基于给定的文章回答下述问题\n\n请基于上述文章回答下面的问题。\n\n问题：{input}",
+    "longbench/multifieldqa_en": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",
+    # "longbench/multifieldqa_zh": "阅读以下文字并用中文简短回答：\n\n现在请基于上面的文章回答下面的问题，只告诉我答案，不要输出任何其他字词。\n\n问题：{input}",
+    "longbench/hotpotqa": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",
+    "longbench/2wikimqa": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",
+    "longbench/musique": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",
+    #
+    # "longbench/dureader": "请基于给定的文章回答下述问题\n\n请基于上述文章回答下面的问题。\n\n问题：{input}",
     "longbench/gov_report": "You are given a report by a government agency. Write a one-page summary of the report.",
     "longbench/qmsum": "You are given a meeting transcript and a query containing a question or instruction. Answer the query based on the above meeting transcript.\n\nQuery: {input}",
     "longbench/multi_news": "You are given several news passages. Write a one-page summary of all the news.",
-    "longbench/vcsum": "下面有一段会议记录，请你阅读后，写一段总结，总结会议的内容。",
+    # "longbench/vcsum": "下面有一段会议记录，请你阅读后，写一段总结，总结会议的内容。",
 }
 for ds_name in LONGBENCH_E_TASKS:
     EVAL_INTX_TEMPLATES[ds_name] = EVAL_INTX_TEMPLATES[ds_name[:-2]]
