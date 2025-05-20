@@ -124,7 +124,7 @@ def train_model(
         compute_metrics=compute_metrics,
     )
     if is_modulated_model:
-        logger.info(f"Training with modulated model. Using CustomTrainer.")
+        logger.info("Training with modulated model. Using CustomTrainer.")
         trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
         del training_args.gen_lora_l1_reg_coef
 

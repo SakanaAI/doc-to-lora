@@ -192,25 +192,19 @@ def get_preprocessing_fn(
                 "response": sample["answers"][0],
             }
 
-    elif "natural_questions" in ds_name:
-        pass
-        # ctx = " ".join(
-        #     [
-        #         token
-        #         for is_html, token in zip(
-        #             ds[0]["document"]["tokens"]["is_html"],
-        #             ds[0]["document"]["tokens"]["token"],
-        #         )
-        #         if not is_html
-        #     ]
-        # )
-    elif ds_name == "triviaqa_retrieved":
-        # maybe needed for training (negative sample for training)
-        # def f(sample):
-        #     ctx = sample["entity_page"]["wiki_context"]
-        #     if not ctx:
-        #         return None
+    elif ds_name == "negative_nq":
 
+        def f(sample):
+            q = sample["prompt"]
+            prompt = closed_qa_prompting(q) if not is_eval else q
+            return {
+                "context": sample["context"],
+                "prompt": prompt,
+                "response": sample["answer"],
+            }
+
+    elif ds_name == "triviaqa_retrieved":
+        # only used for eval
         def f(sample):
             return {
                 "context": sample["context"],

@@ -299,8 +299,14 @@ DS_KWARGS = {
             split="train",
         ),
     ),
-    # TODO: for negative training and evaluating
-    "natural_questions": ...,
+    # for negative training and evaluating
+    "negative_nq": dict(
+        test=dict(
+            path="json",
+            data_files="data/raw_datasets/negative_natural_questions/validation.jsonl",
+            split="train",
+        ),
+    ),
 }
 
 # LongBench kwargs
@@ -341,6 +347,7 @@ CLOSED_QA_INTX_TEMPLATES = [
 
 
 EVAL_INTX_TEMPLATES = {
+    "negative_nq": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     "triviaqa_retrieved": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     "hotpot_qa": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     "squad": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",

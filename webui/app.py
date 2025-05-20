@@ -116,49 +116,132 @@ def get_run_data(run_path):
     return grouped_data
 
 
-def get_generated_text_data(run_path):
+def get_generated_text_data(run_path: str) -> dict:
     """
-    Loads generated text data from all *_generated_text.jsonl files.
+    Loads generated text data from all *_generated_text.jsonl files from the current run's output.
+    It specifically excludes any files ending with _no_context_generated_text.jsonl,
+    as those are handled by get_base_model_generated_text.
     Also recursively searches for generated text files in subfolders.
 
     Args:
-        run_path: Path to the directory containing the .jsonl files.
+        run_path: Path to the directory containing the .jsonl files for the current run.
 
     Returns:
-        A dictionary containing the generated text data for each split found.
+        A dictionary containing the generated text data for each primary split found.
     """
     generated_data = {}
-    files = sorted(glob(f"{run_path}/*_generated_text.jsonl"))
-    print(files)
-    # Find all *_generated_text.jsonl files in the current directory
+    # Find all *_generated_text.jsonl files in the current directory, excluding _no_context_ variants
+    files = sorted(
+        [
+            f
+            for f in glob(os.path.join(run_path, "*_generated_text.jsonl"))
+            if "_no_context_generated_text.jsonl" not in os.path.basename(f)
+        ]
+    )
+    print(f"Processing generated text files from {run_path}: {files}")
+
     for filename in files:
-        # Extract split name from filename (remove _generated_text.jsonl)
-        split = filename.split("/")[-1].split("_generated_text.jsonl")[0]
+        split = os.path.basename(filename).replace("_generated_text.jsonl", "")
         try:
             with open(filename) as f:
-                lines = f.readlines()
+                lines = f.readlines(100_000)
                 data = [json.loads(line) for line in lines]
             generated_data[split] = data
         except FileNotFoundError:
             generated_data[split] = None
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON from {filename}: {e}")
+            generated_data[split] = None
 
     # Recursively search for *_generated_text.jsonl files in subdirectories
-    for subdir in [d for d in glob(os.path.join(run_path, "*")) if os.path.isdir(d)]:
-        subdir_name = os.path.basename(subdir)
-        subdir_files = sorted(glob(f"{subdir}/*_generated_text.jsonl"))
+    for subdir_path in [
+        d for d in glob(os.path.join(run_path, "*")) if os.path.isdir(d)
+    ]:
+        subdir_name = os.path.basename(subdir_path)
+        subdir_files = sorted(
+            [
+                f
+                for f in glob(os.path.join(subdir_path, "*_generated_text.jsonl"))
+                if "_no_context_generated_text.jsonl" not in os.path.basename(f)
+            ]
+        )
+        print(
+            f"Processing generated text files from subdirectory {subdir_path}: {subdir_files}"
+        )
         for filename in subdir_files:
-            # Extract split name from filename and include subfolder name
-            base_split = filename.split("/")[-1].split("_generated_text.jsonl")[0]
+            base_split = os.path.basename(filename).replace("_generated_text.jsonl", "")
+            # Create a unique split key including the subdirectory name
             split = f"{subdir_name}_{base_split}"
             try:
                 with open(filename) as f:
-                    lines = f.readlines()
+                    lines = f.readlines(100_000)
                     data = [json.loads(line) for line in lines]
                 generated_data[split] = data
             except FileNotFoundError:
                 generated_data[split] = None
-
+            except json.JSONDecodeError as e:
+                print(f"Error decoding JSON from {filename}: {e}")
+                generated_data[split] = None
     return generated_data
+
+
+def get_base_model_generated_text(model_name, generated_data):
+    """
+    Loads generated text data from the base model for comparison.
+    Also loads "no context" base model data if available.
+
+    Args:
+        model_name: The name of the base model
+        generated_data: Dictionary of generated data from the fine-tuned model
+
+    Returns:
+        Tuple: (base_model_data, base_model_no_context_data)
+               Dictionaries containing base model generated texts for matching splits
+    """
+    if not model_name:
+        return {}, {}
+
+    base_model_data = {}
+    base_model_no_context_data = {}
+
+    # # Create normalized model name for directory lookup
+    # normalized_model_name = model_name.replace("/", "_")
+
+    for split in generated_data:
+        # Skip if no data for this split
+        if not generated_data[split]:
+            base_model_data[split] = None
+            base_model_no_context_data[split] = None
+            continue
+
+        # Construct path to the base model's output for this split
+        base_model_path = f"eval_results/{model_name}/{split}_generated_text.jsonl"
+        base_model_no_context_path = (
+            f"eval_results/{model_name}/{split}_no_context_generated_text.jsonl"
+        )
+
+        try:
+            with open(base_model_path) as f:
+                lines = f.readlines(100_000)
+                data = [json.loads(line) for line in lines]
+            base_model_data[split] = data
+        except FileNotFoundError:
+            print(f"Base model output not found for {split} at {base_model_path}")
+            # Store None to indicate we tried but didn't find matching data
+            base_model_data[split] = None
+
+        try:
+            with open(base_model_no_context_path) as f:
+                lines = f.readlines(100_000)
+                data = [json.loads(line) for line in lines]
+            base_model_no_context_data[split] = data
+        except FileNotFoundError:
+            print(
+                f"Base model (no context) output not found for {split} at {base_model_no_context_path}"
+            )
+            base_model_no_context_data[split] = None
+
+    return base_model_data, base_model_no_context_data
 
 
 def get_available_checkpoints(run):
@@ -292,6 +375,31 @@ def visualize(run):
     except FileNotFoundError:
         model_name = None
 
+    # If config.yaml doesn't have the model name, try args.yaml
+    if not model_name:
+        args_path = os.path.join(logdir, "args.yaml")
+        try:
+            with open(args_path) as f:
+                yaml.add_constructor("!", lambda loader, node: None)
+                yaml.add_multi_constructor(
+                    "tag:yaml.org,2002:python/object",
+                    lambda loader, suffix, node: None,
+                    Loader=yaml.SafeLoader,
+                )
+                args = yaml.safe_load(f)
+                model_name = args.get("model_name_or_path")
+        except FileNotFoundError:
+            model_name = None
+
+    # Get base model outputs if we have the model name and modulated outputs
+    base_model_data = {}
+    base_model_no_context_data = {}
+    print(generated_data.keys())
+    if model_name and generated_data:
+        base_model_data, base_model_no_context_data = get_base_model_generated_text(
+            model_name, generated_data
+        )
+
     return render_template(
         "visualize.html",
         run=run,
@@ -299,6 +407,8 @@ def visualize(run):
         selected_eval_folder=selected_eval_folder,
         data=data,
         generated_data=generated_data,
+        base_model_data=base_model_data,
+        base_model_no_context_data=base_model_no_context_data,
         model_name=model_name,
         checkpoints=checkpoint_names,
     )

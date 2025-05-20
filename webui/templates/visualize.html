@@ -452,6 +452,43 @@
         background-color: #bbdefb;
         cursor: not-allowed;
     }
+
+    .model-comparison {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 15px;
+    }
+
+    .model-output {
+        flex: 1;
+        min-width: 300px;
+        border: 1px solid #e0e0e0;
+        border-radius: 5px;
+        padding: 10px;
+        background-color: #f9f9f9;
+    }
+
+    .model-output p {
+        margin: 0;
+    }
+
+    .model-output span {
+        display: block;
+        padding: 10px;
+        background-color: white;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        min-height: 80px;
+        max-height: 150px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        margin-top: 5px;
+    }
+
+    .highlight-diff {
+        background-color: #fff8e1;
+    }
 </style>
 {% endblock %}
 
@@ -536,7 +573,22 @@
                     <strong>Context:</strong> <span id="{{ split }}-context"></span>
                 </p>
                 <p><strong>Input:</strong> <span id="{{ split }}-input"></span></p>
-                <p><strong>Generated:</strong> <span id="{{ split }}-generated"></span></p>
+
+                <!-- Display both models with enhanced styling -->
+                <div class="model-comparison">
+                    <div class="model-output">
+                        <p><strong>Modulated Model:</strong> <span id="{{ split }}-generated"></span></p>
+                    </div>
+                    <div class="model-output">
+                        <p><strong>Base Model ({{ model_name }}):</strong> <span id="{{ split }}-base-generated">Not
+                                available</span></p>
+                    </div>
+                    <div class="model-output">
+                        <p><strong>Base Model (No Context - {{ model_name }}):</strong> <span
+                                id="{{ split }}-base-no-context-generated">Not available</span></p>
+                    </div>
+                </div>
+
                 <p><strong>Label:</strong> <span id="{{ split }}-label"></span></p>
             </div>
             <div class="generated-text-controls">
@@ -632,10 +684,13 @@
 
 <script>
     var generatedData = {{ generated_data | tojson }};
+    var baseModelData = {{ base_model_data | tojson }};
+    var baseModelNoContextData = {{ base_model_no_context_data | tojson }};
 
     function updateText(split) {
         var index = parseInt(document.getElementById(split + '-index').value) - 1;
         var data = generatedData[split][index];
+
         // Check if 'context' exists in the data and update it
         if ('context' in data) {
             document.getElementById(split + '-context').textContent = data.context;
@@ -643,9 +698,26 @@
         } else {
             document.getElementById(split + '-context-container').style.display = 'none';
         }
+
         document.getElementById(split + '-input').textContent = data.input;
         document.getElementById(split + '-generated').textContent = data.generated;
         document.getElementById(split + '-label').textContent = data.label;
+
+        // Update base model output if available
+        var baseModelOutput = document.getElementById(split + '-base-generated');
+        if (baseModelData && baseModelData[split] && baseModelData[split].length > index) {
+            baseModelOutput.textContent = baseModelData[split][index].generated;
+        } else {
+            baseModelOutput.textContent = "Not available";
+        }
+
+        // Update base model (no context) output if available
+        var baseModelNoContextOutput = document.getElementById(split + '-base-no-context-generated');
+        if (baseModelNoContextData && baseModelNoContextData[split] && baseModelNoContextData[split].length > index) {
+            baseModelNoContextOutput.textContent = baseModelNoContextData[split][index].generated;
+        } else {
+            baseModelNoContextOutput.textContent = "Not available";
+        }
     }
 
     function next(split) {

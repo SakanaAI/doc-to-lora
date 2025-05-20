@@ -95,6 +95,7 @@ CLOSED_QA_DATASETS = {
     "longbench/musique",
     "squad",
     "triviaqa_retrieved",
+    "negative_nq",
 }
 
 for ds_name in list(CLOSED_QA_DATASETS):
@@ -452,7 +453,13 @@ def evaluate(
         # if generative:
         #     model = model.to(torch.bfloat16)
     else:
-        model = get_model(model_name_or_path, train=False, requires_grad=False)
+        model_kwargs = dict(attn_implementation="flash_attention_2")
+        model = get_model(
+            model_name_or_path,
+            train=False,
+            requires_grad=False,
+            model_kwargs=model_kwargs,
+        )
     # NOTE: there is still some randomness in the eval result
     # despite all the deterministic settings
     if is_liger_kernel_available():
@@ -681,7 +688,7 @@ if __name__ == "__main__":
         args.output_dir = f"{run_dir}/eval-results-{cur_it}"
         args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
         args.run_name = run_dir.split("/")[-1]
-        args.remove_context = True
+        args.remove_context = False  # modulated model doesn't see ctx by default
     else:
         args = Namespace(
             model_name_or_path=cli_args.model_name_or_path,
