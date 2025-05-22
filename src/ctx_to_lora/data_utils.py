@@ -588,6 +588,7 @@ def construct_and_tokenize_ctx_qa(
             fn_kwargs={
                 "max_length": base_model_max_len,
                 "columns": ["input_ids", "attention_mask"],
+                "max_new_tokens": 256,
             },
             batched=True,
             batch_size=100_000,
@@ -637,6 +638,8 @@ def construct_and_tokenize_ctx_qa(
                 fn_kwargs={
                     "max_length": ctx_model_max_len,
                     "columns": ["ctx_ids", "ctx_attn_mask"],
+                    # no need to add new_tokens here (used only for the ctx encoder)
+                    "max_new_tokens": 0,
                 },
                 batched=True,
                 batch_size=100_000,
@@ -886,6 +889,7 @@ def truncate_middle_if_too_long(
     samples: dict[str, any],
     max_length: int,
     columns: list[str],
+    max_new_tokens: int = 256,
 ) -> dict[str, any]:
     """
     Truncate the middle of a list of tokens to fit within a maximum length.
@@ -897,7 +901,9 @@ def truncate_middle_if_too_long(
     Returns:
         List of truncated token IDs
     """
-    half = max_length // 2
+    max_new_tokens_half = max_new_tokens // 2
+    # leave max_new_tokens for generation
+    half = max_length // 2 - max_new_tokens_half
     for col in columns:
         # if len(samples[col]) <= max_length:
         #     return samples[col]
