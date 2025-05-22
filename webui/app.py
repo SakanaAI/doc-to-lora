@@ -144,7 +144,7 @@ def get_generated_text_data(run_path: str) -> dict:
         split = os.path.basename(filename).replace("_generated_text.jsonl", "")
         try:
             with open(filename) as f:
-                lines = f.readlines(100_000)
+                lines = f.readlines(10_000_000)
                 data = [json.loads(line) for line in lines]
             generated_data[split] = data
         except FileNotFoundError:
@@ -171,10 +171,10 @@ def get_generated_text_data(run_path: str) -> dict:
         for filename in subdir_files:
             base_split = os.path.basename(filename).replace("_generated_text.jsonl", "")
             # Create a unique split key including the subdirectory name
-            split = f"{subdir_name}_{base_split}"
+            split = f"{subdir_name}/{base_split}"
             try:
                 with open(filename) as f:
-                    lines = f.readlines(100_000)
+                    lines = f.readlines(10_000_000)
                     data = [json.loads(line) for line in lines]
                 generated_data[split] = data
             except FileNotFoundError:
@@ -222,7 +222,7 @@ def get_base_model_generated_text(model_name, generated_data):
 
         try:
             with open(base_model_path) as f:
-                lines = f.readlines(100_000)
+                lines = f.readlines(10_000_000)
                 data = [json.loads(line) for line in lines]
             base_model_data[split] = data
         except FileNotFoundError:
@@ -232,7 +232,7 @@ def get_base_model_generated_text(model_name, generated_data):
 
         try:
             with open(base_model_no_context_path) as f:
-                lines = f.readlines(100_000)
+                lines = f.readlines(10_000_000)
                 data = [json.loads(line) for line in lines]
             base_model_no_context_data[split] = data
         except FileNotFoundError:
@@ -394,7 +394,6 @@ def visualize(run):
     # Get base model outputs if we have the model name and modulated outputs
     base_model_data = {}
     base_model_no_context_data = {}
-    print(generated_data.keys())
     if model_name and generated_data:
         base_model_data, base_model_no_context_data = get_base_model_generated_text(
             model_name, generated_data

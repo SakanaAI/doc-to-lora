@@ -93,6 +93,7 @@ CLOSED_QA_DATASETS = {
     "longbench/hotpotqa",
     "longbench/2wikimqa",
     "longbench/musique",
+    "hotpot_qa",
     "squad",
     "triviaqa_retrieved",
     "negative_nq",
