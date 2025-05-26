@@ -259,7 +259,13 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
             d["context"] = ctx_tokenizer.decode(
                 sample["ctx_ids"], skip_special_tokens=True
             )
+        for k in sample:
+            if k.endswith("_len"):
+                d[k] = sample[k].item()
         out.append(d)
+    # sort samples by length if possible
+    len_key = "ctx_ids_len" if "ctx_ids_len" in sample else "input_ids_len"
+    sorted(out, key=lambda x: x[len_key])
 
     return out
 
@@ -296,6 +302,40 @@ def eval_generation(
             )
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
+
+        # Group by input length and compute metrics for each group
+        length_bins = [(0, 511), (512, 1023), (1024, 2047), (2048, 4095), (4096, 8192)]
+        # Ensure all keys for length metrics are present, even if a bin is empty
+        for low, high in length_bins:
+            eval_result.metrics[f"{split_name}_rouge1.f1_len_{low}-{high}"] = "None"
+            eval_result.metrics[f"{split_name}_rougeL.f1_len_{low}-{high}"] = "None"
+            if ds_name in CLOSED_QA_DATASETS:
+                eval_result.metrics[f"{split_name}_qa_f1_len_{low}-{high}"] = "None"
+
+        grouped_texts = defaultdict(lambda: {"generated": [], "label": [], "count": 0})
+        for txt in decoded_txts:
+            len_key = "ctx_ids_len" if "ctx_ids_len" in txt else "input_ids_len"
+            input_len = txt[len_key]
+            for low, high in length_bins:
+                if low <= input_len <= high:
+                    group_key = f"{low}-{high}"
+                    grouped_texts[group_key]["generated"].append(txt["generated"])
+                    grouped_texts[group_key]["label"].append(txt["label"])
+                    grouped_texts[group_key]["count"] += 1
+                    break
+
+        for group_key, data in grouped_texts.items():
+            if data["count"] > 0:
+                group_rouge_metrics = compute_rouge(data["generated"], data["label"])
+                for k, v in group_rouge_metrics.items():
+                    eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
+
+                if ds_name in CLOSED_QA_DATASETS:
+                    group_qa_f1_metric = compute_qa_f1_score(
+                        data["generated"], data["label"]
+                    )
+                    for k, v in group_qa_f1_metric.items():
+                        eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
 
         save_generated_text(
             decoded_txts,

@@ -2,15 +2,13 @@ import logging
 import hashlib
 import json
 import random
-from functools import partial
 from os import path
-from glob import glob
 from typing import Any, Callable, Iterator, Optional
 
 
 import datasets
 import numpy as np
-from datasets import load_dataset, IterableDataset
+from datasets import load_dataset
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.training_utils import TRAINING_TASK
@@ -329,7 +327,7 @@ def add_negative_prompt_fn(samples):
         prompts.append(prompt)
         responses.append(response)
 
-    logger.debug(f"Adding negative prompt...")
+    logger.debug("Adding negative prompt...")
     logger.debug(f"# unique contexts: {len(unique_contexts)}")
 
     # remove one last sample if the number of samples is odd
@@ -580,7 +578,8 @@ def construct_and_tokenize_ctx_qa(
     )
     if split == "train":
         # drop?
-        # currently the above function would raise if the chat is too long
+        # base model cant handle these samples naturally
+        # should skip
         ...
     else:
         tokenized_ds = tokenized_ds.map(
@@ -590,6 +589,13 @@ def construct_and_tokenize_ctx_qa(
                 "columns": ["input_ids", "attention_mask"],
                 "max_new_tokens": 256,
             },
+            batched=True,
+            batch_size=100_000,
+            num_proc=num_proc,
+        )
+        tokenized_ds = tokenized_ds.map(
+            add_length_info,
+            fn_kwargs={"columns": ["input_ids"]},
             batched=True,
             batch_size=100_000,
             num_proc=num_proc,
@@ -641,6 +647,13 @@ def construct_and_tokenize_ctx_qa(
                     # no need to add new_tokens here (used only for the ctx encoder)
                     "max_new_tokens": 0,
                 },
+                batched=True,
+                batch_size=100_000,
+                num_proc=num_proc,
+            )
+            tokenized_ds = tokenized_ds.map(
+                add_length_info,
+                fn_kwargs={"columns": ["ctx_ids"]},
                 batched=True,
                 batch_size=100_000,
                 num_proc=num_proc,
@@ -883,6 +896,12 @@ def tokenize_chat_messages(
         conversation_ids["chat_attn_mask"] = conversation_ids.pop("attention_mask")
         conversation_ids["chat_labels"] = conversation_ids.pop("labels")
     return conversation_ids
+
+
+def add_length_info(samples: dict[str, any], columns: list[str]) -> dict[str, any]:
+    for col in columns:
+        samples[f"{col}_len"] = [len(t) for t in samples[col]]
+    return samples
 
 
 def truncate_middle_if_too_long(
