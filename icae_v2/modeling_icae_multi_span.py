@@ -1,18 +1,14 @@
 # ICAE that supports multi span concat
 
 import math
-import os
-import random
 from dataclasses import dataclass, field
-from typing import Optional
 
 import torch
 import torch.nn as nn
 import transformers
 from peft import get_peft_model
 from safetensors.torch import load_file
-from torch.nn.functional import gelu
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -32,16 +28,20 @@ class ModelArguments:
 
 @dataclass
 class DataArguments:
-    data_path: str = field(default=None, metadata={"help": "Path to the training data."})
+    data_path: str = field(
+        default=None, metadata={"help": "Path to the training data."}
+    )
     debug_data: bool = field(
         default=False,
-        metadata={"help": "Enable debug dataset to quickly verify the training process"},
+        metadata={
+            "help": "Enable debug dataset to quickly verify the training process"
+        },
     )
 
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
-    cache_dir: Optional[str] = field(default=None)
+    cache_dir: str | None = field(default=None)
     optim: str = field(default="adamw_torch")
     model_max_length: int = field(
         default=28000,
@@ -77,7 +77,9 @@ class TrainingArguments(transformers.TrainingArguments):
     )
     restore_from: str = field(
         default="",
-        metadata={"help": "The checkpoint that should be restored from for fine-tuning"},
+        metadata={
+            "help": "The checkpoint that should be restored from for fine-tuning"
+        },
     )
 
 
@@ -109,7 +111,9 @@ class ICAE(torch.nn.Module):
         self.model_name = model_args.model_name_or_path
         self.icae = AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            torch_dtype=torch.float16 if training_args.bf16 is False else torch.bfloat16,
+            torch_dtype=torch.float16
+            if training_args.bf16 is False
+            else torch.bfloat16,
             use_flash_attention_2=True,
             resume_download=True,
         )
@@ -162,9 +166,7 @@ class ICAE(torch.nn.Module):
             self.vocab_size + self.mem_size,
             dtype=torch.long,
             device=device,
-        ).unsqueeze(
-            0
-        )  # mem tokens
+        ).unsqueeze(0)  # mem tokens
 
         if self.training:
             self.init()
@@ -201,7 +203,7 @@ class ICAE(torch.nn.Module):
         self,
         input_ids: torch.LongTensor = None,
         prompt_answer_ids: torch.LongTensor = None,
-        labels: Optional[torch.LongTensor] = None,
+        labels: torch.LongTensor | None = None,
     ):
         # encoder part
         batch_size = input_ids.size(0)
@@ -218,7 +220,6 @@ class ICAE(torch.nn.Module):
         )
 
         for segment_idx in range(num_segments):
-
             start_idx = segment_idx * segment_length
             end_idx = min((segment_idx + 1) * segment_length, total_length)
             segment_input_ids = input_ids[:, start_idx:end_idx]
@@ -292,7 +293,6 @@ class ICAE(torch.nn.Module):
     def _compress(
         self, input_ids: torch.LongTensor = None
     ):  # for inference; compress a fixed length of input into memory slots
-
         batch_size = input_ids.size(0)
         total_length = input_ids.size(1)
         num_segments = self.compute_num_segments(total_length)

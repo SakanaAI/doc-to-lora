@@ -2,12 +2,16 @@ import dataclasses
 import os
 import sys
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Any, Dict, List, Literal, NewType, Optional, Tuple
+from enum import Enum
+from typing import Any, Literal, NewType
 
 import torch
 import yaml
-from transformers import MODEL_FOR_CAUSAL_LM_MAPPING, HfArgumentParser, TrainingArguments
+from transformers import (
+    MODEL_FOR_CAUSAL_LM_MAPPING,
+    HfArgumentParser,
+    TrainingArguments,
+)
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -18,7 +22,7 @@ DataClassType = NewType("DataClassType", Any)
 
 class ArgumentParser(HfArgumentParser):
     def parse_yaml_and_args(
-        self, yaml_arg: str, other_args: Optional[list[str]] = None
+        self, yaml_arg: str, other_args: list[str] | None = None
     ) -> list[dataclass]:
         """
         Parse a YAML file and overwrite the default/loaded values with the values provided to the command line.
@@ -129,6 +133,10 @@ class ExperimentSetup(str, Enum):
 
 @dataclass
 class TrainingArguments(TrainingArguments):
+    tf32: bool = field(
+        default=True,
+        metadata={"help": "Whether to use tf32 precision."},
+    )
     dataloader_pin_memory: bool = field(
         default=True,
         metadata={"help": "Whether to pin memory in data loaders or not."},
@@ -143,11 +151,11 @@ class TrainingArguments(TrainingArguments):
         },
     )
     dataloader_prefetch_factor: int = field(
-        default=2,
+        default=8,
         metadata={"help": "Number of batches loaded in advance by each worker."},
     )
     dataloader_num_workers: int = field(
-        default=4,
+        default=8,
         metadata={"help": "Number of subprocesses to use for data loading."},
     )
     optim: str = field(
@@ -256,15 +264,15 @@ class ModelArguments:
 
 @dataclass
 class LoRAArguments:
-    lora_r: Optional[int] = field(
+    lora_r: int | None = field(
         default=8,
         metadata={"help": ("LoRA R value.")},
     )
-    lora_dropout: Optional[float] = field(
+    lora_dropout: float | None = field(
         default=0.02,
         metadata={"help": ("LoRA dropout.")},
     )
-    target_modules: Optional[list[str]] = field(
+    target_modules: list[str] | None = field(
         default=None,
         metadata={"help": ("LoRA target modules.")},
     )
@@ -284,11 +292,11 @@ class CtxTrainingArguments:
         default=None,
         metadata={"help": "Path to the pretrained checkpoint."},
     )
-    max_base_len: Optional[int] = field(
+    max_base_len: int | None = field(
         default=2**13,
         metadata={"help": "Maximum base length for training."},
     )
-    max_ctx_len: Optional[int] = field(
+    max_ctx_len: int | None = field(
         default=2**13,
         metadata={"help": "Maximum context length for training."},
     )
@@ -296,21 +304,21 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to use sequence packing."},
     )
-    per_device_train_max_batch_len: Optional[int] = field(
+    per_device_train_max_batch_len: int | None = field(
         default=2**12,
         metadata={
             "help": "Maximum batch length for training. Only used with multipack sampler."
         },
     )
-    max_new_tokens: Optional[int] = field(
+    max_new_tokens: int | None = field(
         default=2**10,
         metadata={"help": "Maximum new tokens for generation-based evaluation."},
     )
-    gen_per_device_eval_batch_size: Optional[int] = field(
+    gen_per_device_eval_batch_size: int | None = field(
         default=1,
         metadata={"help": "Per device evaluation batch size for generation."},
     )
-    notes: Optional[str] = field(
+    notes: str | None = field(
         default=None,
         metadata={"help": "Wandb notes for the experiment."},
     )
@@ -342,19 +350,19 @@ class DataArguments:
         default=False,
         metadata={"help": "Whether to use streaming dataset for training."},
     )
-    val_ds_names: Optional[list[str]] = field(
+    val_ds_names: list[str] | None = field(
         default=None,
         metadata={"help": "Validation dataset names."},
     )
-    test_ds_names: Optional[list[str]] = field(
+    test_ds_names: list[str] | None = field(
         default=None,
         metadata={"help": "Test dataset names."},
     )
-    max_val_samples_per_ds: Optional[int] = field(
+    max_val_samples_per_ds: int | None = field(
         default=5000,
         metadata={"help": "Maximum number of validation samples per dataset."},
     )
-    max_test_samples_per_ds: Optional[int] = field(
+    max_test_samples_per_ds: int | None = field(
         default=1000,
         metadata={"help": "Maximum number of test samples per dataset."},
     )
@@ -378,7 +386,7 @@ class HypernetArguments:
         default=0.0,
         metadata={"help": "Dropout rate for HyperLoRA."},
     )
-    extra_modules: Optional[list[str]] = field(
+    extra_modules: list[str] | None = field(
         default=None,
         metadata={"help": "Extra modules to train."},
     )
@@ -402,7 +410,7 @@ class CtxEncoderArguments:
         default=None,
         metadata={"help": "Context encoder model name or path."},
     )
-    layer_idx: Optional[int] = field(
+    layer_idx: int | None = field(
         default=None,
         metadata={
             "help": "Layer index for context encoder. "
@@ -413,7 +421,6 @@ class CtxEncoderArguments:
 
 @dataclass
 class AggregatorArguments:
-
     aggregator_type: Literal["pooler", "perceiver"] = field(
         default="pooler",
         metadata={"help": "Aggregator type for HyperLoRA."},

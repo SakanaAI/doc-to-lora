@@ -1,9 +1,8 @@
-import math
 import os
 import random
 
 import torch
-from transformers import Seq2SeqTrainer, Trainer
+from transformers import Trainer
 from transformers.trainer_utils import get_last_checkpoint
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -17,7 +16,6 @@ def train_model(
     data_collator=None,
     compute_metrics=None,
 ):
-
     last_checkpoint = None
     if (
         os.path.isdir(training_args.output_dir)
@@ -85,7 +83,6 @@ def train_model(
 
 
 def text_extraction(input_ids, length, lm_ratio=0.0):
-
     input_len = len(input_ids)
     assert input_len >= 1, f"Error: invalid input length ({input_len})"
 
@@ -121,9 +118,10 @@ def pretrain_tokenize_function(examples, model, mem, lm_ratio=0.0):
     max_len = model.training_args.model_max_length  # heuristic
 
     for idx in range(len(text_output["input_ids"])):
-
         ae = True
-        a, b = text_extraction(text_output["input_ids"][idx], max_len, lm_ratio=lm_ratio)
+        a, b = text_extraction(
+            text_output["input_ids"][idx], max_len, lm_ratio=lm_ratio
+        )
         length_a = len(a)
         num_segments = model.compute_num_segments(length_a)
         total_mem_length = num_segments * model.mem_size
@@ -192,7 +190,6 @@ def instruct_ft_tokenize_function(examples, model, mem):
     max_len = model.training_args.model_max_length  # heuristic
 
     for idx in range(len(text_output["input_ids"])):
-
         length = len(text_output["input_ids"][idx])
         num_segments = model.compute_num_segments(length)
         total_mem_length = num_segments * model.mem_size

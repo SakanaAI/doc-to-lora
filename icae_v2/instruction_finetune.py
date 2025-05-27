@@ -7,7 +7,6 @@ from modeling_icae_multi_span import (
 )
 from peft import LoraConfig
 from training_utils import (
-    DataCollatorForDynamicPadding,
     instruct_ft_tokenize_function,
     train_model,
 )
@@ -72,9 +71,9 @@ def main():
     )
 
     # check model_args.mem_size and min_tokens_for_lm
-    assert (
-        training_args.fixed_mem_size & (training_args.fixed_mem_size - 1)
-    ) == 0, "training_args.fixed_mem_size must be a power of 2"
+    assert (training_args.fixed_mem_size & (training_args.fixed_mem_size - 1)) == 0, (
+        "training_args.fixed_mem_size must be a power of 2"
+    )
 
     memory_size = training_args.fixed_mem_size
 

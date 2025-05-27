@@ -1,8 +1,6 @@
-import itertools
 import json
 import os
 import random
-from typing import Dict, List
 
 
 def save_jsonl(data: list[dict], filepath: str) -> None:

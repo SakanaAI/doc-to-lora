@@ -1,3 +1,4 @@
+.venv/
 .cursorrules
 tmp/
 openai_batches/

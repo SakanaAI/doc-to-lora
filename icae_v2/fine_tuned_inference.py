@@ -1,5 +1,4 @@
 import json
-import sys
 
 import torch
 from modeling_icae_multi_span import (
@@ -11,7 +10,7 @@ from modeling_icae_multi_span import (
 from peft import LoraConfig
 from safetensors.torch import load_file
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, HfArgumentParser
+from transformers import HfArgumentParser
 
 # Set the computation device
 device = "cuda"
@@ -53,7 +52,6 @@ model.eval()
 
 with torch.no_grad():
     with open("ft_inference.out", "w") as f:
-
         for line in tqdm(lines):
             # Tokenize input text
             data = json.loads(line)
@@ -100,7 +98,9 @@ with torch.no_grad():
 
             # Generate text output
             for i in range(max_out_length):
-                with model.icae.disable_adapter():  # no independent decoder; use self.icae
+                with (
+                    model.icae.disable_adapter()
+                ):  # no independent decoder; use self.icae
                     out = model.icae(
                         inputs_embeds=output,
                         past_key_values=past_key_values,

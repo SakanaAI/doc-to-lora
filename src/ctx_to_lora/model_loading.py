@@ -2,7 +2,7 @@ import logging
 import os
 
 import torch
-from peft import LoraConfig, PeftConfig, PeftModel, VeraConfig
+from peft import PeftModel
 from peft import get_peft_config as _get_peft_config
 from peft.utils import PeftType
 from transformers import (
@@ -46,16 +46,9 @@ def get_model_and_tokenizer(
 def get_tokenizer(
     model_name_or_path, tokenizer_kwargs=None, peft_config=None, train=False
 ):
-    # tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, padding_side="left")
-    # NOTE: lora models don't have tokenizer config in the folder
-
-    # left pad for generation, right pad for training (why?)
     padding_side = "left" if not train else "right"
     truncation_side = "left"
 
-    # tokenizer = AutoTokenizer.from_pretrained(
-    #         "models/Mistral-7B-v0.1/", padding_side=padding_side
-    #     )
     if peft_config:
         model_name_or_path = peft_config.base_model_name_or_path
 
@@ -72,10 +65,6 @@ def get_tokenizer(
 
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
-        # tokenizer.pad_token = tokenizer.eos_token
-
-    # tokenizer.pad_token = tokenizer.eos_token
-    # tokenizer.add_bos_token = True
 
     template_path = f"chat_templates/{model_name_or_path}.jinja"
     if os.path.exists(template_path):
@@ -83,26 +72,6 @@ def get_tokenizer(
         chat_template = open(template_path).read()
         chat_template = chat_template.replace("    ", "").replace("\n", "")
         tokenizer.chat_template = chat_template
-    # assert os.path.exists(f"{model_name_or_path}/chat_template.jinja"), (
-    #     f"Chat template not found in {model_name_or_path}\n\n"
-    #     "We assume a specfic form of chat template for consistency between models. Please use the templates provided",
-    # )
-    # if os.path.exists(f"{model_name_or_path}/chat_template.jinja"):
-    #     chat_template = open(f"{model_name_or_path}/chat_template.jinja").read()
-    #     chat_template = chat_template.replace("    ", "").replace("\n", "")
-    #     tokenizer.chat_template = chat_template
-
-    # tokenizer.add_eos_token = False
-    # if train:
-    #     # NOTE: this correctly add an eos token that has attention = 1
-    #     # while padding eos tokens have attention = 0
-    #     tokenizer.add_eos_token = True
-
-    #     # shouldn't be needed as we manually compute the labels now
-    #     # NOTE: this seems oddly important
-    #     # and is not necessarily in the alignment handbook scripts
-    #     # tokenizer.pad_token = tokenizer.unk_token  # fix model not generating eos
-
     return tokenizer
 
 
@@ -123,8 +92,6 @@ def get_model(
         trust_remote_code=True,
         attn_implementation="eager",
         use_cache=False,
-        # load_in_4bit=True,
-        # load_in_8bit=True,
     )
     is_vision_model = "Llama" in model_name_or_path and "Vision" in model_name_or_path
     if model_kwargs is not None:
@@ -148,8 +115,6 @@ def get_model(
         model_init_kwargs["torch_dtype"] = torch.float32
         model_init_kwargs.pop("use_cache")
 
-    # if train and not is_vision_model:
-    #     model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     if not is_vision_model:
         if is_bidir_model:
@@ -159,21 +124,10 @@ def get_model(
     else:
         model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
         model = model.language_model
-        # model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
     if peft_config is not None:
         model = PeftModel(model, peft_config)
     model.train(train)
     for name, param in model.named_parameters():
-        # if "modules_to_save" not in name:
-        #     param.requires_grad = requires_grad
-        # else:
-        #     logging.debug(f"modules_to_save: {name} to be trained")
-        #     # always train "modules_to_save"
-        #     if not "layernorm" in name:
-        #         raise NotImplementedError(
-        #             f"modules_to_save should only be layernorm, got {name}"
-        #         )
-        #     param.requires_grad = True
         param.requires_grad = requires_grad
     return model
 
@@ -195,24 +149,3 @@ def get_lora_config(model_dir, **kwargs):
     peft_conf_kwargs.update(kwargs)
     peft_config = _get_peft_config(peft_conf_kwargs)
     return peft_config
-
-
-# def get_emb_model_and_fns(emb_model_name, device):
-#     emb_model = AutoModel.from_pretrained(
-#         emb_model_name,
-#         device_map=device,
-#         torch_dtype=torch.float32 if "gte" in emb_model_name else torch.bfloat16,
-#         trust_remote_code=True,
-#     ).eval()
-#     emb_tokenizer = AutoTokenizer.from_pretrained(emb_model_name)
-#     if emb_tokenizer.pad_token_id is None:
-#         emb_tokenizer.pad_token_id = emb_tokenizer.eos_token_id
-#         # assert bool(args.query_intx), "query_intx must be provided for the emb_model_name"
-#         # partial(get_detailed_instruct, task_description=args.query_intx)
-#     task_desc_format_fn = add_full_stop
-#     if "SFR" in emb_model_name:
-#         task_desc_format_fn = apply_sfr_template
-#         pooling_fn = get_pooling_fn("last_token")
-#     elif "gte" in emb_model_name:
-#         pooling_fn = get_pooling_fn("cls")
-#     return emb_model, emb_tokenizer, task_desc_format_fn, pooling_fn

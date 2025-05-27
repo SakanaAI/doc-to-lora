@@ -1,14 +1,13 @@
 import json
 import os
-import re
 from glob import glob
 
 import torch
 import yaml
 from flask import Flask, abort, jsonify, render_template, request
-from transformers import pipeline, AutoTokenizer
+from transformers import pipeline
 
-from ctx_to_lora.data_utils import tokenize_ctx_text
+from ctx_to_lora.data.processing import tokenize_ctx_text
 from ctx_to_lora.model_loading import get_tokenizer
 
 app = Flask(__name__)
@@ -132,11 +131,9 @@ def get_generated_text_data(run_path: str) -> dict:
     generated_data = {}
     # Find all *_generated_text.jsonl files in the current directory, excluding _no_context_ variants
     files = sorted(
-        [
-            f
-            for f in glob(os.path.join(run_path, "*_generated_text.jsonl"))
-            if "_no_context_generated_text.jsonl" not in os.path.basename(f)
-        ]
+        f
+        for f in glob(os.path.join(run_path, "*_generated_text.jsonl"))
+        if "_no_context_generated_text.jsonl" not in os.path.basename(f)
     )
     print(f"Processing generated text files from {run_path}: {files}")
 
@@ -159,11 +156,9 @@ def get_generated_text_data(run_path: str) -> dict:
     ]:
         subdir_name = os.path.basename(subdir_path)
         subdir_files = sorted(
-            [
-                f
-                for f in glob(os.path.join(subdir_path, "*_generated_text.jsonl"))
-                if "_no_context_generated_text.jsonl" not in os.path.basename(f)
-            ]
+            f
+            for f in glob(os.path.join(subdir_path, "*_generated_text.jsonl"))
+            if "_no_context_generated_text.jsonl" not in os.path.basename(f)
         )
         print(
             f"Processing generated text files from subdirectory {subdir_path}: {subdir_files}"
@@ -259,7 +254,7 @@ def get_available_checkpoints(run):
         return []
 
     checkpoints = sorted(
-        [d for d in glob(os.path.join(logdir, "checkpoint-*")) if os.path.isdir(d)],
+        (d for d in glob(os.path.join(logdir, "checkpoint-*")) if os.path.isdir(d)),
         key=lambda d: int(d.split("-")[-1]),
     )
 
@@ -282,7 +277,7 @@ def load_custom_chat_template(tokenizer, model_name):
     if "gemma" in model_name.lower():
         template_path = "chat_templates/google/gemma-2-2b-it.jinja"
         if os.path.exists(template_path):
-            with open(template_path, "r") as f:
+            with open(template_path) as f:
                 template_content = f.read()
                 tokenizer.chat_template = template_content
                 print(f"Loaded custom chat template from {template_path}")
@@ -292,7 +287,7 @@ def load_custom_chat_template(tokenizer, model_name):
     elif "meta-llama" in model_name.lower() or "llama" in model_name.lower():
         template_path = "chat_templates/meta-llama/llama-2-7b-chat.jinja"
         if os.path.exists(template_path):
-            with open(template_path, "r") as f:
+            with open(template_path) as f:
                 template_content = f.read()
                 tokenizer.chat_template = template_content
                 print(f"Loaded custom chat template from {template_path}")
@@ -478,7 +473,7 @@ def load_checkpoint():
     # Unload the regular chat model to avoid confusion
     chat_generator = None
 
-    from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
+    from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 
     run = request.form["run"]
     checkpoint = request.form["checkpoint"]
@@ -592,8 +587,6 @@ def chat():
                 # Process context and generate LoRA for the response
                 ctx_tokenizer = None
                 with torch.inference_mode(), torch.amp.autocast(str(device)):
-                    from transformers import AutoTokenizer
-
                     # Get the contexts and tokenize them
                     contexts = request.form.getlist("contexts[]")
                     if not contexts:
@@ -603,7 +596,9 @@ def chat():
                     if len(contexts) == 1 and not contexts[0].strip():
                         contexts = [""]
 
-                    print(f"Processing {len(contexts)} contexts for response generation")
+                    print(
+                        f"Processing {len(contexts)} contexts for response generation"
+                    )
                     print(f"Contexts: {contexts}")
                     ctx_encoder_model_name_or_path = (
                         modulated_model.ctx_encoder_args.ctx_encoder_model_name_or_path

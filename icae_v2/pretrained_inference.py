@@ -1,5 +1,4 @@
 import json
-import sys
 
 import torch
 from modeling_icae_multi_span import (
@@ -49,7 +48,6 @@ lines = [
 model.eval()
 with torch.no_grad():
     with open("tmp.out", "w") as f:
-
         for line in tqdm(lines):
             # Tokenize input text
             tokenized_text = model.tokenizer(
@@ -80,7 +78,9 @@ with torch.no_grad():
 
             # Generate text output
             for i in range(512):
-                with model.icae.disable_adapter():  # no independent decoder; use self.icae
+                with (
+                    model.icae.disable_adapter()
+                ):  # no independent decoder; use self.icae
                     out = model.icae(
                         inputs_embeds=output,
                         past_key_values=past_key_values,

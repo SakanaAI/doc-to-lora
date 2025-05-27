@@ -1,18 +1,23 @@
 import ast
+import gc
+import hashlib
 import logging
 import os
 import random
 import string
 import time
-import hashlib
+from collections.abc import Iterable
 from contextlib import contextmanager
-from typing import Iterable, Optional
+from enum import Enum
 
 import torch
 import yaml
 from peft import PeftConfig, PeftModel
 from peft.tuners.tuners_utils import BaseTunerLayer, check_target_module_exists
 from peft.utils import get_peft_model_state_dict
+
+TRAINING_TASK = Enum("TRAINING_TASK", ["CAUSAL_LM", "COMPLETION"])
+
 
 logger = logging.getLogger()
 
@@ -74,7 +79,7 @@ def log_num_train_params(model):
     )
 
 
-def get_run_name(seed_str: Optional[str] = None):
+def get_run_name(seed_str: str | None = None):
     if not seed_str:
         uuid = "".join(
             [random.choice(string.ascii_letters + string.digits) for _ in range(8)]
@@ -158,9 +163,8 @@ def save_yaml(data, path):
 
 def get_peft_in_out_features(
     model: PeftModel,
-    peft_config: Optional[PeftConfig] = None,
+    peft_config: PeftConfig | None = None,
 ) -> tuple[dict[str, int], dict[str, int]]:
-
     if peft_config is None:
         return None, None
     in_features = dict()
@@ -172,9 +176,9 @@ def get_peft_in_out_features(
             continue
         # support just Linear layer for now
         # all modules should be a leave module that is Linear layer
-        assert isinstance(
-            module.base_layer, torch.nn.Linear
-        ), "all modules should be a leave module that is Linear layer"
+        assert isinstance(module.base_layer, torch.nn.Linear), (
+            "all modules should be a leave module that is Linear layer"
+        )
 
         # this should always pass
         name = module_name.split(".")[-1]
@@ -233,3 +237,10 @@ def get_lora_module_names(
                     module_names[target_module][layer_idx].append(k)
                     break
     return module_names
+
+
+def clear_gpu():
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_max_memory_allocated()
+    torch.cuda.reset_max_memory_cached()

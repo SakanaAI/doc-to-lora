@@ -1,6 +1,6 @@
 import logging
+from collections.abc import Callable, Iterable
 from operator import attrgetter
-from typing import Callable, Iterable, Optional
 
 import torch
 import torch.nn.functional as F
@@ -8,6 +8,7 @@ from einops import einsum
 from jaxtyping import Float, Integer
 from torch import Tensor
 from torch.utils.hooks import RemovableHandle
+
 from ctx_to_lora.utils import get_layers
 
 logger = logging.getLogger()
@@ -28,8 +29,8 @@ def remove_hook_handles(handles: list[RemovableHandle]) -> None:
 def apply_hook_to_model(
     model: torch.nn.Module,
     module_name: str,
-    pre_hook: Optional[Callable] = None,
-    post_hook: Optional[Callable] = None,
+    pre_hook: Callable | None = None,
+    post_hook: Callable | None = None,
 ) -> torch.nn.Module:
     if not ((pre_hook is not None) or (post_hook is not None)):
         raise ValueError("No hooks provided. Nothing to apply.")
@@ -46,9 +47,9 @@ def apply_hook_to_model(
 def apply_hook_to_layer(
     layer: torch.nn.Module,
     mname: str,
-    pre_hook: Optional[Callable] = None,
-    post_hook: Optional[Callable] = None,
-) -> tuple[Optional[RemovableHandle], Optional[RemovableHandle]]:
+    pre_hook: Callable | None = None,
+    post_hook: Callable | None = None,
+) -> tuple[RemovableHandle | None, RemovableHandle | None]:
     """
     Applies pre and/or post hooks to a specific layer in the model.
 
@@ -85,8 +86,8 @@ def apply_hook_to_layers(
     model: torch.nn.Module,
     module_names: list[str],
     layer_indices: Iterable[int],
-    pre_hook: Optional[Callable] = None,
-    post_hook: Optional[Callable] = None,
+    pre_hook: Callable | None = None,
+    post_hook: Callable | None = None,
 ) -> list[RemovableHandle]:
     """
     Applies custom hooks to specified layers and modules in the model.
@@ -133,7 +134,7 @@ def add_generated_lora_hook(
     B: Float[Tensor, "bs d_out r"],
     scaling: float,
     input_dropout: float,
-    position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    position_ids: Integer[Tensor, "bs seq_len"] | None = None,
     training: bool = False,
 ) -> list[RemovableHandle]:
     """
@@ -157,7 +158,6 @@ def add_generated_lora_hook(
         args: tuple | Float[Tensor, "bs seq_len d_in"],
         output: Float[Tensor, "bs seq_len d_out"],
     ) -> Float[Tensor, "bs seq_len d_out"]:
-
         if isinstance(output, tuple):
             model_out = output[0]
         else:
@@ -238,7 +238,7 @@ def add_generated_layernorm_hook(
     layer_index: int,
     W: Float[Tensor, "bs hidden_size"],
     training: bool,
-    position_ids: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    position_ids: Integer[Tensor, "bs seq_len"] | None = None,
 ) -> list[RemovableHandle]:
     """
     Adds layer normalization hooks to specified modules and layers.

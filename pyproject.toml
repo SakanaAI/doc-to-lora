@@ -10,8 +10,8 @@ dependencies = [
     "deepspeed==0.16.7",
     "accelerate==1.6.0",
     "datasets==3.6.0",
+    "setuptools",
     "peft",
-    "bitsandbytes",
     "jupyter",
     "matplotlib",
     "hf_transfer",
@@ -35,15 +35,22 @@ dependencies = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.isort]
-profile = "black"
-
-
-[tool.black]
-line-length = 89
-
 [tool.pyright]
 exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    ".venv",
+    ".github",
+    ".vscode",
+    "chat_templates",
+    "eval_results",
+    "configs",
+    "EditingLlama",
+    "icae_v2",
+    "lm-evaluation-harness",
+    "LongBench",
+    "scripts",
     "train_outputs",
     "data",
     "generated_tasks",
@@ -55,4 +62,9 @@ exclude = [
 typeCheckingMode = "off"
 
 [tool.ruff]
-line-length = 89
+line-length = 88
+select = ["F401"]   # remove unused imports
+ignore = ["E", "F"]
+
+[tool.isort]
+profile = "black"

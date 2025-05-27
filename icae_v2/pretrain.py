@@ -36,12 +36,12 @@ def main():
     )
 
     # check model_args.mem_size and min_tokens_for_lm
-    assert (
-        training_args.fixed_mem_size & (training_args.fixed_mem_size - 1)
-    ) == 0, "training_args.fixed_mem_size must be a power of 2"
-    assert (
-        training_args.leave_tokens_for_lm <= training_args.min_tokens_for_lm
-    ), "leave_tokens_for_lm should be fewer than min_tokens_for_lm"
+    assert (training_args.fixed_mem_size & (training_args.fixed_mem_size - 1)) == 0, (
+        "training_args.fixed_mem_size must be a power of 2"
+    )
+    assert training_args.leave_tokens_for_lm <= training_args.min_tokens_for_lm, (
+        "leave_tokens_for_lm should be fewer than min_tokens_for_lm"
+    )
 
     memory_size = training_args.fixed_mem_size
 

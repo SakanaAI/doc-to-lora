@@ -1,15 +1,14 @@
-import sys
-import os
-import json
-import torch
-import lm_eval
-from lm_eval.models.huggingface import HFLM
-from lm_eval.models.vllm_causallms import VLLM
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel, PeftConfig
 import argparse
+import json
+import os
 
-from ctx_to_lora.modeling_utils import (
+import lm_eval
+import torch
+from lm_eval.models.huggingface import HFLM
+from peft import PeftConfig, PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from ctx_to_lora.modeling.hypernet import (
     ModulatedModelWithSharedInput,
     ModulatedPretrainedModel,
 )

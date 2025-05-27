@@ -1,10 +1,8 @@
 from enum import Enum
-from typing import Optional
 
 import torch
 from jaxtyping import Float, Integer
 from torch import Tensor
-from torch.nn import functional as F
 
 POOL_FN = Enum("POOL_FN", ["MEAN", "MAX", "LAST_TOKEN"])
 
@@ -24,7 +22,7 @@ def get_pooling_fn(pooling_type: str):
 
 def mean_pool(
     features: Float[Tensor, "bs seq_len feature_dim"],
-    attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    attn_mask: Integer[Tensor, "bs seq_len"] | None = None,
 ) -> Float[Tensor, "bs 1 feature_dim"]:
     if attn_mask is not None:
         features = features.masked_fill(inv_bool_mask(attn_mask), 0)
@@ -33,7 +31,7 @@ def mean_pool(
 
 def max_pool(
     features: Float[Tensor, "bs seq_len feature_dim"],
-    attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    attn_mask: Integer[Tensor, "bs seq_len"] | None = None,
 ) -> Float[Tensor, "bs 1 feature_dim"]:
     if attn_mask is not None:
         features = features.masked_fill(inv_bool_mask(attn_mask), -float("inf"))
@@ -42,9 +40,8 @@ def max_pool(
 
 def last_token_pool(
     features: Float[Tensor, "bs seq_len feature_dim"],
-    attn_mask: Optional[Integer[Tensor, "bs seq_len"]] = None,
+    attn_mask: Integer[Tensor, "bs seq_len"] | None = None,
 ) -> Float[Tensor, "bs feature_dim"]:
-
     left_padding = attn_mask[:, -1].sum() == attn_mask.shape[0]
     if left_padding:
         return features[:, -1]

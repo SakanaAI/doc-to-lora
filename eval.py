@@ -1,36 +1,36 @@
-import re
-import string
-import yaml
 import gc
 import json
-import os
 import logging
+import os
+import re
+import string
 from argparse import Namespace
+from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import fields
 from functools import partial
-from collections import Counter, defaultdict
-from typing import Callable
 
-import torch
 import numpy as np
+import torch
+import yaml
 from datasets import disable_caching
 from peft import PeftModel
 from rouge_score import rouge_scorer
 from transformers import (
-    PreTrainedModel,
+    EvalPrediction,
     GenerationConfig,
-    Trainer,
+    PreTrainedModel,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
-    EvalPrediction,
+    Trainer,
     set_seed,
 )
 from transformers.utils import is_liger_kernel_available
 
-from ctx_to_lora.data_definitions import LONGBENCH_E_TASKS, LONGBENCH_TASKS
-from ctx_to_lora.data_utils import get_tokenized_dataset
-from ctx_to_lora.modeling_utils import ModulatedPretrainedModel
-from ctx_to_lora.model_loading import get_tokenizer, get_model
+from ctx_to_lora.data.definitions import LONGBENCH_E_TASKS, LONGBENCH_TASKS
+from ctx_to_lora.data.processing import get_tokenized_dataset
+from ctx_to_lora.model_loading import get_model, get_tokenizer
+from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 
 logger = logging.getLogger()
 
@@ -242,7 +242,9 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
             label_toks = sample["labels"][start_idx:]
             # labels are padded with -100, so we need to
             # replace them with the pad token id
-            label_toks = np.where(label_toks == -100, tokenizer.pad_token_id, label_toks)
+            label_toks = np.where(
+                label_toks == -100, tokenizer.pad_token_id, label_toks
+            )
             label_text = tokenizer.decode(label_toks, skip_special_tokens=True)
             d["label"] = label_text.strip()
 
@@ -722,7 +724,7 @@ if __name__ == "__main__":
         checkpoint_dir = "/".join(cli_args.checkpoint_path.split("/")[:-1])
         run_dir = "/".join(cli_args.checkpoint_path.split("/")[:-2])
         cur_it = int(cli_args.checkpoint_path.split("checkpoint-")[1].split("/")[0])
-        args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r")))
+        args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
         print(f"checkpoint_path: {cli_args.checkpoint_path}")
         print(f"run_dir: {run_dir}")
 

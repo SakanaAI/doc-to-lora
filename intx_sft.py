@@ -1,68 +1,57 @@
 import logging
 import os
-import random
-import string
-import time
-from multiprocess import set_start_method
-from math import ceil
-from collections import defaultdict
-from copy import copy, deepcopy
+from copy import deepcopy
 from functools import partial
-from importlib.resources import read_binary
-from typing import Callable, Optional
+from math import ceil
 
 import numpy as np
 import torch
-import wandb
-import yaml
-
-from ctx_to_lora.data_utils import (
-    DS_LEN,
-    convert_ctx_prompt_response_to_messages,
-    get_preprocessing_fn,
-    get_sft_prompt_formatting_fn,
-    get_tokenized_dataset,
-    tokenize_chat_messages,
-    tokenize_ctx_text,
-)
 from datasets import (
-    concatenate_datasets,
-    interleave_datasets,
     disable_caching,
-    load_dataset,
-    IterableDataset,
+    interleave_datasets,
+)
+from peft import PeftModel
+from transformers import (
+    AutoConfig,
+    set_seed,
+)
+from transformers.utils import is_liger_kernel_available
+
+import wandb
+from ctx_to_lora.configs import (
+    AggregatorArguments,
+    ArgumentParser,
+    CtxEncoderArguments,
+    CtxTrainingArguments,
+    DataArguments,
+    ExperimentSetup,
+    HypernetArguments,
+    LoRAArguments,
+    ModelArguments,
+    TrainingArguments,
+)
+from ctx_to_lora.data.collator import train_collator, train_packed_collator
+from ctx_to_lora.data.definitions import DS_LEN
+from ctx_to_lora.data.processing import get_tokenized_dataset
+from ctx_to_lora.metrics import (
+    Evaluator,
+    compute_metrics,
+    compute_per_token_acc,
+    compute_perplexity,
+    compute_prefix_matching,
 )
 from ctx_to_lora.model_loading import (
     get_lora_config,
     get_model_and_tokenizer,
     get_tokenizer,
 )
-from ctx_to_lora.modeling_utils import (
-    EarlyExit,
-    HyperLoRA,
+from ctx_to_lora.modeling.hypernet import (
     ModulatedPretrainedModel,
     get_hypernet_config,
 )
-from rouge_score import rouge_scorer
-from ctx_to_lora.training_utils import TRAINING_TASK, train_model
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    AutoConfig,
-    PretrainedConfig,
-    DataCollatorForSeq2Seq,
-    EvalPrediction,
-    HfArgumentParser,
-    set_seed,
-)
-from accelerate import Accelerator, DeepSpeedPlugin
-from peft import PeftModel
-from transformers.utils import is_liger_kernel_available
-from transformers.data import DataCollatorWithFlattening
-from torch.utils.data import DataLoader
+from ctx_to_lora.trainer import train_model
 from ctx_to_lora.utils import (
     extract_cli_args,
-    get_base_model,
     get_run_name,
     log_num_train_params,
     save_yaml,
@@ -70,148 +59,9 @@ from ctx_to_lora.utils import (
     validate_args,
 )
 
-from ctx_to_lora.configs import (
-    ArgumentParser,
-    CtxTrainingArguments,
-    TrainingArguments,
-    DataArguments,
-    ExperimentSetup,
-    LoRAArguments,
-    ModelArguments,
-    HypernetArguments,
-    AggregatorArguments,
-    CtxEncoderArguments,
-)
-
 logger = logging.getLogger()
 
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
-
-
-def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
-    indices = torch.where(valid_masks)
-    # acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
-    # return {"per_token_acc": acc}
-    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float()
-    return {
-        "per_token_accs": acc.flatten().tolist(),
-        "n_per_token_accs": valid_masks.sum().item(),
-    }
-
-
-def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
-    lengths = valid_masks.sum(dim=1)
-
-    is_wrong = (shift_logits.argmax(-1) != shift_labels) * valid_masks
-    is_correct = (shift_logits.argmax(-1) == shift_labels) * valid_masks
-    # NOTE: not reliable for multi-turn conversations
-    # ie, all tokens in the following user's turn will be correct
-    # still monotonically correlate with perf though
-    wrong_pos = torch.argmax(is_wrong, dim=1) - torch.argmax(valid_masks, dim=1)
-    perf = wrong_pos / lengths
-
-    # if all tokens are correct, set to 1
-    perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
-    # return {"prefix_matching": perf.mean().item()}
-    return {
-        "prefix_matchings": perf.tolist(),
-        "n_prefix_matchings": valid_masks.shape[0],
-    }
-
-
-@torch.no_grad()
-def compute_perplexity(shift_logits, shift_labels, valid_masks):
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
-    loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
-    # perplexity = torch.exp(loss).mean().item()
-    # return {"perplexity": perplexity}
-    preplexities = torch.exp(loss)
-    return {
-        "perplexities": preplexities.tolist(),
-        "n_perplexities": valid_masks.shape[0],
-    }
-
-
-class Evaluator:
-    def __init__(self, metric_fns: list[Callable]):
-        self.metric_fns = metric_fns
-        self.reset()
-
-    def reset(self):
-        self.accum_metrics = defaultdict(list)
-        self.count = defaultdict(list)
-
-    def update(self, shift_logits, shift_labels, valid_masks):
-        for metric_fn in self.metric_fns:
-            metric = metric_fn(shift_logits, shift_labels, valid_masks)
-            for k, v in metric.items():
-                if k.startswith("n_"):
-                    self.count[k[2:]].append(v)
-                else:
-                    self.accum_metrics[k] += v
-
-    def compute(self):
-        # Get result across entire eval set
-        result = {
-            k: np.sum(v) / np.sum(self.count[k]) for k, v in self.accum_metrics.items()
-        }
-        # Reset batch statistics
-        self.reset()
-        return result
-
-
-@torch.no_grad()
-def compute_metrics(
-    eval_pred: EvalPrediction,
-    compute_result: bool,
-    evaluator: Evaluator,
-) -> Optional[dict]:
-    logits, labels = eval_pred.predictions, eval_pred.label_ids
-    shift_logits = logits[..., :-1, :]
-    shift_labels = labels[..., 1:]
-    valid_masks = torch.where(shift_labels != -100, 1, 0)
-    evaluator.update(shift_logits, shift_labels, valid_masks)
-    if compute_result:
-        return evaluator.compute()
-
-
-# def compute_metrics(eval_pred: EvalPrediction) -> dict:
-#     """
-#     Custom metrics function for the trainer
-#     Args:
-#         eval_pred: tuple of predictions and labels
-#     Returns:
-#         dictionary containing metric names (str) and values (Any)
-#     """
-#     # compute per token accuracy
-#     # logits, labels = eval_pred.predictions, eval_pred.label_ids
-#     # shift_logits = logits[..., :-1, :]
-#     pred_ids, labels = eval_pred.predictions, eval_pred.label_ids
-#     shift_pred_ids = pred_ids[..., :-1]
-#     shift_labels = labels[..., 1:]
-#     valid_masks = np.where(shift_labels != -100, 1, 0)
-
-#     per_token_acc = compute_per_token_acc(shift_pred_ids, shift_labels, valid_masks)
-#     prefix_matching = compute_prefix_matching(shift_pred_ids, shift_labels, valid_masks)
-#     # entropy = compute_entropy(shift_logits, shift_labels, valid_masks)
-#     return dict(
-#         **per_token_acc,
-#         **prefix_matching,
-#         # **entropy,
-#         num_valid_tokens=valid_masks.sum(),
-#         num_samples=valid_masks.shape[0],
-#     )
-
-
-# # https://discuss.huggingface.co/t/cuda-out-of-memory-when-using-trainer-with-compute-metrics/2941/13
-# def preprocess_logits_for_metrics(logits, labels):
-#     """
-#     Original Trainer may have a memory leak.
-#     This is a workaround to avoid storing too many tensors that are not needed.
-#     """
-#     pred_ids = torch.argmax(logits, dim=-1)
-#     return pred_ids
 
 
 def main():
@@ -302,7 +152,6 @@ def main():
     save_yaml(args, f"{output_dir}/args.yaml")
 
     ############ Model setup
-
     if not ctx_args.from_pretrained_checkpoint:
         model_name = model_args.model_name_or_path
         model, tokenizer = get_model_and_tokenizer(
@@ -364,6 +213,10 @@ def main():
             raise ValueError("ctx_encoder contains trainable parameters")
         if len([p for p in model.base_model.parameters() if p.requires_grad]):
             raise ValueError("base model contains trainable parameters")
+        # we can't compile the base model bc we will be
+        # adding/removing forward hooks during training
+        model.hypernet = torch.compile(model.hypernet)
+        model.ctx_encoder = torch.compile(model.ctx_encoder)
     else:
         # activate LoRA
         base_model_config = AutoConfig.from_pretrained(
@@ -372,29 +225,27 @@ def main():
         base_model_config.save_pretrained(output_dir)
         logger.info("Using LoRA")
         model.set_adapter("default")
+        model = torch.compile(model)
 
     model.train()
     logger.debug(model)
     log_num_train_params(model)
 
-    # model = accelerator.prepare(model)
-
     ############ Dataset setup
-
     logger.info("Loading dataset...")
 
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
-    # tokenizer_kwargs = {"max_length": ctx_args.max_base_len}
-    # ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
+    tokenizer_kwargs = {"max_length": ctx_args.max_base_len}  # not used
+    ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
-        tokenizer_kwargs={},
+        tokenizer_kwargs=tokenizer_kwargs,
         ctx_model_max_len=model.ctx_encoder.config.max_position_embeddings,
         ctx_tokenizer=ctx_tokenizer,
-        ctx_tokenizer_kwargs={},
+        ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
         add_negative_prompt=ctx_args.add_negative_prompt,
@@ -411,7 +262,6 @@ def main():
             continue
         streaming = (split == "train") and data_args.streaming
         for ds_name in ds_names:
-            # with accelerator.main_process_first():
             ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
             tokenized_ds[split][os.path.basename(ds_name)] = ds
 
@@ -431,86 +281,50 @@ def main():
             val_indices = np.random.permutation(len(ds))[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
-    max_steps = ceil(
-        sum([DS_LEN[ds] for ds in train_ds])
-        * training_args.num_train_epochs
-        / training_args.per_device_train_batch_size
-        / training_args.gradient_accumulation_steps
-        / training_args.world_size
-    )
-    training_args.max_steps = max_steps
+    if data_args.streaming:
+        max_steps = ceil(
+            sum(DS_LEN[ds] for ds in train_ds)
+            * training_args.num_train_epochs
+            / training_args.per_device_train_batch_size
+            / training_args.gradient_accumulation_steps
+            / training_args.world_size
+        )
+        training_args.max_steps = max_steps
 
-    # interleaving streaming datasets
-    # simplify the probs for smaller datasets
-    # slightly upsample those datasets
-    probs = [
-        0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
-        for ds_name in train_ds
-    ]
-    train_ds = interleave_datasets(
-        list(train_ds.values()),
-        probabilities=probs,
-        stopping_strategy="all_exhausted",
-        seed=training_args.seed,
-    )
+        # interleaving streaming datasets
+        # simplify the probs for smaller datasets
+        # slightly upsample those datasets
+        probs = [
+            0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
+            for ds_name in train_ds
+        ]
+        train_ds = interleave_datasets(
+            list(train_ds.values()),
+            probabilities=probs,
+            stopping_strategy="all_exhausted",
+            seed=training_args.seed,
+        )
+    else:
+        train_ds_len = [len(ds) for ds in train_ds.values()]
+        total_len = sum(train_ds_len)
+        max_steps = ceil(
+            total_len
+            * training_args.num_train_epochs
+            / training_args.per_device_train_batch_size
+            / training_args.gradient_accumulation_steps
+            / training_args.world_size
+        )
+        training_args.max_steps = max_steps
+        train_ds = interleave_datasets(
+            list(train_ds.values()),
+            probabilities=[l / total_len for l in train_ds_len],
+            seed=training_args.seed,
+        )
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
-    flattener = DataCollatorWithFlattening()
 
-    def train_packed_collator(inp_list):
-        # no padding
-        packed_inputs = flattener(inp_list, return_tensors="pt")
-        if "ctx_ids" in inp_list[0]:
-            ctx_ids = [{"input_ids": example["ctx_ids"]} for example in inp_list]
-            packed_ctx = flattener(ctx_ids, return_tensors="pt")
-            packed_inputs["ctx_ids"] = packed_ctx["input_ids"]
-            packed_inputs["ctx_position_ids"] = packed_ctx["position_ids"]
-        return packed_inputs
-
-    def train_collator(inp_list, tokenizer):
-        # input is a list of tokenized sequences
-        padding_kwargs = dict(
-            padding=True,
-            padding_side="right",
-            pad_to_multiple_of=8,
-            return_tensors="pt",
-        )
-
-        ctx_ids = None
-        if "ctx_ids" in inp_list[0]:
-            # have to be manual since it has [ctx_len, features] shape
-            # pad to the longest ctx_len in the batch
-            # which can have a different length from the input_ids, attn_mask, labels
-
-            ctx_ids = [example.pop("ctx_ids") for example in inp_list]
-            ctx_ids = torch.nn.utils.rnn.pad_sequence(
-                ctx_ids,
-                batch_first=True,
-                padding_value=0,
-            )
-            # exotic keys won't be padded, so we need to pad them as well
-            ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
-            ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
-                ctx_attn_mask,
-                batch_first=True,
-                padding_value=0,
-            )
-
-        labels = [x.pop("labels") for x in inp_list]
-        padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
-
-        # hacky explicit padding since the labels are not padded by default
-        labels = tokenizer.pad({"input_ids": labels}, **padding_kwargs)["input_ids"]
-        labels = torch.where(padded_seq["attention_mask"] == 0, -100, labels)
-        out = {**padded_seq, "labels": labels}
-        if ctx_ids is not None:
-            out["ctx_ids"] = ctx_ids
-            out["ctx_attn_mask"] = ctx_attn_mask
-
-        return out
-
-    train_collator = (
+    collator = (
         train_packed_collator
         if ctx_args.use_sequence_packing
         else partial(train_collator, tokenizer=tokenizer)
@@ -553,20 +367,16 @@ def main():
 
     train_model(
         model,
-        # tokenizer,
         training_args,
         train_ds,
         val_ds,
-        train_collator,
-        # partial(generation_collator, tokenizer=tokenizer),
+        collator,
         compute_metrics=partial(
             compute_metrics,
             evaluator=Evaluator(
                 [compute_per_token_acc, compute_prefix_matching, compute_perplexity]
             ),
         ),
-        # max_new_tokens=ctx_args.max_new_tokens,
-        # gen_per_device_eval_batch_size=ctx_args.gen_per_device_eval_batch_size,
     )
     logger.info(f"Training run finished and saved to {output_dir}")
 
@@ -574,6 +384,7 @@ def main():
 if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["WANDB_DIR"] = ".wandb/"
     os.environ["WANDB_PROJECT"] = "ctx_to_lora"
     os.environ["WANDB_WATCH"] = ""  # "all"
     os.environ["WANDB_CONSOLE"] = "off"
@@ -581,9 +392,9 @@ if __name__ == "__main__":
     # os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
     os.environ["OMP_NUM_THREADS"] = "23"
     # os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "137438953472"  # 128 TB
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch._dynamo.config.capture_scalar_outputs = True
     if os.getenv("DEBUG", False):
         disable_caching()
-    # randomly sleep to avoid run_name collision
-    # time.sleep(random.random() * 13)
-    # set_start_method("spawn", force=True)
     main()

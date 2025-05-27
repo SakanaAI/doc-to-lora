@@ -2,22 +2,18 @@
 # not using watchdog because there are too many saved files
 # but we want to just watch when these files are created
 # */checkpoints/it_*/hypermod.pt (for HyperLoRA)
-import itertools
-import shutil
-import time
-import os
 import argparse
 import gc
+import itertools
+import os
+import time
 from glob import glob
 
-import numpy as np
-import pandas as pd
-import wandb
-import yaml
 import torch
+import yaml
 
+import wandb
 from eval import evaluate
-
 
 CP_PATTERN = "train_outputs/runs/*/checkpoint*/pytorch_model.bin"
 
@@ -55,11 +51,13 @@ class Watcher:
     def load_state(self):
         if not os.path.exists("watcher_state.yaml"):
             return
-        with open("watcher_state.yaml", "r") as f:
+        with open("watcher_state.yaml") as f:
             state = yaml.safe_load(f)
         self.last_files = state["last_files"]
 
 
+# TODO: run eval on "validation" split during training
+# using function from `src/ctx-to-lora/eval.py`
 if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
@@ -94,9 +92,7 @@ if __name__ == "__main__":
             run_dir = file.split("/checkpoint")[0]
             cur_it = int(file.split("checkpoint-")[1].split("/")[0])
             checkpoint_dir = os.path.dirname(file)
-            args = argparse.Namespace(
-                **yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r"))
-            )
+            args = argparse.Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
             args.output_dir = f"{run_dir}/eval-results-{cur_it}"
             args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
             args.run_name = run_dir.split("/")[-1]
