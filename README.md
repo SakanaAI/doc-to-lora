@@ -1,5 +1,6 @@
-# `Ctx-to-LoRA`: Compressing Context Information to LoRAs 🧠
 <div align="center">
+    <h1>Ctx-to-LoRA</h1>
+    <br>
     <img height="500px" src="assets/cover.png" />
 </div>
 
@@ -13,7 +14,7 @@
 WANDB_MODE=disabled python hyperlora/intx_sft.py configs/default.yaml --model_name_or_path=meta-llama/Llama-3.2-1B-Instruct --num_train_epochs=50 --per_device_train_batch_size=128 --per_device_eval_batch_size=128 --exp_setup=lora --train_ds_name=data/raw_datasets/context_numbers_small
 ``` -->
 
-## 🚀 `Ctx-to-LoRA` API
+## 🚀 API Usage [WIP]
 ```python
 from ctx_to_lora.modeling import ModulatedPretrainedModel
 model = ModulatedPretrainedModel.from_state_dict(...)
