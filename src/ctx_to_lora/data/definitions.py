@@ -8,9 +8,39 @@ FW_QA_PATHS = [
 
 TRANSFORMED_DATA_DIR = "data/processed_datasets"
 
+REPEAT_PROMPTS = [
+    "Repeat the text.",
+    "Repeat the text above.",
+    "Repeat the above text.",
+    "Repeat exactly what was written.",
+    "Duplicate the text.",
+    "Echo the text. Do not output other words.",
+    "Repeat the content provided.",
+    "Copy the content. Reply with just the content.",
+    "Repeat what you see above. Avoid explanation.",
+    "Replicate the given text precisely.",
+    "Repeat the entire passage.",
+    "Duplicate exactly the provided text.",
+    "Repeat the text that appears above.",
+    "Reproduce exactly what appears above.",
+    "Repeat the article.",
+    "Repeat verbatim the given text.",
+    "Output the same text as shown.",
+    "Output an exact copy of all of the content.",
+    "Provide a replica of the text.",
+    "Output an identical copy of the text.",
+    "Repeat the content without any changes.",
+    "Repeat the provided text.",
+    "Repeat the provided text above.",
+    "Repeat precisely what is written in the text above.",
+]
+
 # approximate length of the datasets (train split)
 # needed for streaming datasets
 DS_LEN = {
+    "fw_qa_3_intx_pretrain": 90_000_000,
+    "fw_qa_3_intx_pretrain_medium": 40_000_000,
+    "fw_qa_3_intx_pretrain_mini": 100_000,
     "fw_qa_3_mini": 100_000,
     "fw_qa_3_medium": 121_000_000,
     "fw_qa_3": 270_000_000,
@@ -78,42 +108,6 @@ DS_KWARGS = {
         validation=dict(path="rajpurkar/squad", split="train[:900]"),
         test=dict(path="rajpurkar/squad", split="validation"),
     ),
-    # "fw_qa_tiny": dict(
-    #     train=dict(
-    #         path="parquet",
-    #         data_files="data/raw_datasets/fw_qa/00000.parquet",
-    #         split="train",
-    #     ),
-    #     validation=dict(
-    #         path="parquet",
-    #         data_files="data/raw_datasets/fw_qa/00000_val.parquet",
-    #         split="train",
-    #     ),
-    # ),
-    # "fw_qa": dict(
-    #     train=dict(
-    #         path="parquet",
-    #         data_files=FW_QA_PATHS,
-    #         split="train",
-    #     ),
-    #     validation=dict(
-    #         path="parquet",
-    #         data_files="data/raw_datasets/fw_qa/*_val.parquet",
-    #         split="train",
-    #     ),
-    # ),
-    # "fw_qa_large": dict(
-    #     train=dict(
-    #         path="parquet",
-    #         data_files=glob("data/raw_datasets/fw_qa_large/*res.parquet"),
-    #         split="train",
-    #     ),
-    #     validation=dict(
-    #         path="parquet",
-    #         data_files=glob("data/raw_datasets/fw_qa_large/*val.parquet"),
-    #         split="train",
-    #     ),
-    # ),
     "fw_qa_xl": dict(
         train=dict(
             path="parquet",
@@ -133,18 +127,6 @@ DS_KWARGS = {
             split="train",
         ),
     ),
-    # "fw_qa_2": dict(
-    #     train=dict(
-    #         path="parquet",
-    #         data_files=glob("data/raw_datasets/fw_qa_2/*[!val].parquet"),
-    #         split="train",
-    #     ),
-    #     validation=dict(
-    #         path="parquet",
-    #         data_files=glob("data/raw_datasets/fw_qa_2/*val.parquet"),
-    #         split="train",
-    #     ),
-    # ),
     "fw_qa_3_mini": dict(
         train=dict(
             path="parquet",
@@ -168,6 +150,34 @@ DS_KWARGS = {
         validation=dict(
             path="parquet",
             data_files=glob("data/raw_datasets/fw_qa_3/*val.parquet"),
+            split="train",
+        ),
+    ),
+    "fw_qa_3_intx_pretrain_mini": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/000_00001.parquet"),
+            split="train[:100000]",
+        )
+    ),
+    "fw_qa_3_intx_pretrain_medium": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob(
+                "data/raw_datasets/fw_qa_intx_pretrain/00[0-5]*[!val].parquet"
+            ),
+            split="train",
+        )
+    ),
+    "fw_qa_3_intx_pretrain": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*[!val].parquet"),
+            split="train",
+        ),
+        validation=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*val.parquet"),
             split="train",
         ),
     ),

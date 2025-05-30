@@ -326,6 +326,12 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to add repeat prompt to the dataset."},
     )
+    repeat_prob: float = field(
+        default=0.0,
+        metadata={
+            "help": "Probability that a context will be used with repeat prompts."
+        },
+    )
     add_negative_prompt: bool = field(
         default=False,
         metadata={"help": "Whether to add negative prompt to the dataset."},

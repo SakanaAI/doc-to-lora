@@ -16,6 +16,7 @@ from ctx_to_lora.data.definitions import (
     DS_KWARGS,
     EVAL_INTX_TEMPLATES,
     IGNORE_INDEX,
+    REPEAT_PROMPTS,
     TRANSFORMED_DATA_DIR,
 )
 from ctx_to_lora.utils import TRAINING_TASK
@@ -28,6 +29,10 @@ logger = logging.getLogger()
 def closed_qa_prompting(prompt: str):
     template = random.choice(CLOSED_QA_INTX_TEMPLATES)
     return template.format(input=prompt)
+
+
+def get_repeat_prompt():
+    return random.choice(REPEAT_PROMPTS)
 
 
 # TODO: dont use closed_qa_prompting when training on self-generated responses
@@ -210,6 +215,17 @@ def get_preprocessing_fn(
                 "response": sample["answer"],
             }
 
+    # elif "intx_pretrain" in ds_name:
+    #     # concat ctx and QAs
+    #     # use all as labels
+    #     # what about prefix??
+    #     # neede for pre-training style lm objective
+    #     def f(sample):
+    #         return {
+    #             "context": sample["context"],
+    #             "prompt": sample["context"] + sample["qas"],
+    #         }
+
     if is_eval and ds_name in EVAL_INTX_TEMPLATES:
         prompt_template = EVAL_INTX_TEMPLATES[ds_name]
 
@@ -273,22 +289,24 @@ def filter_long_chat(samples):
     return [len(chat) < 2**13 for chat in samples["chat"]]
 
 
-def add_repeat_prompt_fn(samples):
+def add_repeat_prompt_fn(samples: dict[str, list[str]], prob: float):
     unique_contexts = set()
     ctxs, prompts, responses = [], [], []
     for ctx, prompt, response in zip(
         samples["context"], samples["prompt"], samples["response"]
     ):
+        if random.random() > prob:
+            continue
         # Only process if the context is not already in the set
         if ctx in unique_contexts:
             continue
-        # remove too long contexts
-        if len(ctx) > 1000:
-            continue
+        # # remove too long contexts
+        # if len(ctx) > 1000:
+        #     continue
         unique_contexts.add(ctx)
         ctxs.append(ctx)
         responses.append(ctx)
-        prompts.append("Repeat the text above.")
+        prompts.append(get_repeat_prompt())
 
     logger.debug("Adding repeat prompt...")
     logger.debug(f"# unique contexts: {len(unique_contexts)}")
@@ -371,6 +389,7 @@ def _load_and_process_dataset(
     split: str,
     add_negative_prompt: bool,
     add_repeat_prompt: bool,
+    repeat_prob: float,
     streaming: bool,
     ds_path: str,
     num_proc: int,
@@ -428,9 +447,9 @@ def _load_and_process_dataset(
                 num_proc=num_proc,
             )
         if add_repeat_prompt and "context_numbers" not in ds_name:
-            # TODO: convert to AE/LM
             ds = ds.map(
                 add_repeat_prompt_fn,
+                fn_kwargs={"prob": repeat_prob},
                 batched=True,
                 batch_size=100_000,
                 num_proc=num_proc,
@@ -452,20 +471,24 @@ def get_tokenized_dataset(
     add_repeat_prompt: bool,
     add_negative_prompt: bool,
     use_kl_loss: bool,
+    repeat_prob: float = 0.0,  # only used when add_repeat_prompt is True
     set_format: str | None = None,
     streaming: bool = False,
 ) -> dict[str, Any]:
-    # TODO: update hash function to include max_len
-    # TODO: max_len could be included in the kwargs
     assert not use_kl_loss, "KL loss is deprecated"
+    if add_repeat_prompt:
+        assert repeat_prob > 0, f"add_repeat_prompt is set but repeat_prob = 0"
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat and bool(ctx_model_max_len)
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,
         split=split,
+        base_model_max_len=base_model_max_len,
+        ctx_model_max_len=ctx_model_max_len,
         add_negative_prompt=add_negative_prompt,
         add_repeat_prompt=add_repeat_prompt,
+        repeat_prob=repeat_prob,
         streaming=streaming,
     )
     num_proc = None if streaming and split == "train" else 8
