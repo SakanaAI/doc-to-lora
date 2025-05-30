@@ -18,6 +18,7 @@ from transformers import (
 from transformers.utils import is_liger_kernel_available
 
 import wandb
+
 from ctx_to_lora.configs import (
     AggregatorArguments,
     ArgumentParser,
@@ -216,7 +217,6 @@ def main():
         # we can't compile the base model bc we will be
         # adding/removing forward hooks during training
         model.hypernet = torch.compile(model.hypernet)
-        model.ctx_encoder = torch.compile(model.ctx_encoder)
     else:
         # activate LoRA
         base_model_config = AutoConfig.from_pretrained(
@@ -248,6 +248,7 @@ def main():
         ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
         add_repeat_prompt=ctx_args.add_repeat_prompt,
+        repeat_prob=ctx_args.repeat_prob,
         add_negative_prompt=ctx_args.add_negative_prompt,
         use_kl_loss=ctx_args.use_kl_loss,
         set_format=None if ctx_args.use_sequence_packing else "pt",
@@ -281,45 +282,45 @@ def main():
             val_indices = np.random.permutation(len(ds))[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
-    if data_args.streaming:
-        max_steps = ceil(
-            sum(DS_LEN[ds] for ds in train_ds)
-            * training_args.num_train_epochs
-            / training_args.per_device_train_batch_size
-            / training_args.gradient_accumulation_steps
-            / training_args.world_size
-        )
-        training_args.max_steps = max_steps
+    # if data_args.streaming:
+    max_steps = ceil(
+        sum(DS_LEN[ds] for ds in train_ds)
+        * training_args.num_train_epochs
+        / training_args.per_device_train_batch_size
+        / training_args.gradient_accumulation_steps
+        / training_args.world_size
+    )
+    training_args.max_steps = max_steps
 
-        # interleaving streaming datasets
-        # simplify the probs for smaller datasets
-        # slightly upsample those datasets
-        probs = [
-            0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
-            for ds_name in train_ds
-        ]
-        train_ds = interleave_datasets(
-            list(train_ds.values()),
-            probabilities=probs,
-            stopping_strategy="all_exhausted",
-            seed=training_args.seed,
-        )
-    else:
-        train_ds_len = [len(ds) for ds in train_ds.values()]
-        total_len = sum(train_ds_len)
-        max_steps = ceil(
-            total_len
-            * training_args.num_train_epochs
-            / training_args.per_device_train_batch_size
-            / training_args.gradient_accumulation_steps
-            / training_args.world_size
-        )
-        training_args.max_steps = max_steps
-        train_ds = interleave_datasets(
-            list(train_ds.values()),
-            probabilities=[l / total_len for l in train_ds_len],
-            seed=training_args.seed,
-        )
+    # interleaving streaming datasets
+    # simplify the probs for smaller datasets
+    # slightly upsample those datasets
+    probs = [
+        0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
+        for ds_name in train_ds
+    ]
+    train_ds = interleave_datasets(
+        list(train_ds.values()),
+        probabilities=probs,
+        stopping_strategy="all_exhausted",
+        seed=training_args.seed,
+    )
+    # else:
+    #     train_ds_len = [len(ds) for ds in train_ds.values()]
+    #     total_len = sum(train_ds_len)
+    #     max_steps = ceil(
+    #         total_len
+    #         * training_args.num_train_epochs
+    #         / training_args.per_device_train_batch_size
+    #         / training_args.gradient_accumulation_steps
+    #         / training_args.world_size
+    #     )
+    #     training_args.max_steps = max_steps
+    #     train_ds = interleave_datasets(
+    #         list(train_ds.values()),
+    #         probabilities=[l / total_len for l in train_ds_len],
+    #         seed=training_args.seed,
+    #     )
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
