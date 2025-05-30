@@ -5,13 +5,12 @@ openai_batches/
 models/
 results/
 datasets/
-data/
+/data/
 __pycache__/
 *egg-info/
 .vscode/
 .ipynb_checkpoints/
 wandb/
-data/
 *.bak
 *outputs/
 plots/

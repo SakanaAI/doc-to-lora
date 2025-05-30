@@ -27,6 +27,7 @@ input_ids = model.tokenize(query)
 outputs = model.generate(ctx_ids, input_ids)
 print(model.decode(outputs))
 ```
+
 ## 🏋️ Training
 ### 🔢 HyperLoRA w/ context_numbers_10
 ```bash
@@ -37,15 +38,41 @@ WANDB_MODE=disabled uv run python intx_sft.py configs/context_numbers_10.yaml --
 ```bash
 WANDB_MODE=disabled run python hyperlora/intx_sft.py configs/context_numbers_128.yaml --model_name_or_path=meta-llama/Llama-3.2-1B-Instruct --num_train_epochs=10 --per_device_train_batch_size=64 --per_device_eval_batch_size=8 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj
 ``` -->
+### Favourite numbers data generation
+```bash
+uv run python data/generate_fav_num.py
+# or
+uv run python data/generate_fav_num_big.py
+```
 
-### Generate fineweb qa
+
+### Data Generation
 ```bash
 # this might take several days...
 # python process_fineweb.py
 # python generate_fw_qa.py
 # python post_process_fw_qa.py
 conda activate vllm;
-vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 run python generate_fw_edu_qa_vllm.py "0*_*" 3
+# [WIP] download fineweb-edu
+vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python generate_fw_edu_qa_vllm.py "0*_*" 3
+# [WIP] there are other datasets where we used openAI to gen QA pairs
+
+# self-generate SFT data
+# gemma-2-2b-it
+vllm_model=google/gemma-2-2b-it uv run python data/self_generate_qa.py "0*_*"
+# each context has 3 chat instances as training data
+# the responses are not the same as the ones in the pretraining though
+
+
+# pre-training data
+# better to include QAs at the end of pretrain docs
+# # https://arxiv.org/pdf/2406.14491
+uv run python data/generate_pretrain_from_fw_qa.py
+# we could do this online but
+# will have duplicate contexts (each context is used to generate 3 QA pairs)
+# better if we do this offline bc dedup the contexts
+
+
 ```
 
 <!-- 
