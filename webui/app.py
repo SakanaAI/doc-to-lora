@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from glob import glob
 
 import torch
@@ -9,7 +10,9 @@ from transformers import pipeline
 
 from ctx_to_lora.data.processing import tokenize_ctx_text
 from ctx_to_lora.model_loading import get_tokenizer
+from ctx_to_lora.modeling import hypernet
 
+sys.modules["ctx_to_lora.modeling_utils"] = hypernet
 app = Flask(__name__)
 
 TRAIN_OUTPUTS_DIR = "train_outputs/runs"
