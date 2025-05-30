@@ -543,9 +543,6 @@ def construct_and_tokenize_ctx_qa(
     set_format=None,
     num_proc=None,
 ):
-    is_eval = split != "train"
-    # TODO: update hash function to include max_len
-    # TODO: max_len could be included in the kwargs
     kwargs = dict(
         tokenizer=repr(tokenizer),
         tokenizer_kwargs=json.dumps(tokenizer_kwargs),
@@ -555,7 +552,7 @@ def construct_and_tokenize_ctx_qa(
         use_kl_loss=use_kl_loss,
         need_ctx_ids=need_ctx_ids,
         ds=ds._fingerprint,
-        # TODO: add split (after moving to continued pre-training pipeline)
+        split=split,
         set_format=set_format,
     )
     kwargs_str = json.dumps(kwargs)
