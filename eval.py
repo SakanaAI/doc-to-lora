@@ -4,13 +4,16 @@ import logging
 import os
 import re
 import string
+import sys
 from argparse import Namespace
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import fields
 from functools import partial
+from typing import Any
 
 import numpy as np
+import pandas as pd
 import torch
 import yaml
 from datasets import disable_caching
@@ -30,7 +33,11 @@ from transformers.utils import is_liger_kernel_available
 from ctx_to_lora.data.definitions import LONGBENCH_E_TASKS, LONGBENCH_TASKS
 from ctx_to_lora.data.processing import get_tokenized_dataset
 from ctx_to_lora.model_loading import get_model, get_tokenizer
+from ctx_to_lora.modeling import hypernet
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
+
+# bandaid for loading old models (before restructure)
+sys.modules["ctx_to_lora.modeling_utils"] = hypernet
 
 logger = logging.getLogger()
 
@@ -121,7 +128,7 @@ def add_longbench_tasks(ds_names: list[str]):
 
 def compute_rouge(pred_texts, label_texts):
     out = defaultdict(list)
-    scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=False)
+    scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
     for pred_text, label_text in zip(pred_texts, label_texts):
         scores = scorer.score(pred_text, label_text)
         for k, v in scores.items():
@@ -231,6 +238,144 @@ def save_generated_text(samples, output_dir, split):
             f.write(json.dumps(sample) + "\n")
 
 
+def create_metrics_csv(
+    metrics_dict: dict[str, dict[str, Any]],
+    output_dir: str,
+    model_name: str,
+    is_hypernet_model: bool = False,
+    remove_context: bool = False,
+) -> None:
+    """
+    Create a human-readable CSV file from evaluation metrics with hierarchical columns.
+    One row per model with columns structured as task_metric_lengthgroup.
+
+    Args:
+        metrics_dict: Dictionary containing evaluation metrics for each dataset/split
+        output_dir: Directory to save the CSV file
+        model_name: Name of the model being evaluated
+        is_hypernet_model: Whether this is a hypernet/modulated model or base model
+        remove_context: Whether context was removed during evaluation
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Collect all unique metric names, length groups, and tasks
+    all_metrics = set()
+    all_length_groups = set()
+    all_tasks = set()
+
+    # FIXME: fix name split (currently wrong)
+    for split_name, metrics in metrics_dict.items():
+        task_name = split_name.split("_")[1] if "_" in split_name else split_name
+        all_tasks.add(task_name)
+
+        for metric_key in metrics.keys():
+            if not metric_key.startswith(split_name):
+                continue
+
+            # Skip timing and performance metrics that aren't evaluation results
+            if (
+                "model_preparation_time" in metric_key
+                or "steps_per_second" in metric_key
+                or "samples_per_second" in metric_key
+                or "runtime" in metric_key
+            ):
+                continue
+
+            # Remove the split prefix to get the actual metric name
+            metric_name = metric_key[len(split_name) + 1 :]
+
+            # Check if this is a length-specific metric
+            if "_len_" in metric_name:
+                base_metric, length_part = metric_name.split("_len_")
+                all_metrics.add(base_metric)
+                all_length_groups.add(length_part)
+            else:
+                all_metrics.add(metric_name)
+
+    # Add overall metric (no length grouping)
+    all_length_groups.add("overall")
+
+    # Sort for consistent ordering
+    all_metrics = sorted(all_metrics)
+
+    # Custom sorting for length groups to ensure proper numerical ordering
+    def sort_length_groups(length_group: str) -> tuple:
+        if length_group == "overall":
+            return (1, 0, 0)  # Put "overall" after numerical ranges
+        try:
+            # Parse "low-high" format
+            low, high = map(int, length_group.split("-"))
+            return (0, low, high)
+        except (ValueError, IndexError):
+            return (2, 0, 0)  # Put any malformed strings last
+
+    all_length_groups = sorted(list(all_length_groups), key=sort_length_groups)
+    all_tasks = sorted(all_tasks)
+
+    # Create single row with hierarchical columns
+    row_data = {
+        "model": model_name,
+        "model_type": "hypernet" if is_hypernet_model else "base",
+    }
+
+    # Create hierarchical column structure: task_metric_lengthgroup
+    for task in all_tasks:
+        # Find the corresponding split in metrics_dict
+        split_key = None
+        for split_name in metrics_dict.keys():
+            if task in split_name:
+                split_key = split_name
+                break
+
+        if split_key is None:
+            continue
+
+        metrics = metrics_dict[split_key]
+
+        # Determine if this task uses QA F1 or ROUGE metrics
+        is_qa_task = task in CLOSED_QA_DATASETS
+
+        for metric in all_metrics:
+            # Skip inappropriate metrics for the task type
+            if is_qa_task and metric.startswith("rougeL"):
+                continue
+            if not is_qa_task and metric.startswith("qa_f1"):
+                continue
+
+            for length_group in all_length_groups:
+                if length_group == "overall":
+                    # Look for metric without length suffix
+                    metric_key = f"{split_key}_{metric}"
+                    column_name = f"{task}_{metric}_overall"
+                else:
+                    # Look for metric with length suffix
+                    metric_key = f"{split_key}_{metric}_len_{length_group}"
+                    column_name = f"{task}_{metric}_{length_group}"
+
+                value = metrics.get(metric_key, "N/A")
+                # Handle None values and convert to string
+                if value is None or value == "None":
+                    value = "N/A"
+                elif isinstance(value, (int, float)):
+                    value = f"{value:.4f}"
+
+                row_data[column_name] = value
+
+    # Create DataFrame with single row
+    if len(row_data) > 2:  # More than just model and model_type
+        df = pd.DataFrame([row_data])
+
+        csv_filename = "evaluation_results"
+        if remove_context:
+            csv_filename += "_no_context"
+        csv_filename += ".csv"
+        csv_path = os.path.join(output_dir, csv_filename)
+        df.to_csv(csv_path, index=False)
+        print(f"Evaluation results saved to: {csv_path}")
+    else:
+        print("No evaluation data found to save to CSV")
+
+
 def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
     out = []
     for sample, pred_toks in zip(test_dataset, test_result.predictions):
@@ -292,9 +437,6 @@ def eval_generation(
         decoded_txts = decode_test_result(ds, eval_result, tokenizer, ctx_tokenizer)
         pred_texts = [txt["generated"] for txt in decoded_txts]
         label_texts = [txt["label"] for txt in decoded_txts]
-        rouge_metrics = compute_rouge(pred_texts, label_texts)
-        for k, v in rouge_metrics.items():
-            eval_result.metrics[f"{split_name}_{k}"] = v
 
         if ds_name in CLOSED_QA_DATASETS:
             print("Computing QA F1 Score")
@@ -304,15 +446,19 @@ def eval_generation(
             )
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
+        else:
+            rouge_metrics = compute_rouge(pred_texts, label_texts)
+            for k, v in rouge_metrics.items():
+                eval_result.metrics[f"{split_name}_{k}"] = v
 
         # Group by input length and compute metrics for each group
         length_bins = [(0, 511), (512, 1023), (1024, 2047), (2048, 4095), (4096, 8192)]
         # Ensure all keys for length metrics are present, even if a bin is empty
         for low, high in length_bins:
-            eval_result.metrics[f"{split_name}_rouge1.f1_len_{low}-{high}"] = "None"
-            eval_result.metrics[f"{split_name}_rougeL.f1_len_{low}-{high}"] = "None"
             if ds_name in CLOSED_QA_DATASETS:
                 eval_result.metrics[f"{split_name}_qa_f1_len_{low}-{high}"] = "None"
+            else:
+                eval_result.metrics[f"{split_name}_rougeL.f1_len_{low}-{high}"] = "None"
 
         grouped_texts = defaultdict(lambda: {"generated": [], "label": [], "count": 0})
         for txt in decoded_txts:
@@ -328,15 +474,17 @@ def eval_generation(
 
         for group_key, data in grouped_texts.items():
             if data["count"] > 0:
-                group_rouge_metrics = compute_rouge(data["generated"], data["label"])
-                for k, v in group_rouge_metrics.items():
-                    eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
-
                 if ds_name in CLOSED_QA_DATASETS:
                     group_qa_f1_metric = compute_qa_f1_score(
                         data["generated"], data["label"]
                     )
                     for k, v in group_qa_f1_metric.items():
+                        eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
+                else:
+                    group_rouge_metrics = compute_rouge(
+                        data["generated"], data["label"]
+                    )
+                    for k, v in group_rouge_metrics.items():
                         eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
 
         save_generated_text(
@@ -348,6 +496,43 @@ def eval_generation(
         eval_trainer.log_metrics(split_name, eval_result.metrics)
         eval_trainer.save_metrics(split_name, eval_result.metrics)
         clear_gpu()
+
+    # Create CSV summary of all evaluation results
+    if out:
+        # Determine model name and type based on the first model we can infer
+        model_name = "unknown_model"
+        is_hypernet = False
+
+        # Try to extract model name from the first split name or other context
+        if hasattr(eval_trainer.model, "base_model"):
+            if hasattr(eval_trainer.model.base_model, "config"):
+                model_name = getattr(
+                    eval_trainer.model.base_model.config,
+                    "name_or_path",
+                    getattr(
+                        eval_trainer.model.base_model.config, "_name_or_path", "unknown"
+                    ),
+                )
+            is_hypernet = hasattr(eval_trainer.model, "ctx_encoder")
+        elif hasattr(eval_trainer.model, "config"):
+            model_name = getattr(
+                eval_trainer.model.config,
+                "name_or_path",
+                getattr(eval_trainer.model.config, "_name_or_path", "unknown"),
+            )
+
+        # Clean up model name for display
+        if "/" in model_name:
+            model_name = model_name.split("/")[-1]
+
+        create_metrics_csv(
+            out,
+            output_dir=eval_trainer.args.output_dir,
+            model_name=model_name,
+            is_hypernet_model=is_hypernet,
+            remove_context=remove_context,
+        )
+
     return out
 
 
