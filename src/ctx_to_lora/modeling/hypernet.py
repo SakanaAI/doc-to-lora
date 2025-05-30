@@ -437,7 +437,7 @@ class HyperLoRA(nn.Module):
         #             hidden_size=self.config.base_hidden_size,
         #         )
 
-    # @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
     ) -> dict[str, dict[str, Float[Tensor, "bs n_layers r _"]]]:
@@ -491,7 +491,7 @@ class HyperLoRA(nn.Module):
         )
         return {k: v for k, v in zip(self.extra_modules, layernorms)}
 
-    # @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def forward(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
@@ -521,7 +521,7 @@ class HyperLoRA(nn.Module):
 
         return flat_loras, flat_layernorms
 
-    # @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def generate_weights(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
