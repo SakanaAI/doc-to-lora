@@ -254,18 +254,18 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
         # return DS_KWARGS[ds_name][split]
         kwargs = DS_KWARGS[ds_name][split]
 
-    # custom logic for slicing iterable datasets
-    take, skip = None, None
-    kw_split = kwargs["split"]
-    if ("[" in kw_split) and kw_split.endswith("]"):
-        kwargs["split"], slice = kw_split.split("[")
-        slice = slice.strip("]")
-        skip = slice.split(":")[0]
-        if skip:
-            kwargs["skip"] = int(skip)
-        take = slice.split(":")[1]
-        if take:
-            kwargs["take"] = int(take)
+    # # custom logic for slicing iterable datasets
+    # take, skip = None, None
+    # kw_split = kwargs["split"]
+    # if ("[" in kw_split) and kw_split.endswith("]"):
+    #     kwargs["split"], slice = kw_split.split("[")
+    #     slice = slice.strip("]")
+    #     skip = slice.split(":")[0]
+    #     if skip:
+    #         kwargs["skip"] = int(skip)
+    #     take = slice.split(":")[1]
+    #     if take:
+    #         kwargs["take"] = int(take)
     return kwargs
 
 
@@ -439,7 +439,9 @@ def _load_and_process_dataset(
         # TODO: drop samples or split into multiple contexts
         ds = ds.filter(filter_long_samples, batched=True, num_proc=num_proc)
         if add_negative_prompt:
-            # TODO: make explicit dataset for this
+            # TODO: add explicit dataset for this
+            # w/ qs that are answerable 0-shot
+            # here we add the context to the prompt
             ds = ds.map(
                 add_negative_prompt_fn,
                 batched=True,
@@ -484,8 +486,6 @@ def get_tokenized_dataset(
     load_and_process_kwargs = dict(
         ds_name=ds_name,
         split=split,
-        base_model_max_len=base_model_max_len,
-        ctx_model_max_len=ctx_model_max_len,
         add_negative_prompt=add_negative_prompt,
         add_repeat_prompt=add_repeat_prompt,
         repeat_prob=repeat_prob,
@@ -544,8 +544,10 @@ def construct_and_tokenize_ctx_qa(
     num_proc=None,
 ):
     kwargs = dict(
+        base_model_max_len=base_model_max_len,
         tokenizer=repr(tokenizer),
         tokenizer_kwargs=json.dumps(tokenizer_kwargs),
+        ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=repr(ctx_tokenizer),
         ctx_tokenizer_kwargs=json.dumps(ctx_tokenizer_kwargs),
         add_ctx_to_chat=add_ctx_to_chat,

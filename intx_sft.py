@@ -6,6 +6,7 @@ from math import ceil
 
 import numpy as np
 import torch
+import wandb
 from datasets import (
     disable_caching,
     interleave_datasets,
@@ -16,8 +17,6 @@ from transformers import (
     set_seed,
 )
 from transformers.utils import is_liger_kernel_available
-
-import wandb
 
 from ctx_to_lora.configs import (
     AggregatorArguments,
@@ -32,7 +31,6 @@ from ctx_to_lora.configs import (
     TrainingArguments,
 )
 from ctx_to_lora.data.collator import train_collator, train_packed_collator
-from ctx_to_lora.data.definitions import DS_LEN
 from ctx_to_lora.data.processing import get_tokenized_dataset
 from ctx_to_lora.metrics import (
     Evaluator,
@@ -63,6 +61,21 @@ from ctx_to_lora.utils import (
 logger = logging.getLogger()
 
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
+
+
+def get_ds_prob(train_ds_len: list[int], total_len: int):
+    # if a dataset is smaller than 1%, make it 1%
+    probs = [0 for _ in train_ds_len]
+    for i, ds_len in enumerate(train_ds_len):
+        if ds_len / total_len <= 0.01:
+            probs[i] = 0.01
+    res_probs = 1 - sum(probs)
+    res_total_len = sum([l for l in train_ds_len if l / total_len > 0.01])
+    for i, ds_len in enumerate(train_ds_len):
+        if ds_len / total_len > 0.01:
+            probs[i] = ds_len / res_total_len * res_probs
+    assert sum(probs) == 1
+    return probs
 
 
 def main():
@@ -283,44 +296,44 @@ def main():
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
     # if data_args.streaming:
+    # max_steps = ceil(
+    #     sum(DS_LEN[ds] for ds in train_ds)
+    #     * training_args.num_train_epochs
+    #     / training_args.per_device_train_batch_size
+    #     / training_args.gradient_accumulation_steps
+    #     / training_args.world_size
+    # )
+    # training_args.max_steps = max_steps
+
+    # # interleaving streaming datasets
+    # # simplify the probs for smaller datasets
+    # # slightly upsample those datasets
+    # probs = [
+    #     0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
+    #     for ds_name in train_ds
+    # ]
+    # train_ds = interleave_datasets(
+    #     list(train_ds.values()),
+    #     probabilities=probs,
+    #     stopping_strategy="all_exhausted",
+    #     seed=training_args.seed,
+    # )
+    # else:
+    train_ds_len = [len(ds) for ds in train_ds.values()]
+    total_len = sum(train_ds_len)
     max_steps = ceil(
-        sum(DS_LEN[ds] for ds in train_ds)
+        total_len
         * training_args.num_train_epochs
         / training_args.per_device_train_batch_size
         / training_args.gradient_accumulation_steps
         / training_args.world_size
     )
     training_args.max_steps = max_steps
-
-    # interleaving streaming datasets
-    # simplify the probs for smaller datasets
-    # slightly upsample those datasets
-    probs = [
-        0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
-        for ds_name in train_ds
-    ]
     train_ds = interleave_datasets(
         list(train_ds.values()),
-        probabilities=probs,
-        stopping_strategy="all_exhausted",
+        probabilities=get_ds_prob(train_ds_len, total_len),
         seed=training_args.seed,
     )
-    # else:
-    #     train_ds_len = [len(ds) for ds in train_ds.values()]
-    #     total_len = sum(train_ds_len)
-    #     max_steps = ceil(
-    #         total_len
-    #         * training_args.num_train_epochs
-    #         / training_args.per_device_train_batch_size
-    #         / training_args.gradient_accumulation_steps
-    #         / training_args.world_size
-    #     )
-    #     training_args.max_steps = max_steps
-    #     train_ds = interleave_datasets(
-    #         list(train_ds.values()),
-    #         probabilities=[l / total_len for l in train_ds_len],
-    #         seed=training_args.seed,
-    #     )
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")

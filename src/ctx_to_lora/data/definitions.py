@@ -333,6 +333,26 @@ for ds_name in LONGBENCH_TASKS + LONGBENCH_E_TASKS:
         )
     )
 
+
+CLOSED_QA_DATASETS = {
+    "longbench/narrativeqa",
+    "longbench/qasper",
+    "longbench/multifieldqa_en",
+    "longbench/hotpotqa",
+    "longbench/2wikimqa",
+    "longbench/musique",
+    "hotpot_qa",
+    "squad",
+    "triviaqa_retrieved",
+    "negative_nq",
+}
+
+
+for ds_name in list(CLOSED_QA_DATASETS):
+    if ds_name.startswith("longbench/"):
+        CLOSED_QA_DATASETS.add(f"{ds_name}_e")
+
+
 # for training closed qa datasets, e.g., hotpot_qa, squad, etc.
 CLOSED_QA_INTX_TEMPLATES = [
     "Answer the question based on the given passages. Only give me the answer and do not output any other words.\n\nQuestion: {input}",

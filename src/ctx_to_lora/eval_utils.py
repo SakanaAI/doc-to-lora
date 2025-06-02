@@ -1,4 +1,3 @@
-import gc
 import json
 import logging
 import os
@@ -7,10 +6,8 @@ import string
 import sys
 from argparse import Namespace
 from collections import Counter, defaultdict
-from collections.abc import Callable
 from dataclasses import fields
 from functools import partial
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -18,9 +15,7 @@ import torch
 import yaml
 from datasets import disable_caching
 from peft import PeftModel
-from rouge_score import rouge_scorer
 from transformers import (
-    EvalPrediction,
     GenerationConfig,
     PreTrainedModel,
     Seq2SeqTrainer,
@@ -30,20 +25,31 @@ from transformers import (
 )
 from transformers.utils import is_liger_kernel_available
 
-from ctx_to_lora.data.definitions import LONGBENCH_E_TASKS, LONGBENCH_TASKS
+from ctx_to_lora.data.collator import eval_collator, generation_collator
+from ctx_to_lora.data.definitions import (
+    CLOSED_QA_DATASETS,
+    LONGBENCH_E_TASKS,
+    LONGBENCH_TASKS,
+)
 from ctx_to_lora.data.processing import get_tokenized_dataset
+from ctx_to_lora.metrics import (
+    Evaluator,
+    compute_metrics,
+    compute_per_token_acc,
+    compute_perplexity,
+    compute_prefix_matching,
+    compute_rouge,
+)
 from ctx_to_lora.model_loading import get_model, get_tokenizer
 from ctx_to_lora.modeling import hypernet
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
-
-# bandaid for loading old models (before restructure)
-sys.modules["ctx_to_lora.modeling_utils"] = hypernet
+from ctx_to_lora.utils import clear_gpu, setup_logging
 
 logger = logging.getLogger()
 
 
-# TODO: add negative samples eval (per-sample?)
-# TODO: add length info for more fine grain eval
+# bandaid for loading old models (before restructure)
+sys.modules["ctx_to_lora.modeling_utils"] = hypernet
 
 
 # longbench metrics
@@ -93,30 +99,6 @@ def compute_qa_f1_score(pred_texts: list[str], label_texts: list[str]):
     return dict(qa_f1=np.mean(res))
 
 
-CLOSED_QA_DATASETS = {
-    "longbench/narrativeqa",
-    "longbench/qasper",
-    "longbench/multifieldqa_en",
-    "longbench/hotpotqa",
-    "longbench/2wikimqa",
-    "longbench/musique",
-    "hotpot_qa",
-    "squad",
-    "triviaqa_retrieved",
-    "negative_nq",
-}
-
-for ds_name in list(CLOSED_QA_DATASETS):
-    CLOSED_QA_DATASETS.add(f"{ds_name}_e")
-
-
-def clear_gpu():
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_max_memory_allocated()
-    torch.cuda.reset_max_memory_cached()
-
-
 def add_longbench_tasks(ds_names: list[str]):
     if "longbench" in ds_names:
         ds_names.remove("longbench")
@@ -124,106 +106,6 @@ def add_longbench_tasks(ds_names: list[str]):
     if "longbench_e" in ds_names:
         ds_names.remove("longbench_e")
         ds_names += LONGBENCH_E_TASKS
-
-
-def compute_rouge(pred_texts, label_texts):
-    out = defaultdict(list)
-    scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-    for pred_text, label_text in zip(pred_texts, label_texts):
-        scores = scorer.score(pred_text, label_text)
-        for k, v in scores.items():
-            out[f"{k}.f1"].append(v.fmeasure)
-    for k in out:
-        out[k] = np.mean(out[k])
-    return out
-
-
-def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
-    indices = torch.where(valid_masks)
-    # acc = (shift_logits.argmax(-1) == shift_labels)[indices].float().mean().item()
-    # return {"per_token_acc": acc}
-    acc = (shift_logits.argmax(-1) == shift_labels)[indices].float()
-    return {
-        "per_token_accs": acc.flatten().tolist(),
-        "n_per_token_accs": valid_masks.sum().item(),
-    }
-
-
-def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
-    lengths = valid_masks.sum(dim=1)
-
-    is_wrong = (shift_logits.argmax(-1) != shift_labels) * valid_masks
-    is_correct = (shift_logits.argmax(-1) == shift_labels) * valid_masks
-    # NOTE: not reliable for multi-turn conversations
-    # ie, all tokens in the following user's turn will be correct
-    # still monotonically correlate with perf though
-    wrong_pos = torch.argmax(is_wrong, dim=1) - torch.argmax(valid_masks, dim=1)
-    perf = wrong_pos / lengths
-
-    # if all tokens are correct, set to 1
-    perf = torch.where(is_correct.sum(dim=1) == lengths, 1, perf)
-    # return {"prefix_matching": perf.mean().item()}
-    return {
-        "prefix_matchings": perf.tolist(),
-        "n_prefix_matchings": valid_masks.shape[0],
-    }
-
-
-@torch.no_grad()
-def compute_perplexity(shift_logits, shift_labels, valid_masks):
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
-    loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
-    # perplexity = torch.exp(loss).mean().item()
-    # return {"perplexity": perplexity}
-    preplexities = torch.exp(loss)
-    return {
-        "perplexities": preplexities.tolist(),
-        "n_perplexities": valid_masks.shape[0],
-    }
-
-
-class Evaluator:
-    def __init__(self, metric_fns: list[Callable]):
-        self.metric_fns = metric_fns
-        self.reset()
-
-    def reset(self):
-        self.accum_metrics = defaultdict(list)
-        self.count = defaultdict(list)
-
-    def update(self, shift_logits, shift_labels, valid_masks):
-        for metric_fn in self.metric_fns:
-            metric = metric_fn(shift_logits, shift_labels, valid_masks)
-            for k, v in metric.items():
-                if k.startswith("n_"):
-                    self.count[k[2:]].append(v)
-                else:
-                    self.accum_metrics[k] += v
-
-    def compute(self):
-        # Get result across entire eval set
-        result = {
-            k: np.sum(v) / np.sum(self.count[k]) for k, v in self.accum_metrics.items()
-        }
-        # Reset batch statistics
-        self.reset()
-        return result
-
-
-@torch.inference_mode()
-def compute_metrics(
-    eval_pred: EvalPrediction,
-    compute_result: bool,
-    evaluator: Evaluator,
-):
-    logits, labels = eval_pred.predictions, eval_pred.label_ids
-    shift_logits = logits[..., :-1, :]
-    shift_labels = labels[..., 1:]
-    valid_masks = torch.where(shift_labels != -100, 1, 0)
-    evaluator.update(shift_logits, shift_labels, valid_masks)
-    if compute_result:
-        return evaluator.compute()
 
 
 def save_generated_text(samples, output_dir, split):
@@ -239,7 +121,7 @@ def save_generated_text(samples, output_dir, split):
 
 
 def create_metrics_csv(
-    metrics_dict: dict[str, dict[str, Any]],
+    metrics_dict: dict[str, dict[str, any]],
     output_dir: str,
     model_name: str,
     is_hypernet_model: bool = False,
@@ -261,12 +143,10 @@ def create_metrics_csv(
     # Collect all unique metric names, length groups, and tasks
     all_metrics = set()
     all_length_groups = set()
-    all_tasks = set()
+    all_splits = set()
 
-    # FIXME: fix name split (currently wrong)
     for split_name, metrics in metrics_dict.items():
-        task_name = split_name.split("_")[1] if "_" in split_name else split_name
-        all_tasks.add(task_name)
+        all_splits.add(split_name)
 
         for metric_key in metrics.keys():
             if not metric_key.startswith(split_name):
@@ -310,7 +190,7 @@ def create_metrics_csv(
             return (2, 0, 0)  # Put any malformed strings last
 
     all_length_groups = sorted(list(all_length_groups), key=sort_length_groups)
-    all_tasks = sorted(all_tasks)
+    all_splits = sorted(all_splits)
 
     # Create single row with hierarchical columns
     row_data = {
@@ -319,16 +199,9 @@ def create_metrics_csv(
     }
 
     # Create hierarchical column structure: task_metric_lengthgroup
-    for task in all_tasks:
+    for task in all_splits:
         # Find the corresponding split in metrics_dict
-        split_key = None
-        for split_name in metrics_dict.keys():
-            if task in split_name:
-                split_key = split_name
-                break
-
-        if split_key is None:
-            continue
+        split_key = split_name
 
         metrics = metrics_dict[split_key]
 
@@ -553,113 +426,6 @@ def eval_teacher_forcing(eval_trainer, datasets, split, remove_context):
     return out
 
 
-def train_collator(inp_list, tokenizer):
-    # input is a list of tokenized sequences
-    padding_kwargs = dict(
-        padding=True,
-        padding_side="right",
-        pad_to_multiple_of=8,
-        return_tensors="pt",
-    )
-
-    ctx_ids = None
-    if "ctx_ids" in inp_list[0]:
-        # have to be manual since it has [ctx_len, features] shape
-        # pad to the longest ctx_len in the batch
-        # which can have a different length from the input_ids, attn_mask, labels
-
-        ctx_ids = [example.pop("ctx_ids") for example in inp_list]
-        ctx_ids = torch.nn.utils.rnn.pad_sequence(
-            ctx_ids,
-            batch_first=True,
-            padding_value=0,
-        )
-        # exotic keys won't be padded, so we need to pad them as well
-        ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
-        ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
-            ctx_attn_mask,
-            batch_first=True,
-            padding_value=0,
-        )
-
-    chat_ids = None
-    if "chat_ids" in inp_list[0]:
-        chat_ids = [x.pop("chat_ids") for x in inp_list]
-        chat_ids = torch.nn.utils.rnn.pad_sequence(
-            chat_ids,
-            batch_first=True,
-            padding_value=0,
-        )
-        chat_attn_mask = [x.pop("chat_attn_mask") for x in inp_list]
-        chat_attn_mask = torch.nn.utils.rnn.pad_sequence(
-            chat_attn_mask,
-            batch_first=True,
-            padding_value=0,
-        )
-        chat_labels = [x.pop("chat_labels") for x in inp_list]
-        chat_labels = torch.nn.utils.rnn.pad_sequence(
-            chat_labels,
-            batch_first=True,
-            padding_value=-100,
-        )
-        chat_labels = torch.where(chat_attn_mask == 0, -100, chat_labels)
-
-    labels = [x.pop("labels") for x in inp_list]
-    padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
-
-    # hacky explicit padding since the labels are not padded by default
-    labels = tokenizer.pad({"input_ids": labels}, **padding_kwargs)["input_ids"]
-    labels = torch.where(padded_seq["attention_mask"] == 0, -100, labels)
-    out = {**padded_seq, "labels": labels}
-    if ctx_ids is not None:
-        out["ctx_ids"] = ctx_ids
-        out["ctx_attn_mask"] = ctx_attn_mask
-    if chat_ids is not None:
-        out["chat_ids"] = chat_ids
-        out["chat_attn_mask"] = chat_attn_mask
-        out["chat_labels"] = chat_labels
-    return out
-
-
-def generation_collator(inp_list, tokenizer):
-    padding_kwargs = dict(padding=True, padding_side="left", return_tensors="pt")
-    input_ids = [x.pop("input_ids") for x in inp_list]
-    attn_mask = [x.pop("attention_mask") for x in inp_list]
-    labels = [x.pop("labels") for x in inp_list]
-    for i, label in enumerate(labels):
-        # remove the response tokens
-        idx = np.argmax(label != -100)
-        input_ids[i] = input_ids[i][:idx]
-        attn_mask[i] = attn_mask[i][:idx]
-    out = tokenizer.pad(
-        {"input_ids": input_ids, "attention_mask": attn_mask}, **padding_kwargs
-    )
-
-    # we don't include the labels in the output
-    # since we don't want to compute the loss on the labels
-    # during generation
-    if "ctx_ids" in inp_list[0]:
-        # have to be manual since it has [ctx_len, features] shape
-        # pad to the longest ctx_len in the batch
-        # which can have a different length from the input_ids, attn_mask, labels
-        ctx_ids = [example.pop("ctx_ids") for example in inp_list]
-        ctx_ids = torch.nn.utils.rnn.pad_sequence(
-            ctx_ids,
-            batch_first=True,
-            padding_value=0,
-        )
-        # exotic keys won't be padded, so we need to pad them as well
-        ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
-        ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
-            ctx_attn_mask,
-            batch_first=True,
-            padding_value=0,
-        )
-        out["ctx_ids"] = ctx_ids
-        out["ctx_attn_mask"] = ctx_attn_mask
-    return out
-
-
 def evaluate(
     checkpoint_path,
     model_name_or_path,
@@ -793,7 +559,7 @@ def evaluate(
 
     model.eval()
 
-    collator = generation_collator if generative else train_collator
+    collator = generation_collator if generative else eval_collator
 
     trainer_kwargs = {
         "model": model,
@@ -835,67 +601,25 @@ def evaluate(
     return out
 
 
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Evaluate a checkpoint")
-    parser.add_argument(
-        "--model_name_or_path",
-        type=str,
-        default=None,
-        help="Evaluate a base model from HuggingFace Hub, without loading checkpoint",
-    )
-    parser.add_argument(
-        "--checkpoint_path",
-        type=str,
-        default=None,
-        help="Path to the checkpoint to evaluate",
-    )
-    parser.add_argument(
-        "--split",
-        type=str,
-        choices=["validation", "test"],
-        default="validation",
-        help="Which split to evaluate on",
-    )
-    parser.add_argument(
-        "--datasets",
-        type=str,
-        nargs="+",
-        help=(
-            "Specific datasets to evaluate on."
-            "If not provided, uses default from args.yaml"
-        ),
-    )
-    parser.add_argument(
-        "--eval_batch_size",
-        type=int,
-        default=8,
-        help="Eval batch size for teacher forcing",
-    )
-    parser.add_argument(
-        "--eval_batch_size_gen",
-        type=int,
-        default=32,
-        help="Eval batch size for generation",
-    )
-    parser.add_argument(
-        "--remove_context",
-        action="store_true",
-        help="Remove context when evaluating the base model.",
-    )
-
-    cli_args = parser.parse_args()
+def run_eval(
+    checkpoint_path: str = None,
+    model_name_or_path: str = None,
+    datasets: list[str] = None,
+    split: str = "validation",
+    eval_batch_size: int = 8,
+    remove_context: bool = False,
+    generative: bool = False,
+):
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
 
-    assert bool(cli_args.model_name_or_path) ^ bool(cli_args.checkpoint_path), (
+    assert bool(model_name_or_path) ^ bool(checkpoint_path), (
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
 
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
-    os.environ["WANDB_MODE"] = "disabled"
+    # os.environ["WANDB_MODE"] = "disabled"
     disable_caching()
     set_seed(42)
     torch.use_deterministic_algorithms(True, warn_only=True)
@@ -905,51 +629,46 @@ if __name__ == "__main__":
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
 
-    if cli_args.checkpoint_path:
-        checkpoint_dir = "/".join(cli_args.checkpoint_path.split("/")[:-1])
-        run_dir = "/".join(cli_args.checkpoint_path.split("/")[:-2])
-        cur_it = int(cli_args.checkpoint_path.split("checkpoint-")[1].split("/")[0])
+    if checkpoint_path:
+        checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
+        run_dir = "/".join(checkpoint_path.split("/")[:-2])
+        cur_it = int(checkpoint_path.split("checkpoint-")[1].split("/")[0])
         args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
-        print(f"checkpoint_path: {cli_args.checkpoint_path}")
+        print(f"checkpoint_path: {checkpoint_path}")
         print(f"run_dir: {run_dir}")
 
         args.output_dir = f"{run_dir}/eval-results-{cur_it}"
         args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
         args.run_name = run_dir.split("/")[-1]
-        args.remove_context = False  # modulated model doesn't see ctx by default
+        # modulated model doesn't see ctx by default
+        # but remove_context has to be false for correct file naming
+        args.remove_context = False
     else:
         args = Namespace(
-            model_name_or_path=cli_args.model_name_or_path,
-            output_dir=f"eval_results/{cli_args.model_name_or_path}",
-            logging_dir=f"eval_results/{cli_args.model_name_or_path}",
-            run_name=f"eval_results/{cli_args.model_name_or_path}",
+            model_name_or_path=model_name_or_path,
+            output_dir=f"eval_results/{model_name_or_path}",
+            logging_dir=f"eval_results/{model_name_or_path}",
+            run_name=f"eval_results/{model_name_or_path}",
             # max_base_len=2**13,
             # max_ctx_len=-1,  # not used
             val_ds_names=[],
             test_ds_names=[],
-            remove_context=cli_args.remove_context,
+            remove_context=remove_context,
         )
+    setup_logging(args.logging_dir)
 
     # Override dataset names if provided via CLI
-    if cli_args.datasets:
-        if cli_args.split == "validation":
-            args.val_ds_names = cli_args.datasets
+    if datasets:
+        if split == "validation":
+            args.val_ds_names = datasets
         else:
-            args.test_ds_names = cli_args.datasets
+            args.test_ds_names = datasets
 
-    # evaluate(
-    #     cli_args.checkpoint_path,
-    #     cli_args.model_name_or_path,
-    #     cli_args.eval_batch_size,
-    #     args,
-    #     split=cli_args.split,
-    #     generative=False,
-    # )
     evaluate(
-        cli_args.checkpoint_path,
-        cli_args.model_name_or_path,
-        cli_args.eval_batch_size_gen,
+        checkpoint_path,
+        model_name_or_path,
+        eval_batch_size,
         args,
-        split=cli_args.split,
-        generative=True,
+        split,
+        generative=generative,
     )

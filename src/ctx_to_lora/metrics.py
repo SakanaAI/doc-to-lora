@@ -3,9 +3,23 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+from rouge_score import rouge_scorer
 from transformers import EvalPrediction
 
 
+def compute_rouge(pred_texts, label_texts):
+    out = defaultdict(list)
+    scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+    for pred_text, label_text in zip(pred_texts, label_texts):
+        scores = scorer.score(pred_text, label_text)
+        for k, v in scores.items():
+            out[f"{k}.f1"].append(v.fmeasure)
+    for k in out:
+        out[k] = np.mean(out[k])
+    return out
+
+
+@torch.inference_mode()
 def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
     indices = torch.where(valid_masks)
     acc = (shift_logits.argmax(-1) == shift_labels)[indices].float()
@@ -15,6 +29,7 @@ def compute_per_token_acc(shift_logits, shift_labels, valid_masks):
     }
 
 
+@torch.inference_mode()
 def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
     lengths = valid_masks.sum(dim=1)
 
@@ -34,7 +49,7 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
     }
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def compute_perplexity(shift_logits, shift_labels, valid_masks):
     loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
     loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)

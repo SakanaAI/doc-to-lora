@@ -59,6 +59,9 @@ exclude = [
     "plots",
     "tmp",
     "wandb",
+    ".wandb",
+    ".ruff_cache",
+    "assets",
 ]
 typeCheckingMode = "off"
 
@@ -69,6 +72,4 @@ ignore = ["E", "F"]
 
 [tool.isort]
 profile = "black"
-known_first_party = ["wandb"]
 known_local_folder = ["ctx_to_lora"]
-known_third_party = ["wandb"]

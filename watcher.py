@@ -1,19 +1,13 @@
-# handmade file watcher using glob
-# not using watchdog because there are too many saved files
-# but we want to just watch when these files are created
-# */checkpoints/it_*/hypermod.pt (for HyperLoRA)
-import argparse
-import gc
 import itertools
 import os
 import time
 from glob import glob
 
-import torch
+import wandb
 import yaml
 
-import wandb
-from eval import evaluate
+from ctx_to_lora.eval_utils import run_eval
+from ctx_to_lora.utils import clear_gpu
 
 CP_PATTERN = "train_outputs/runs/*/checkpoint*/pytorch_model.bin"
 
@@ -22,13 +16,9 @@ def flatten(l):
     return itertools.chain.from_iterable(l)
 
 
-def clear_gpu():
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_max_memory_allocated()
-    torch.cuda.reset_max_memory_cached()
-
-
+# handmade file watcher using glob
+# not using watchdog because there are too many saved files
+# but we want to just watch CP_PATTERN files
 class Watcher:
     def __init__(self, patterns):
         self.patterns = patterns
@@ -42,7 +32,7 @@ class Watcher:
         self.files = self.get_files()
         new_files = self.files - self.last_files
         self.last_files = self.files
-        return new_files
+        return sorted(list(new_files))
 
     def save_state(self):
         with open("watcher_state.yaml", "w") as f:
@@ -56,26 +46,11 @@ class Watcher:
         self.last_files = state["last_files"]
 
 
-# TODO: run eval on "validation" split during training
-# using function from `src/ctx-to-lora/eval.py`
 if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["WANDB_PROJECT"] = "ctx_to_lora"
-    os.environ["WANDB_WATCH"] = ""  # "all"
-    os.environ["WANDB_CONSOLE"] = "off"
-    # checkpoint_path = sys.argv[1]
-    # checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
-
-    # run_dir = "/".join(checkpoint_path.split("/")[:-2])
-    # args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml", "r")))
-    # print(f"checkpoint_path: {checkpoint_path}")
-    # print(f"run_dir: {run_dir}")
-    # # print(f"args: {args}")
-
-    # evaluate(checkpoint_path, args, split="validation", generative=False)
-    # evaluate(checkpoint_path, args, split="validation", generative=True)
 
     watcher = Watcher([CP_PATTERN])
     watcher.load_state()
@@ -90,25 +65,33 @@ if __name__ == "__main__":
                 # cp is delete before we can read it
                 continue
             run_dir = file.split("/checkpoint")[0]
-            cur_it = int(file.split("checkpoint-")[1].split("/")[0])
-            checkpoint_dir = os.path.dirname(file)
-            args = argparse.Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
-            args.output_dir = f"{run_dir}/eval-results-{cur_it}"
-            args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
-            args.run_name = run_dir.split("/")[-1]
-            print("Evaluating...")
-            print(f"checkpoint_dir: {checkpoint_dir}")
+            run_name = run_dir.split("/")[-1]
+            print(f"Evaluating {file}")
             curstep = int(file.split("checkpoint-")[1].split("/")[0])
             wandb_kwargs = {
                 "project": os.getenv("WANDB_PROJECT"),
-                "group": args.run_name,
-                "name": f"{args.run_name}-eval",
-                "id": f"{args.run_name}-eval",
+                "group": run_name,
+                "name": f"{run_name}-eval",
+                "id": f"{run_name}-eval",
                 "resume": "allow",
             }
             wandb.init(**wandb_kwargs)
-            metrics = evaluate(file, args, split="validation", generative=False)
-            gen_metrics = evaluate(file, args, split="validation", generative=True)
+
+            # TODO: have to change this for bigger models
+            eval_batch_size = 8
+            eval_batch_size_gen = 32
+            metrics = run_eval(
+                checkpoint_path=file,
+                eval_batch_size=eval_batch_size,
+                split="validation",
+                generative=False,
+            )
+            gen_metrics = run_eval(
+                checkpoint_path=file,
+                eval_batch_size=eval_batch_size_gen,
+                split="validation",
+                generative=True,
+            )
             metrics.update(gen_metrics)
             wandb.log(metrics, step=curstep)
             wandb.finish()
