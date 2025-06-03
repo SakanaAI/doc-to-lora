@@ -124,7 +124,7 @@ def self_generate(
         ds_name = os.path.basename(os.path.dirname(parquet_file))
         shard_name = "_" + os.path.basename(parquet_file).replace(".parquet", "")
     else:
-        ds_name = ds_name.replace("self_gen/", "")
+        ds_name = ds_name.split("/")[-1]  # Extract just the dataset name
 
         print(f"Loading dataset: {ds_name} with split: {split}")
         kwargs = dict(
