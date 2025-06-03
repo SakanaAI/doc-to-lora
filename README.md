@@ -49,7 +49,18 @@ WANDB_MODE=disabled uv run intx_sft.py configs/pwc_hotpot_qa.yaml \
 --add_repeat_prompt=False \
 --use_sequence_packing=True --per_rank_gen=True \
 --per_layer_processing=True \
---gen_lora_l1_reg_coef=0.1
+--gen_lora_l1_reg_coef=0.1 \
+```
+
+### HyperLoRA w/ self-gen 3 mini
+```bash
+# self-gen sft
+# 3_mini config
+uv run python data/self_generate_qa.py \
+--vllm_model=google/gemma-2-2b-it --config=configs/self_gen_3_mini.yaml
+
+
+uv run python intx_sft.py configs/self_gen_3_mini.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=10 --per_device_train_batch_size=32 --gradient_accumulation_steps=8 --per_device_eval_batch_size=32 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=8 --num_latent_factor=2 --lora_r=8 --eval_steps=5000 --save_steps=5000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --load_best_model_at_end=True --metric_for_best_model=pwc_loss --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1
 ```
 
 <!-- ### HyperLoRA w/ context_numbers_128
@@ -91,6 +102,10 @@ uv run python data/generate_pretrain_from_fw_qa.py
 # better if we do this offline bc dedup the contexts
 
 
+# self-gen sft
+# 3_mini config
+uv run python data/self_generate_qa.py \
+--vllm_model=google/gemma-2-2b-it --config=configs/self_gen_3_mini.yaml
 ```
 
 <!-- 
