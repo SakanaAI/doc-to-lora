@@ -279,7 +279,14 @@ def main():
         streaming = (split == "train") and data_args.streaming
         for ds_name in ds_names:
             ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
-            tokenized_ds[split][os.path.basename(ds_name)] = ds
+
+            base_name = os.path.basename(ds_name)
+            if ds_name.startswith("self_gen/"):
+                ds_name = "self_gen/" + base_name
+            else:
+                ds_name = base_name
+
+            tokenized_ds[split][ds_name] = ds
 
     train_ds = tokenized_ds["train"]
     logging.info(f"train_ds: {train_ds}")
