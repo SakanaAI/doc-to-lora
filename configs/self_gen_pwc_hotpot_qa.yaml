@@ -39,9 +39,9 @@ target_modules:
 
 # data
 train_ds_names:
-  - self_gen/pwc
-  - self_gen/hotpot_qa
+  - self_gen/google/gemma-2-2b-it/pwc
+  - self_gen/google/gemma-2-2b-it/hotpot_qa
 
 val_ds_names:
-  - self_gen/pwc
-  - self_gen/hotpot_qa
+  - self_gen/google/gemma-2-2b-it/pwc
+  - self_gen/google/gemma-2-2b-it/hotpot_qa

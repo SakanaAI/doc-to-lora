@@ -245,14 +245,8 @@ def get_preprocessing_fn(
 
 
 def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
-    if (ds_name not in DS_KWARGS) or (split not in DS_KWARGS[ds_name]):
-        kwargs = dict(path=ds_name, split=split)
-        logger.warning(
-            f"No dataset kwargs found for '{ds_name}' with split '{split}'.\n"
-            f"Using default kwargs: {kwargs}"
-        )
-    elif ds_name.startswith("self_gen/"):
-        # e.g., "self_gen/google/gemma-2-2b-it/pwc/val"
+    if ds_name.startswith("self_gen/"):
+        # e.g., "self_gen/google/gemma-2-2b-it/pwc"
         base_model_name = "/".join(ds_name.split("/")[1:-1])
         base_ds = ds_name.split("/")[-1]
         files = glob(
@@ -264,6 +258,12 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
                 f"in {SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/"
             )
         kwargs = dict(path="parquet", data_files=files, split="train")
+    elif (ds_name not in DS_KWARGS) or (split not in DS_KWARGS[ds_name]):
+        kwargs = dict(path=ds_name, split=split)
+        logger.warning(
+            f"No dataset kwargs found for '{ds_name}' with split '{split}'.\n"
+            f"Using default kwargs: {kwargs}"
+        )
     else:
         kwargs = DS_KWARGS[ds_name][split]
 
@@ -522,7 +522,7 @@ def get_tokenized_dataset(
         repeat_prob=repeat_prob,
         streaming=streaming,
     )
-    num_proc = None if streaming and split == "train" else 8
+    num_proc = None if streaming and split == "train" else 2
 
     ds = load_and_process_dataset(
         **load_and_process_kwargs,
