@@ -37,7 +37,6 @@ def get_repeat_prompt():
     return random.choice(REPEAT_PROMPTS)
 
 
-# TODO: dont use closed_qa_prompting when training on self-generated responses
 def get_preprocessing_fn(
     ds_name: str, is_eval: bool
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -77,7 +76,7 @@ def get_preprocessing_fn(
                 "response": sample["answer"],
             }
 
-    elif "squad" in ds_name:
+    elif ds_name.startswith("squad"):
 
         def f(sample):
             q = sample["question"]
