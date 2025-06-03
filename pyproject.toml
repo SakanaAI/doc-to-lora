@@ -29,6 +29,7 @@ dependencies = [
     "pandas",
     "plotly",
     "rouge-score",
+    "vllm==0.8.5",
 ]
 
 [build-system]
