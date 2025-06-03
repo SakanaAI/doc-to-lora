@@ -137,9 +137,12 @@ class TrainingArguments(TrainingArguments):
         default=True,
         metadata={"help": "Whether to use tf32 precision."},
     )
-    dataloader_pin_memory: bool = field(
-        default=True,
-        metadata={"help": "Whether to pin memory in data loaders or not."},
+    include_for_metrics: list[str] = field(
+        default=("inputs",),
+        metadata={
+            "help": "List of strings to specify additional data to include in the `compute_metrics` function."
+            "Options: 'inputs', 'loss'."
+        },
     )
     # mem leak if use persistent workers
     # https://github.com/pytorch/pytorch/issues/62066

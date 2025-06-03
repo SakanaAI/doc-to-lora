@@ -13,6 +13,12 @@ def train_packed_collator(inp_list):
         packed_ctx = flattener(ctx_ids, return_tensors="pt")
         packed_inputs["ctx_ids"] = packed_ctx["input_ids"]
         packed_inputs["ctx_position_ids"] = packed_ctx["position_ids"]
+        # for eval info
+        if "ctx_ids_len" in inp_list[0]:
+            packed_inputs["ctx_ids_len"] = [
+                example["ctx_ids_len"] for example in inp_list
+            ]
+
     return packed_inputs
 
 

@@ -33,6 +33,7 @@ from ctx_to_lora.data.definitions import (
 )
 from ctx_to_lora.data.processing import get_tokenized_dataset
 from ctx_to_lora.metrics import (
+    LENGTH_BINS,
     Evaluator,
     compute_metrics,
     compute_per_token_acc,
@@ -52,27 +53,32 @@ logger = logging.getLogger()
 sys.modules["ctx_to_lora.modeling_utils"] = hypernet
 
 
-# longbench metrics
-def normalize_answer(s):
+# ============================================================================
+# Metrics and Evaluation Utilities
+# ============================================================================
+
+
+def normalize_answer(s: str) -> str:
     """Lower text and remove punctuation, articles and extra whitespace."""
 
-    def remove_articles(text):
+    def remove_articles(text: str) -> str:
         return re.sub(r"\b(a|an|the)\b", " ", text)
 
-    def white_space_fix(text):
+    def white_space_fix(text: str) -> str:
         return " ".join(text.split())
 
-    def remove_punc(text):
+    def remove_punc(text: str) -> str:
         exclude = set(string.punctuation)
         return "".join(ch for ch in text if ch not in exclude)
 
-    def lower(text):
+    def lower(text: str) -> str:
         return text.lower()
 
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
 
-def f1_score(prediction: str, ground_truth: str):
+def f1_score(prediction: str, ground_truth: str) -> float:
+    """Compute F1 score between prediction and ground truth strings."""
     common = Counter(prediction) & Counter(ground_truth)
     num_same = sum(common.values())
     if num_same == 0:
@@ -83,7 +89,9 @@ def f1_score(prediction: str, ground_truth: str):
     return f1
 
 
-def compute_qa_f1_score(pred_texts: list[str], label_texts: list[str]):
+def compute_qa_f1_score(
+    pred_texts: list[str], label_texts: list[str]
+) -> dict[str, float]:
     """
     Word-level F1 score for evaluating question answering systems.
     Order of the words does not matter.
@@ -99,7 +107,8 @@ def compute_qa_f1_score(pred_texts: list[str], label_texts: list[str]):
     return dict(qa_f1=np.mean(res))
 
 
-def add_longbench_tasks(ds_names: list[str]):
+def add_longbench_tasks(ds_names: list[str]) -> None:
+    """Add longbench tasks to dataset names list."""
     if "longbench" in ds_names:
         ds_names.remove("longbench")
         ds_names += LONGBENCH_TASKS
@@ -108,7 +117,8 @@ def add_longbench_tasks(ds_names: list[str]):
         ds_names += LONGBENCH_E_TASKS
 
 
-def save_generated_text(samples, output_dir, split):
+def save_generated_text(samples: list[dict], output_dir: str, split: str) -> None:
+    """Save generated text samples to JSONL file."""
     os.makedirs(output_dir, exist_ok=True)
     # Create any necessary subdirectories if split contains path separators
     if "/" in split:
@@ -120,27 +130,44 @@ def save_generated_text(samples, output_dir, split):
             f.write(json.dumps(sample) + "\n")
 
 
-def create_metrics_csv(
+# ============================================================================
+# CSV Export Utilities
+# ============================================================================
+
+
+def _extract_model_info(eval_trainer) -> tuple[str, bool]:
+    """Extract model name and type information from the trainer."""
+    model_name = "unknown_model"
+    is_hypernet = False
+
+    if hasattr(eval_trainer.model, "base_model"):
+        if hasattr(eval_trainer.model.base_model, "config"):
+            model_name = getattr(
+                eval_trainer.model.base_model.config,
+                "name_or_path",
+                getattr(
+                    eval_trainer.model.base_model.config, "_name_or_path", "unknown"
+                ),
+            )
+        is_hypernet = hasattr(eval_trainer.model, "ctx_encoder")
+    elif hasattr(eval_trainer.model, "config"):
+        model_name = getattr(
+            eval_trainer.model.config,
+            "name_or_path",
+            getattr(eval_trainer.model.config, "_name_or_path", "unknown"),
+        )
+
+    # Clean up model name for display
+    if "/" in model_name:
+        model_name = model_name.split("/")[-1]
+
+    return model_name, is_hypernet
+
+
+def _parse_metrics_for_csv(
     metrics_dict: dict[str, dict[str, any]],
-    output_dir: str,
-    model_name: str,
-    is_hypernet_model: bool = False,
-    remove_context: bool = False,
-) -> None:
-    """
-    Create a human-readable CSV file from evaluation metrics with hierarchical columns.
-    One row per model with columns structured as task_metric_lengthgroup.
-
-    Args:
-        metrics_dict: Dictionary containing evaluation metrics for each dataset/split
-        output_dir: Directory to save the CSV file
-        model_name: Name of the model being evaluated
-        is_hypernet_model: Whether this is a hypernet/modulated model or base model
-        remove_context: Whether context was removed during evaluation
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Collect all unique metric names, length groups, and tasks
+) -> tuple[set, set, set]:
+    """Parse metrics dictionary to extract unique metrics, length groups, and splits."""
     all_metrics = set()
     all_length_groups = set()
     all_splits = set()
@@ -153,11 +180,14 @@ def create_metrics_csv(
                 continue
 
             # Skip timing and performance metrics that aren't evaluation results
-            if (
-                "model_preparation_time" in metric_key
-                or "steps_per_second" in metric_key
-                or "samples_per_second" in metric_key
-                or "runtime" in metric_key
+            if any(
+                skip_term in metric_key
+                for skip_term in [
+                    "model_preparation_time",
+                    "steps_per_second",
+                    "samples_per_second",
+                    "runtime",
+                ]
             ):
                 continue
 
@@ -166,7 +196,7 @@ def create_metrics_csv(
 
             # Check if this is a length-specific metric
             if "_len_" in metric_name:
-                base_metric, length_part = metric_name.split("_len_")
+                base_metric, length_part = metric_name.split("_len_", 1)
                 all_metrics.add(base_metric)
                 all_length_groups.add(length_part)
             else:
@@ -174,12 +204,13 @@ def create_metrics_csv(
 
     # Add overall metric (no length grouping)
     all_length_groups.add("overall")
+    return all_metrics, all_length_groups, all_splits
 
-    # Sort for consistent ordering
-    all_metrics = sorted(all_metrics)
 
-    # Custom sorting for length groups to ensure proper numerical ordering
-    def sort_length_groups(length_group: str) -> tuple:
+def _sort_length_groups(length_groups: set[str]) -> list[str]:
+    """Sort length groups with custom ordering for proper numerical ranges."""
+
+    def sort_key(length_group: str) -> tuple:
         if length_group == "overall":
             return (1, 0, 0)  # Put "overall" after numerical ranges
         try:
@@ -189,7 +220,37 @@ def create_metrics_csv(
         except (ValueError, IndexError):
             return (2, 0, 0)  # Put any malformed strings last
 
-    all_length_groups = sorted(list(all_length_groups), key=sort_length_groups)
+    return sorted(list(length_groups), key=sort_key)
+
+
+def create_metrics_csv(
+    metrics_dict: dict[str, dict[str, any]],
+    output_dir: str,
+    model_name: str,
+    is_hypernet_model: bool = False,
+    remove_context: bool = False,
+    csv_suffix: str = "",
+) -> None:
+    """
+    Create a human-readable CSV file from evaluation metrics with hierarchical columns.
+    One row per model with columns structured as task_metric_lengthgroup.
+
+    Args:
+        metrics_dict: Dictionary containing evaluation metrics for each dataset/split
+        output_dir: Directory to save the CSV file
+        model_name: Name of the model being evaluated
+        is_hypernet_model: Whether this is a hypernet/modulated model or base model
+        remove_context: Whether context was removed during evaluation
+        csv_suffix: Additional suffix for the CSV filename
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Parse metrics to extract components
+    all_metrics, all_length_groups, all_splits = _parse_metrics_for_csv(metrics_dict)
+
+    # Sort for consistent ordering
+    all_metrics = sorted(all_metrics)
+    all_length_groups = _sort_length_groups(all_length_groups)
     all_splits = sorted(all_splits)
 
     # Create single row with hierarchical columns
@@ -200,29 +261,22 @@ def create_metrics_csv(
 
     # Create hierarchical column structure: task_metric_lengthgroup
     for task in all_splits:
-        # Find the corresponding split in metrics_dict
-        split_key = split_name
-
-        metrics = metrics_dict[split_key]
-
-        # Determine if this task uses QA F1 or ROUGE metrics
-        is_qa_task = task in CLOSED_QA_DATASETS
+        metrics = metrics_dict[task]
+        is_qa_task = any(qa_task in task for qa_task in CLOSED_QA_DATASETS)
 
         for metric in all_metrics:
             # Skip inappropriate metrics for the task type
-            if is_qa_task and metric.startswith("rougeL"):
+            if is_qa_task and ("rougeL" in metric):
                 continue
-            if not is_qa_task and metric.startswith("qa_f1"):
+            if not is_qa_task and ("qa_f1" in metric):
                 continue
 
             for length_group in all_length_groups:
                 if length_group == "overall":
-                    # Look for metric without length suffix
-                    metric_key = f"{split_key}_{metric}"
+                    metric_key = f"{task}_{metric}"
                     column_name = f"{task}_{metric}_overall"
                 else:
-                    # Look for metric with length suffix
-                    metric_key = f"{split_key}_{metric}_len_{length_group}"
+                    metric_key = f"{task}_{metric}_len_{length_group}"
                     column_name = f"{task}_{metric}_{length_group}"
 
                 value = metrics.get(metric_key, "N/A")
@@ -238,10 +292,14 @@ def create_metrics_csv(
     if len(row_data) > 2:  # More than just model and model_type
         df = pd.DataFrame([row_data])
 
+        # Construct filename
         csv_filename = "evaluation_results"
+        if csv_suffix:
+            csv_filename += f"_{csv_suffix}"
         if remove_context:
             csv_filename += "_no_context"
         csv_filename += ".csv"
+
         csv_path = os.path.join(output_dir, csv_filename)
         df.to_csv(csv_path, index=False)
         print(f"Evaluation results saved to: {csv_path}")
@@ -249,7 +307,15 @@ def create_metrics_csv(
         print("No evaluation data found to save to CSV")
 
 
-def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
+# ============================================================================
+# Evaluation Functions
+# ============================================================================
+
+
+def decode_test_result(
+    test_dataset, test_result, tokenizer, ctx_tokenizer
+) -> list[dict]:
+    """Decode test results into human-readable format."""
     out = []
     for sample, pred_toks in zip(test_dataset, test_result.predictions):
         # sample and labels are not padded
@@ -283,6 +349,7 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
             if k.endswith("_len"):
                 d[k] = sample[k].item()
         out.append(d)
+
     # sort samples by length if possible
     len_key = "ctx_ids_len" if "ctx_ids_len" in sample else "input_ids_len"
     sorted(out, key=lambda x: x[len_key])
@@ -293,15 +360,18 @@ def decode_test_result(test_dataset, test_result, tokenizer, ctx_tokenizer):
 @torch.inference_mode()
 def eval_generation(
     eval_trainer, tokenizer, ctx_tokenizer, datasets, split, remove_context, gen_kwargs
-):
+) -> dict[str, dict]:
+    """Evaluate model using generation and save metrics to CSV."""
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
+
     out = {}
     for ds_name, ds in datasets.items():
         print(f"Evaluating: {ds_name}")
         split_name = f"{split}_{ds_name}" if ds_name else split
         if remove_context:
             split_name += "_no_context"
+
         eval_result = eval_trainer.predict(
             ds,
             metric_key_prefix=split_name,
@@ -310,6 +380,7 @@ def eval_generation(
         decoded_txts = decode_test_result(ds, eval_result, tokenizer, ctx_tokenizer)
         pred_texts = [txt["generated"] for txt in decoded_txts]
         label_texts = [txt["label"] for txt in decoded_txts]
+        n = len(pred_texts)
 
         if ds_name in CLOSED_QA_DATASETS:
             print("Computing QA F1 Score")
@@ -319,15 +390,15 @@ def eval_generation(
             )
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
+                eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
         else:
             rouge_metrics = compute_rouge(pred_texts, label_texts)
             for k, v in rouge_metrics.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
+                eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
 
-        # Group by input length and compute metrics for each group
-        length_bins = [(0, 511), (512, 1023), (1024, 2047), (2048, 4095), (4096, 8192)]
         # Ensure all keys for length metrics are present, even if a bin is empty
-        for low, high in length_bins:
+        for low, high in LENGTH_BINS:
             if ds_name in CLOSED_QA_DATASETS:
                 eval_result.metrics[f"{split_name}_qa_f1_len_{low}-{high}"] = "None"
             else:
@@ -337,7 +408,7 @@ def eval_generation(
         for txt in decoded_txts:
             len_key = "ctx_ids_len" if "ctx_ids_len" in txt else "input_ids_len"
             input_len = txt[len_key]
-            for low, high in length_bins:
+            for low, high in LENGTH_BINS:
                 if low <= input_len <= high:
                     group_key = f"{low}-{high}"
                     grouped_texts[group_key]["generated"].append(txt["generated"])
@@ -353,12 +424,19 @@ def eval_generation(
                     )
                     for k, v in group_qa_f1_metric.items():
                         eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
+                        eval_result.metrics[
+                            f"{split_name}_num_samples_{k}_len_{group_key}"
+                        ] = data["count"]
                 else:
                     group_rouge_metrics = compute_rouge(
                         data["generated"], data["label"]
                     )
                     for k, v in group_rouge_metrics.items():
                         eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
+                        # also add count data
+                        eval_result.metrics[
+                            f"{split_name}_num_samples_{k}_len_{group_key}"
+                        ] = data["count"]
 
         save_generated_text(
             decoded_txts,
@@ -372,70 +450,66 @@ def eval_generation(
 
     # Create CSV summary of all evaluation results
     if out:
-        # Determine model name and type based on the first model we can infer
-        model_name = "unknown_model"
-        is_hypernet = False
-
-        # Try to extract model name from the first split name or other context
-        if hasattr(eval_trainer.model, "base_model"):
-            if hasattr(eval_trainer.model.base_model, "config"):
-                model_name = getattr(
-                    eval_trainer.model.base_model.config,
-                    "name_or_path",
-                    getattr(
-                        eval_trainer.model.base_model.config, "_name_or_path", "unknown"
-                    ),
-                )
-            is_hypernet = hasattr(eval_trainer.model, "ctx_encoder")
-        elif hasattr(eval_trainer.model, "config"):
-            model_name = getattr(
-                eval_trainer.model.config,
-                "name_or_path",
-                getattr(eval_trainer.model.config, "_name_or_path", "unknown"),
-            )
-
-        # Clean up model name for display
-        if "/" in model_name:
-            model_name = model_name.split("/")[-1]
-
+        model_name, is_hypernet = _extract_model_info(eval_trainer)
         create_metrics_csv(
             out,
             output_dir=eval_trainer.args.output_dir,
             model_name=model_name,
             is_hypernet_model=is_hypernet,
             remove_context=remove_context,
+            csv_suffix="generation",
         )
 
     return out
 
 
 @torch.no_grad()
-def eval_teacher_forcing(eval_trainer, datasets, split, remove_context):
+def eval_teacher_forcing(
+    eval_trainer, datasets, split, remove_context
+) -> dict[str, dict]:
+    """Evaluate using teacher forcing and save metrics to CSV."""
     if not isinstance(datasets, dict):
         datasets = {"": datasets}
+
     out = {}
     for ds_name, ds in datasets.items():
         split_name = f"{split}_{ds_name}" if ds_name else split
         if remove_context:
             split_name += "_no_context"
+
         metrics = eval_trainer.evaluate(ds, metric_key_prefix=split_name)
         out[split_name] = metrics
         eval_trainer.log_metrics(split_name, metrics)
         eval_trainer.save_metrics(split_name, metrics)
         clear_gpu()
+
+    # Create CSV for teacher forcing metrics
+    if out:
+        model_name, is_hypernet = _extract_model_info(eval_trainer)
+        create_metrics_csv(
+            out,
+            output_dir=eval_trainer.args.output_dir,
+            model_name=model_name,
+            is_hypernet_model=is_hypernet,
+            remove_context=remove_context,
+            csv_suffix="teacher_forcing",
+        )
+
     return out
 
 
 def evaluate(
-    checkpoint_path,
-    model_name_or_path,
-    eval_batch_size,
-    args,
-    split,
-    generative,
-):
+    checkpoint_path: str,
+    model_name_or_path: str,
+    eval_batch_size: int,
+    args: Namespace,
+    split: str,
+    generative: bool,
+) -> dict[str, dict]:
+    """Main evaluation function."""
     assert split in ["validation", "test"]
     ctx_name = None
+
     if model_name_or_path is None:
         state_dict = torch.load(checkpoint_path, weights_only=False)
         ctx_name = state_dict["ctx_encoder_args"].ctx_encoder_model_name_or_path
@@ -444,8 +518,6 @@ def evaluate(
             train=False,
             use_flash_attn=True,
         )
-        # if generative:
-        #     model = model.to(torch.bfloat16)
     else:
         model_kwargs = dict(attn_implementation="flash_attention_2")
         model = get_model(
@@ -454,8 +526,7 @@ def evaluate(
             requires_grad=False,
             model_kwargs=model_kwargs,
         )
-    # NOTE: there is still some randomness in the eval result
-    # despite all the deterministic settings
+
     if is_liger_kernel_available():
         from liger_kernel.transformers import _apply_liger_kernel_to_instance
 
@@ -525,7 +596,7 @@ def evaluate(
 
     gen_kwargs = dict(
         do_sample=False,
-        max_new_tokens=256,  # max_new_tokens=args.max_new_tokens
+        max_new_tokens=256,
     )
 
     eval_trainer_args = {}
@@ -541,18 +612,13 @@ def evaluate(
     eval_trainer_args["overwrite_output_dir"] = True
     eval_trainer_args["batch_eval_metrics"] = True
     eval_trainer_args["per_device_eval_batch_size"] = eval_batch_size
+    eval_trainer_args["include_for_metrics"] = ["inputs"]
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
         predict_with_generate=generative,
         generation_config=GenerationConfig(**gen_kwargs),
     )
-
-    # Seq2SeqTrainer is actually just the same as Trainer
-    # (although it uses a different data collator, i.e., explicit prompt/answer separation)
-    # it just allows `predict_with_generate`
-    # allowing us to compute metrics on the generated outputs
-    # no clue why they call this seq2seq...
 
     print("=" * 80 + "\n" + "Evaluating model..." + "\n" + "=" * 80)
     print(f"checkpoint_path: {checkpoint_path}")
@@ -566,6 +632,7 @@ def evaluate(
         "args": eval_trainer_args,
         "data_collator": partial(collator, tokenizer=tokenizer),
     }
+
     out = {}
     if not generative:
         trainer_kwargs["compute_metrics"] = partial(
@@ -609,9 +676,8 @@ def run_eval(
     eval_batch_size: int = 8,
     remove_context: bool = False,
     generative: bool = False,
-):
-    # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
-
+) -> None:
+    """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
@@ -619,7 +685,6 @@ def run_eval(
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
-    # os.environ["WANDB_MODE"] = "disabled"
     disable_caching()
     set_seed(42)
     torch.use_deterministic_algorithms(True, warn_only=True)
@@ -649,8 +714,6 @@ def run_eval(
             output_dir=f"eval_results/{model_name_or_path}",
             logging_dir=f"eval_results/{model_name_or_path}",
             run_name=f"eval_results/{model_name_or_path}",
-            # max_base_len=2**13,
-            # max_ctx_len=-1,  # not used
             val_ds_names=[],
             test_ds_names=[],
             remove_context=remove_context,

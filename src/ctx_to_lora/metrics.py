@@ -6,6 +6,24 @@ import torch
 from rouge_score import rouge_scorer
 from transformers import EvalPrediction
 
+LENGTH_BINS = [
+    (0, 2**9 - 1),
+    (2**9, 2**10 - 1),
+    (2**10, 2**11 - 1),
+    (2**11, 2**12 - 1),
+    (2**12, 2**13 - 1),
+    (2**13, 2**14 - 1),
+    (2**14, 2**15 - 1),
+    (2**15, float("inf")),
+]
+
+
+def get_length_bin(length: int):
+    """Get the length bin for a given length."""
+    for i, (start, end) in enumerate(LENGTH_BINS):
+        if start <= length < end:
+            return (start, end)
+
 
 def compute_rouge(pred_texts, label_texts):
     out = defaultdict(list)
@@ -70,20 +88,64 @@ class Evaluator:
         self.accum_metrics = defaultdict(list)
         self.count = defaultdict(list)
 
-    def update(self, shift_logits, shift_labels, valid_masks):
+    def update(self, shift_logits, shift_labels, valid_masks, lengths=None):
         for metric_fn in self.metric_fns:
+            # overall metric
             metric = metric_fn(shift_logits, shift_labels, valid_masks)
             for k, v in metric.items():
+                key = k if not k.startswith("n_") else k[2:]
                 if k.startswith("n_"):
-                    self.count[k[2:]].append(v)
+                    # prefix "n_" indicates the count of the metric
+                    self.count[key].append(v)
                 else:
-                    self.accum_metrics[k] += v
+                    self.accum_metrics[key] += v
+                for start, end in LENGTH_BINS:
+                    key = f"{k}_len_{start}_{end}"
+                    if key not in self.accum_metrics:
+                        # add key here so that it shows up in the output
+                        self.accum_metrics[key] = [0]
+                        self.count[key] = [0]
+
+            # split samples into length groups, calculate metric for each group
+            if lengths is not None:
+                for start, end in LENGTH_BINS:
+                    logits, labels, masks = [], [], []
+
+                    for logit, label, m, len in zip(
+                        shift_logits, shift_labels, valid_masks, lengths
+                    ):
+                        if isinstance(len, torch.Tensor):
+                            len = len.item()
+                        if start <= len < end:
+                            logits.append(logit)
+                            labels.append(label)
+                            masks.append(m)
+
+                    if not logits:
+                        continue
+
+                    metric = metric_fn(
+                        torch.stack(logits), torch.stack(labels), torch.stack(masks)
+                    )
+                    for k, v in metric.items():
+                        if k.startswith("n_"):
+                            key = f"{k[2:]}_len_{start}_{end}"
+                            self.count[f"{k[2:]}_len_{start}_{end}"].append(v)
+                        else:
+                            key = f"{k}_len_{start}_{end}"
+                            self.accum_metrics[f"{k}_len_{start}_{end}"] += v
 
     def compute(self):
         # Get result across entire eval set
         result = {
-            k: np.sum(v) / np.sum(self.count[k]) for k, v in self.accum_metrics.items()
+            k: np.sum(v) / np.sum(self.count[k]) if np.sum(v) != 0 else "None"
+            for k, v in self.accum_metrics.items()
         }
+        for k, v in self.count.items():
+            if "_len_" in k:
+                result[k.replace("_len_", "_num_samples_len_")] = sum(v)
+            else:
+                result[k + "_num_samples"] = sum(v)
         # Reset batch statistics
         self.reset()
         return result
@@ -95,10 +157,13 @@ def compute_metrics(
     compute_result: bool,
     evaluator: Evaluator,
 ) -> dict | None:
+    inputs = eval_pred.inputs
+    len_key = "ctx_ids_len" if "ctx_ids_len" in inputs else "input_ids_len"
+    lengths = inputs[len_key]
     logits, labels = eval_pred.predictions, eval_pred.label_ids
     shift_logits = logits[..., :-1, :]
     shift_labels = labels[..., 1:]
     valid_masks = torch.where(shift_labels != -100, 1, 0)
-    evaluator.update(shift_logits, shift_labels, valid_masks)
+    evaluator.update(shift_logits, shift_labels, valid_masks, lengths)
     if compute_result:
         return evaluator.compute()
