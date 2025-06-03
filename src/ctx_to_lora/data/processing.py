@@ -3,6 +3,7 @@ import json
 import logging
 import random
 from collections.abc import Callable, Iterator
+from glob import glob
 from os import path
 from typing import Any
 
@@ -17,6 +18,7 @@ from ctx_to_lora.data.definitions import (
     EVAL_INTX_TEMPLATES,
     IGNORE_INDEX,
     REPEAT_PROMPTS,
+    SELF_GEN_DATA_DIR,
     TRANSFORMED_DATA_DIR,
 )
 from ctx_to_lora.utils import TRAINING_TASK
@@ -249,9 +251,20 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
             f"No dataset kwargs found for '{ds_name}' with split '{split}'.\n"
             f"Using default kwargs: {kwargs}"
         )
-        # return kwargs
+    elif ds_name.startswith("self_gen/"):
+        # e.g., "self_gen/google/gemma-2-2b-it/pwc/val"
+        base_model_name = "/".join(ds_name.split("/")[1:-1])
+        base_ds = ds_name.split("/")[-1]
+        files = glob(
+            f"{SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/{split}/*.parquet"
+        )
+        if not files:
+            raise FileNotFoundError(
+                f"No self-gen files found for base model {base_model_name} "
+                f"in {SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/"
+            )
+        kwargs = dict(path="parquet", data_files=files, split="train")
     else:
-        # return DS_KWARGS[ds_name][split]
         kwargs = DS_KWARGS[ds_name][split]
 
     # # custom logic for slicing iterable datasets
@@ -384,16 +397,32 @@ def filter_none(samples):
     return out
 
 
-def _load_and_process_dataset(
+def load_and_process_dataset(
     ds_name: str,
     split: str,
     add_negative_prompt: bool,
     add_repeat_prompt: bool,
     repeat_prob: float,
     streaming: bool,
-    ds_path: str,
     num_proc: int,
 ):
+    load_and_process_kwargs = dict(
+        ds_name=ds_name,
+        split=split,
+        add_negative_prompt=add_negative_prompt,
+        add_repeat_prompt=add_repeat_prompt,
+        repeat_prob=repeat_prob,
+        streaming=streaming,
+    )
+    ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
+    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
+
+    if path.exists(ds_path) and split == "train":
+        # load the cached ds
+        logger.info(f"Loaded processed dataset from {ds_path}")
+        return datasets.load_from_disk(ds_path)
+    else:
+        logger.info(f"Loading dataset {ds_name} with split {split}...")
     try:
         ds_kwargs = get_ds_kwargs(ds_name, split)
         skip = ds_kwargs.pop("skip", None)
@@ -457,6 +486,8 @@ def _load_and_process_dataset(
                 num_proc=num_proc,
             )
         ds.save_to_disk(ds_path, num_proc=num_proc)
+        # force loading the cached version for newly created ds
+        ds = datasets.load_from_disk(ds_path)
     return ds
 
 
@@ -493,22 +524,10 @@ def get_tokenized_dataset(
     )
     num_proc = None if streaming and split == "train" else 8
 
-    ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
-    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
-
-    if path.exists(ds_path) and split == "train":
-        # load the cached ds
-        logger.info(f"Loaded processed dataset from {ds_path}")
-    else:
-        logger.info(f"Loading dataset {ds_name} with split {split}...")
-        ds = _load_and_process_dataset(
-            **load_and_process_kwargs,
-            ds_path=ds_path,
-            num_proc=num_proc,
-        )
-    if split == "train":
-        # force loading the cached version for newly created ds
-        ds = datasets.load_from_disk(ds_path)
+    ds = load_and_process_dataset(
+        **load_and_process_kwargs,
+        num_proc=num_proc,
+    )
 
     tokenized_ds = construct_and_tokenize_ctx_qa(
         base_model_max_len,

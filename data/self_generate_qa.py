@@ -1,16 +1,21 @@
+import argparse
 import os
 import random
-import sys
 from glob import glob
 
 import pandas as pd
+import yaml
 from datasets import Dataset, load_dataset
 from vllm import LLM, SamplingParams
+
+from ctx_to_lora.data.definitions import SELF_GEN_DATA_DIR
+from ctx_to_lora.data.processing import load_and_process_dataset
+from ctx_to_lora.utils import clear_gpu
 
 SYSTEM_TEMPLATE = (
     "### System Instructions ###\n"
     "You are a creative and helpful assistant.\n"
-    "**DO NOT** halucinate or make up information."
+    "**DO NOT** hallucinate or make up information."
 )
 
 PROMPT_TEMPLATE = "### Context ###\n{context}\n\n\n### Question ###\n{question}"
@@ -22,15 +27,214 @@ MODEL_CTX_LEN = {
 }
 
 
-def get_prompt(context, q):
-    prompt = PROMPT_TEMPLATE.format(context=context, question=q)
-    return prompt
+def get_prompt(context: str, q: str) -> str:
+    return PROMPT_TEMPLATE.format(context=context, question=q)
+
+
+def load_config(config_path: str) -> dict:
+    """Load dataset names from YAML config file."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def get_dataset_configs(
+    ds_names: list[str] | None,
+    config: dict | None,
+    split: str | None,
+) -> list[tuple[str, str]]:
+    assert not (ds_names and config), "Cannot provide both ds_names and config"
+    if ds_names:
+        assert split, "When using ds_names, --split must be provided"
+        # Validate ds_names format
+        for ds_name in ds_names:
+            if not isinstance(ds_name, str):
+                raise ValueError(f"Invalid dataset name: {ds_name}")
+        return [(ds_name, split) for ds_name in ds_names]
+
+    if config:
+        dataset_configs = []
+
+        # Process train datasets
+        train_ds_names = config.get("train_ds_names", [])
+        self_gen_train_ds_names = [
+            (ds_name, "train")
+            for ds_name in train_ds_names
+            if ds_name.startswith("self_gen/")
+        ]
+        if not self_gen_train_ds_names:
+            print("No self_gen datasets found in train_ds_names")
+        dataset_configs.extend(self_gen_train_ds_names)
+
+        # Process validation datasets
+        val_ds_names = config.get("val_ds_names", [])
+        self_gen_val_ds_names = [
+            (ds_name, "validation")
+            for ds_name in val_ds_names
+            if ds_name.startswith("self_gen/")
+        ]
+        if not self_gen_val_ds_names:
+            print("No self_gen datasets found in val_ds_names")
+        dataset_configs.extend(self_gen_val_ds_names)
+
+        return dataset_configs
+
+
+def create_messages(
+    ctxs: list[str], questions: list[str], vllm_model: str, system_template: str
+) -> list[list[dict]]:
+    """Create chat messages for the model."""
+    if "gemma" in vllm_model:
+        # gemma models do not support system messages
+        return [
+            [
+                {
+                    "role": "user",
+                    "content": system_template + "\n\n\n" + get_prompt(ctx, q),
+                }
+            ]
+            for ctx, q in zip(ctxs, questions)
+        ]
+    else:
+        return [
+            [
+                {"role": "system", "content": system_template},
+                {"role": "user", "content": get_prompt(ctx, q)},
+            ]
+            for ctx, q in zip(ctxs, questions)
+        ]
+
+
+def self_generate(
+    ds_name: str,
+    split: str,
+    args: argparse.Namespace,
+    llm: LLM,
+    system_template: str,
+    parquet_file: str | None = None,
+) -> None:
+    """Process a single dataset and generate QA pairs."""
+
+    shard_name = ""
+    if parquet_file:
+        print(f"Loading dataset from parquet file: {parquet_file}")
+
+        ds = load_dataset(path="parquet", data_files=[parquet_file], split="train")
+        split = "train"
+        ds_name = os.path.basename(os.path.dirname(parquet_file))
+        shard_name = "_" + os.path.basename(parquet_file).replace(".parquet", "")
+    else:
+        ds_name = ds_name.replace("self_gen/", "")
+
+        print(f"Loading dataset: {ds_name} with split: {split}")
+        kwargs = dict(
+            ds_name=ds_name,
+            split=split,
+            add_negative_prompt=False,
+            add_repeat_prompt=False,
+            repeat_prob=0,
+        )
+        ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
+    if args.debug:
+        ds = ds.take(10)
+
+    ctxs = [sample["context"] for sample in ds]
+    questions = [sample["prompt"] for sample in ds]
+
+    messages = create_messages(ctxs, questions, args.vllm_model, system_template)
+
+    print(f"Generating from {len(messages)} contexts")
+    completions = llm.chat(
+        messages,
+        sampling_params=SamplingParams(
+            max_tokens=2048,
+            temperature=0.1
+            if args.vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+            else 1.0,
+        ),
+    )
+
+    samples = [
+        {"context": ctx, "prompt": q, "response": completion.outputs[0].text}
+        for ctx, q, completion in zip(ctxs, questions, completions)
+    ]
+
+    if args.debug:
+        for sample in samples:
+            print(f"context={sample['context']}")
+            print(f"prompt={sample['prompt']}")
+            print(f"response={sample['response']}")
+            print("=" * 80)
+
+    print(f"Generated {len(samples)} samples")
+    random.shuffle(samples)
+
+    # Save results
+    df = pd.DataFrame(samples)
+    ds_out = Dataset.from_pandas(df)
+    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}/{ds_name}/{split}/ds{shard_name}"
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    fpath = f"{fpath}.parquet"
+    ds_out.to_parquet(fpath)
+    print(f"Saved to {fpath}")
+
+    # Cleanup
+    del samples, df, ds_out, completions, messages, ctxs, questions
+    clear_gpu()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate QA pairs using VLLM")
+    parser.add_argument(
+        "--vllm_model",
+        type=str,
+        required=True,
+        help="VLLM model name (e.g., google/gemma-2-2b-it)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode (process only 10 samples)",
+    )
+
+    # Either config file OR ds_names + split
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--config",
+        type=str,
+        help="Path to YAML config file with train_ds_names/val_ds_names",
+    )
+    group.add_argument(
+        "--ds_names",
+        type=str,
+        nargs="+",
+        help="List of dataset names/shard patterns",
+    )
+    group.add_argument(
+        "--glob_pattern",
+        type=str,
+        help="Glob pattern to match dataset names (e.g., 'data/raw_datasets/fw_qa_3/*')",
+    )
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        help="Dataset split to use when using --ds_names (required with --ds_names)",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    vllm_model = os.environ.get("vllm_model")  # "google/gemma-2-27b-it"
-    debug = bool(os.environ.get("debug", False))
+    args = parse_args()
+
+    # Validate arguments
+    if args.ds_names and not args.split:
+        raise ValueError("--split is required when using --ds_names")
+
+    vllm_model = args.vllm_model
     print(f"Using model: {vllm_model}")
+
+    # Setup model-specific configurations
     llm_kwargs = dict(
         model=vllm_model,
         dtype="bfloat16",
@@ -39,98 +243,52 @@ if __name__ == "__main__":
         max_model_len=MODEL_CTX_LEN.get(vllm_model),
     )
 
+    system_template = SYSTEM_TEMPLATE
     if vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
-        mm_kwargs = {"image": 0}  # if "gemma-3" in vllm_model else {}
-        llm_kwargs["tokenizer_mode"] = "mistral"
-        llm_kwargs["config_format"] = "mistral"
-        llm_kwargs["load_format"] = "mistral"
-        SYSTEM_TEMPLATE = (
+        mm_kwargs = {"image": 0}
+        llm_kwargs.update(
+            {
+                "tokenizer_mode": "mistral",
+                "config_format": "mistral",
+                "load_format": "mistral",
+                "max_model_len": 2**14,
+                "limit_mm_per_prompt": mm_kwargs,
+            }
+        )
+        system_template = (
             "You are Mistral Small 3.1, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.\n"
             "You power an AI assistant called Le Chat.\n"
             "Your knowledge base was last updated on 2023-10-01.\n\n\n"
         ) + SYSTEM_TEMPLATE
-        llm_kwargs["max_model_len"] = 2**14
-        llm_kwargs["limit_mm_per_prompt"] = mm_kwargs
 
     print(f"{llm_kwargs=}")
     llm = LLM(**llm_kwargs)
-    tokenizer = llm.get_tokenizer()
-    shard_pattern = sys.argv[1]
 
-    paths = glob(f"./data/raw_datasets/fw_qa_3/{shard_pattern}.parquet")
-
-    for path in paths:
-        if debug:
-            ds = load_dataset(
-                "parquet",
-                data_files=path,
-                split="train[:10]",
-            )
-        else:
-            ds = load_dataset(
-                "parquet",
-                data_files=path,
-                split="train",
-                # streaming=True,
-            )
-        ctxs = []
-        questions = []
-        for sample in iter(ds):
-            ctxs.append(sample["context"])
-            questions.append(sample["prompt"])
-        if "gemma" in vllm_model:
-            # gemma models do not support system messages
-            messages = [
-                [
-                    {
-                        "role": "user",
-                        "content": SYSTEM_TEMPLATE + "\n\n\n" + get_prompt(ctx, q),
-                    },
-                ]
-                for ctx, q in zip(ctxs, questions)
-            ]
-        else:
-            messages = [
-                [
-                    {"role": "system", "content": SYSTEM_TEMPLATE},
-                    {"role": "user", "content": get_prompt(ctx, q)},
-                ]
-                for ctx, q in zip(ctxs, questions)
-            ]
-
-        print(f"Generating from {len(messages)} contexts")
-        completions = llm.chat(
-            messages,
-            sampling_params=SamplingParams(
-                max_tokens=2048,
-                temperature=(
-                    0.1
-                    if vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-                    else 1.0
-                ),
-            ),
+    # Get dataset configs from config or CLI args
+    config = load_config(args.config) if args.config else None
+    if args.ds_names or args.config:
+        dataset_configs = get_dataset_configs(
+            ds_names=args.ds_names,
+            config=config,
+            split=args.split,
         )
-        samples = []
-        for ctx, q, completion in zip(ctxs, questions, completions):
-            response = completion.outputs[0].text
-            samples.append(
-                {
-                    "context": ctx,
-                    "prompt": q,
-                    "response": response,
-                }
+
+        # Process each dataset
+        for ds_name, split in dataset_configs:
+            print(f"Processing dataset: {ds_name}, split: {split}")
+            self_generate(ds_name, split, args, llm, system_template)
+    else:
+        assert args.glob_pattern, (
+            "glob_pattern must be provided if no ds_names or config"
+        )
+        files = glob(args.glob_pattern)
+        for file in files:
+            print(f"Processing file: {file}")
+            self_generate(
+                ds_name=None,
+                parquet_file=file,
+                split=args.split,
+                args=args,
+                llm=llm,
+                system_template=system_template,
             )
-            if debug:
-                print(f"{ctx=}")
-                print(f"{q=}")
-                print(f"{response=}")
-                print("=" * 80)
-
-        print(f"Generated {len(samples)} samples")
-        random.shuffle(samples)
-        df = pd.DataFrame(samples)
-        ds = Dataset.from_pandas(df)
-
-        shard_name = path.split("/")[-1].split(".")[0]
-        ds.to_parquet(f"data/raw_datasets/fw_qa_3/{vllm_model}/{shard_name}.parquet")
-        print(f"Saved to data/raw_datasets/fw_qa_3/{vllm_model}/{shard_name}.parquet")

@@ -7,6 +7,8 @@ FW_QA_PATHS = [
 ]
 
 TRANSFORMED_DATA_DIR = "data/processed_datasets"
+SELF_GEN_DATA_DIR = "data/raw_datasets/self_gen/"
+
 
 REPEAT_PROMPTS = [
     "Repeat the text.",
