@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import random
+import time
 from collections.abc import Callable, Iterator
 from glob import glob
 from os import path
@@ -420,8 +421,8 @@ def load_and_process_dataset(
         # load the cached ds
         logger.info(f"Loaded processed dataset from {ds_path}")
         return datasets.load_from_disk(ds_path)
-    else:
-        logger.info(f"Loading dataset {ds_name} with split {split}...")
+
+    logger.info(f"Loading dataset {ds_name} with split {split}...")
     try:
         ds_kwargs = get_ds_kwargs(ds_name, split)
         skip = ds_kwargs.pop("skip", None)
@@ -485,6 +486,7 @@ def load_and_process_dataset(
                 num_proc=num_proc,
             )
         ds.save_to_disk(ds_path, num_proc=num_proc)
+        time.sleep(5)
         # force loading the cached version for newly created ds
         ds = datasets.load_from_disk(ds_path)
     return ds
