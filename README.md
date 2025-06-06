@@ -91,26 +91,35 @@ conda activate vllm;
 vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python generate_fw_edu_qa_vllm.py "0*_*" 3
 # [WIP] there are other datasets where we used openAI to gen QA pairs
 
-# self-generate SFT data
-# gemma-2-2b-it
-vllm_model=google/gemma-2-2b-it uv run python data/self_generate_qa.py "0*_*"
+# 0. download fineweb_edu to `data/raw_datasets/fineweb_edu
+uv run data/download_fineweb_edu.py
+
+# ===
+# 1 and 2 can be run in parallel (depends on step 0)
+
+# 1. generate QA data (3 QAs for each context)
+vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python generate_fw_edu_qa_vllm.py "00*_*" 3
+
+# 2. Augmenting pre-training data w/ paraphrasing
+uv run python data/generate_fw_edu_augment_vllm.py
+
+# ===
+# 3 and 4 can be run in parallel (depends on step 0 and 1)
+
+# 3. Pre-training data (no GPU needed) 
+# augment each context by concat'ing QAs generated in step 1 at the end
+uv run python data/generate_pretrain_from_fw_qa.py
+
+# 4. self-generate SFT data
 # each context has 3 chat instances as training data
 # the responses are not the same as the ones in the pretraining though
+# Example commands using gemma-2-2b-it
+# self-gen data for fw_qa
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_3/00*_*'
+# self-gen data for other ds listed in qa_no_fw.yaml
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_no_fw.yaml
 
 
-# pre-training data
-# better to include QAs at the end of pretrain docs
-# # https://arxiv.org/pdf/2406.14491
-uv run python data/generate_pretrain_from_fw_qa.py
-# we could do this online but
-# will have duplicate contexts (each context is used to generate 3 QA pairs)
-# better if we do this offline bc dedup the contexts
-
-
-# self-gen sft
-# 3_mini config
-uv run python data/self_generate_qa.py \
---vllm_model=google/gemma-2-2b-it --config=configs/self_gen_3_mini.yaml
 ```
 
 <!-- 

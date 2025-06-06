@@ -9,7 +9,7 @@ QA_TEMPLATE = "\n\nQuestion: {question}\nAnswer: {answer}"
 
 if __name__ == "__main__":
     root_data_dir = "./data/raw_datasets/fw_qa_3"
-    files = glob(f"{root_data_dir}/*.parquet")
+    files = sorted(glob(f"{root_data_dir}/*.parquet"))
     for file in files:
         ctx_qa_dict = defaultdict(str)
         ds = load_dataset("parquet", data_files=file, split="train")
@@ -33,6 +33,5 @@ if __name__ == "__main__":
         print(f"Saving dataset to {save_path}")
         ds.to_parquet(save_path)
         print("=" * 80)
-        del ds
-        del samples
+        del ds, samples, ctx_qa_dict
         gc.collect()
