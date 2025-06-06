@@ -82,13 +82,6 @@ uv run python data/generate_fav_num_big.py
 
 ### Data Generation
 ```bash
-# this might take several days...
-# python process_fineweb.py
-# python generate_fw_qa.py
-# python post_process_fw_qa.py
-conda activate vllm;
-# [WIP] download fineweb-edu
-vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python generate_fw_edu_qa_vllm.py "0*_*" 3
 # [WIP] there are other datasets where we used openAI to gen QA pairs
 
 # 0. download fineweb_edu to `data/raw_datasets/fineweb_edu
