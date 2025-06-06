@@ -1,0 +1,66 @@
+output_dir: "" # just a placeholder
+bf16: true
+model_name_or_path: google/gemma-2-2b-it
+label_names: ["labels"]
+# eval_on_start: True
+# eval_strategy: "steps"
+# eval_steps: 500
+# save_strategy: "no"
+# # save_steps: 500
+# logging_strategy: "steps"
+# logging_steps: 100
+# use_liger_kernel: true
+# remove_unused_columns: false
+
+# needed to avoid OOM by compute the metrics batch by batch
+# w/o this the trainer stores logits of all sample in memory...
+# batch_eval_metrics: true
+
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 8
+max_val_samples_per_ds: 1000
+# optim: schedule_free_adamw
+
+learning_rate: 0.00004
+# lr_scheduler_type: "constant_with_warmup"
+neftune_noise_alpha: 5
+weight_decay: 0.01
+#
+warmup_steps: 100
+
+dataloader_prefetch_factor: 8
+dataloader_num_workers: 8
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+# data
+train_ds_names:
+  - fw_qa_3_small_pretrain # ~20M
+  - self_gen/google/gemma-2-2b-it/fw_qa_3_small # ~20M
+  - self_gen/google/gemma-2-2b-it/ctx_qa # 300k
+  - self_gen/google/gemma-2-2b-it/pwc # 240k
+  - self_gen/google/gemma-2-2b-it/hotpot_qa # 90k
+  - self_gen/google/gemma-2-2b-it/squad # 90k
+  - self_gen/google/gemma-2-2b-it/drop # 77k
+  - self_gen/google/gemma-2-2b-it/narrativeqa # 40k
+  - self_gen/google/gemma-2-2b-it/quoref # 11k
+  - self_gen/google/gemma-2-2b-it/ropes # 11k
+  - self_gen/google/gemma-2-2b-it/synthetic_convqa # 40k
+
+val_ds_names:
+  - fw_qa_3_pretrain
+  - self_gen/google/gemma-2-2b-it/fw_qa_3
+  - self_gen/google/gemma-2-2b-it/ctx_qa
+  - self_gen/google/gemma-2-2b-it/pwc
+  - self_gen/google/gemma-2-2b-it/hotpot_qa
+  - self_gen/google/gemma-2-2b-it/squad
+  - fw_qa_3
+  - ctx_qa
+  - pwc
+  - hotpot_qa
+  - squad
+
+load_best_model_at_end: false
+metric_for_best_model: eval_pwc_loss
