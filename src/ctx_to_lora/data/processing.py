@@ -419,13 +419,7 @@ def load_and_process_dataset(
     is_pretrain: bool,
     streaming: bool,
     num_proc: int,
-    ds_path: str,
 ):
-    if path.exists(ds_path) and split == "train":
-        # load the cached ds
-        logger.info(f"Loaded processed dataset from {ds_path}")
-        return datasets.load_from_disk(ds_path)
-
     logger.info(f"Loading dataset {ds_name} with split {split}...")
     try:
         ds_kwargs = get_ds_kwargs(ds_name, split)
@@ -500,7 +494,6 @@ def load_and_process_dataset(
                 batch_size=100_000,
                 # num_proc=num_proc,
             )
-        ds.save_to_disk(ds_path, num_proc=num_proc)
     return ds
 
 
@@ -524,9 +517,10 @@ def get_tokenized_dataset(
     assert not use_kl_loss, "KL loss is deprecated"
     if add_repeat_prompt:
         assert repeat_prob > 0, f"add_repeat_prompt is set but repeat_prob = 0"
-    logger.debug(f"Loading dataset {ds_name} with split {split}...")
+    logger.info(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat and bool(ctx_model_max_len)
     is_pretrain = "pretrain" in ds_name
+    is_paraphrased = "aug_pretrain" in ds_name
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,
@@ -537,35 +531,48 @@ def get_tokenized_dataset(
         is_pretrain=is_pretrain,
         streaming=streaming,
     )
-    ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
-    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
-    num_proc = None if streaming and split == "train" else 8
+    tokenize_kwargs = dict(
+        base_model_max_len=base_model_max_len,
+        tokenizer=tokenizer,
+        tokenizer_kwargs=tokenizer_kwargs,
+        ctx_model_max_len=ctx_model_max_len,
+        ctx_tokenizer=ctx_tokenizer,
+        ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
+        add_ctx_to_chat=add_ctx_to_chat,
+        use_kl_loss=use_kl_loss,
+        need_ctx_ids=need_ctx_ids,
+        is_pretrain=is_pretrain,
+        is_paraphrased=is_paraphrased,
+        split=split,
+        set_format=set_format,
+    )
 
+    all_kwargs = {**load_and_process_kwargs, **tokenize_kwargs}
+    kwargs_str = json.dumps(all_kwargs)
+    logger.debug(f"Tokenizing dataset with kwargs: {kwargs_str}")
+    ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
+    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
+
+    if path.exists(ds_path) and split == "train":
+        # load the cached ds
+        logger.info(f"Loaded tokenized dataset from {ds_path}")
+        tokenized_ds = datasets.load_from_disk(ds_path)
+        return tokenized_ds
+
+    num_proc = None if streaming and split == "train" else 8
     ds = load_and_process_dataset(
         **load_and_process_kwargs,
-        ds_path=ds_path,
         num_proc=num_proc,
     )
-    if split == "train":
-        # force loading from disk when processing for the first time
-        ds = datasets.load_from_disk(ds_path)
-
+    logger.info(f"Constructing and tokenizing {ds_name} with {split} split...")
     tokenized_ds = construct_and_tokenize_ctx_qa(
-        base_model_max_len,
-        tokenizer,
-        tokenizer_kwargs,
-        ctx_model_max_len,
-        ctx_tokenizer,
-        ctx_tokenizer_kwargs,
-        add_ctx_to_chat,
-        use_kl_loss,
-        need_ctx_ids,
-        is_pretrain,
-        ds,
-        split,
-        set_format,
-        num_proc,
+        ds=ds,
+        num_proc=num_proc,
+        **tokenize_kwargs,
     )
+    if split == "train":
+        tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
+
     return tokenized_ds
 
 
@@ -580,45 +587,34 @@ def construct_and_tokenize_ctx_qa(
     use_kl_loss,
     need_ctx_ids,
     is_pretrain,
+    is_paraphrased,
     ds,
     split,
     set_format=None,
     num_proc=None,
 ):
-    kwargs = dict(
-        base_model_max_len=base_model_max_len,
-        tokenizer=repr(tokenizer),
-        tokenizer_kwargs=json.dumps(tokenizer_kwargs),
-        ctx_model_max_len=ctx_model_max_len,
-        ctx_tokenizer=repr(ctx_tokenizer),
-        ctx_tokenizer_kwargs=json.dumps(ctx_tokenizer_kwargs),
-        add_ctx_to_chat=add_ctx_to_chat,
-        use_kl_loss=use_kl_loss,
-        need_ctx_ids=need_ctx_ids,
-        is_pretrain=is_pretrain,
-        ds=ds._fingerprint,
-        split=split,
-        set_format=set_format,
-    )
-    kwargs_str = json.dumps(kwargs)
-    logger.debug(f"Tokenizing dataset with kwargs: {kwargs_str}")
-    ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
-    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
-    if path.exists(ds_path) and split == "train":
-        # load the cached ds
-        logger.info(f"Loaded tokenized dataset from {ds_path}")
-        ds = datasets.load_from_disk(ds_path)
-        return ds
     if is_pretrain:
-        ds = ds.map(
-            build_intx_pretrain,
-            # batched=True,
-            # batch_size=100_000,
-            # # num_proc=num_proc,
-        )
+        if is_paraphrased:
+            ds = ds.map(
+                build_paraphrase_pretrain,
+                batched=True,
+                batch_size=100_000,
+                remove_columns=["variation"],
+            )
+        else:
+            ds = ds.map(
+                build_intx_pretrain,
+                # batched=True,
+                # batch_size=100_000,
+                # # num_proc=num_proc,
+            )
         tokenized_ds = ds.map(
             tokenize_pretrain,
-            fn_kwargs={"tokenizer": tokenizer, "tokenizer_kwargs": tokenizer_kwargs},
+            fn_kwargs={
+                "tokenizer": tokenizer,
+                "tokenizer_kwargs": tokenizer_kwargs,
+                "add_eos_token": is_paraphrased,
+            },
             batched=True,
             batch_size=100_000,
             # # num_proc=num_proc,
@@ -766,7 +762,9 @@ def construct_and_tokenize_ctx_qa(
             )
 
     if is_pretrain:
-        tokenized_ds = tokenized_ds.remove_columns(["context", "qas", "text"])
+        tokenized_ds = tokenized_ds.remove_columns(["context", "text"])
+        if not is_paraphrased:
+            tokenized_ds = tokenized_ds.remove_columns(["qas"])
     else:
         tokenized_ds = tokenized_ds.remove_columns(
             ["messages", "context", "prompt", "response"]
@@ -777,13 +775,16 @@ def construct_and_tokenize_ctx_qa(
     #     # the columns are unknown when using streaming dataset
     #     tokenized_ds = tokenized_ds._resolve_features()
     # validate_columns(tokenized_ds)
-    if split == "train":
-        tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
+
     return tokenized_ds
 
 
-# def build_intx_pretrain(samples: dict[str, any]):
-#     return {"text": [ctx + qa for ctx, qa in zip(samples["context"], samples["qas"])]}
+def build_paraphrase_pretrain(samples: dict[str, list[str]]):
+    # use "context" to predict "variation" as vice versa
+    return {
+        "text": samples["context"] + samples["variation"],
+        "context": samples["variation"] + samples["context"],
+    }
 
 
 def build_intx_pretrain(sample: dict[str, str]):
@@ -1034,6 +1035,7 @@ def tokenize_pretrain(
     samples: dict[str, Any],
     tokenizer: PreTrainedTokenizerBase,
     tokenizer_kwargs: dict[str, Any] | None = None,
+    add_eos_token: bool = False,
 ):
     """
     Tokenize text for pre-training tasks.
@@ -1049,7 +1051,7 @@ def tokenize_pretrain(
     add_bos_val = tokenizer.add_bos_token
     add_eos_val = tokenizer.add_eos_token
     tokenizer.add_bos_token = True
-    tokenizer.add_eos_token = False  # no eos for pre-training samples
+    tokenizer.add_eos_token = add_eos_token
     tokens = tokenizer(
         samples["text"],
         add_special_tokens=True,
