@@ -664,8 +664,16 @@ class ModulatedPretrainedModel(nn.Module):
                 f"but the loaded name is: {self.base_model_name_or_path}"
             )
         self._init_model()
+
+        def remove_compile_prefix(sd: dict[str, Tensor]) -> dict[str, Tensor]:
+            COMPILED_PREFIX = "_orig_mod."
+            for k in list(sd.keys()):
+                if k.startswith(COMPILED_PREFIX):
+                    sd[k[len(COMPILED_PREFIX) :]] = sd.pop(k)
+            return sd
+
         load_result = self.hypernet.load_state_dict(
-            state_dict, strict=False, *args, **kwargs
+            remove_compile_prefix(state_dict), strict=True, *args, **kwargs
         )
         logger.info(f"load result: {load_result}")
         return load_result
