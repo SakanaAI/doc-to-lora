@@ -7,7 +7,7 @@
 #SBATCH --error=outputs/%x-%j.out
 
 uv run accelerate launch --num_processes=4 --gradient_accumulation_steps=32 --gradient_clipping=1.0 \
---gpu_ids all --main_process_port 29563 intx_sft.py configs/self_gen_3_small_and_pretrain.yaml \
+--gpu_ids all --main_process_port 29563 intx_sft.py configs/self_gen_3_and_pretrain_small.yaml \
 --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=2 --per_device_train_batch_size=8 \
 --gradient_accumulation_steps=32 --per_device_eval_batch_size=8 --exp_setup=hyper_lora --aggregator_type=perceiver \
 --target_modules=down_proj \
