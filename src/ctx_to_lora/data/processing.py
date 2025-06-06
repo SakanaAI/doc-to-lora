@@ -2,7 +2,6 @@ import hashlib
 import json
 import logging
 import random
-import time
 from collections.abc import Callable, Iterator
 from glob import glob
 from os import path
@@ -26,8 +25,6 @@ from ctx_to_lora.utils import TRAINING_TASK
 
 logger = logging.getLogger()
 
-# TODO: add continued pre-training pipeline
-
 
 def closed_qa_prompting(prompt: str):
     template = random.choice(CLOSED_QA_INTX_TEMPLATES)
@@ -39,7 +36,9 @@ def get_repeat_prompt():
 
 
 def get_preprocessing_fn(
-    ds_name: str, is_eval: bool
+    ds_name: str,
+    is_eval: bool,
+    is_pretrain: bool,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """
     Get preprocessing function for a specific dataset.
@@ -228,7 +227,7 @@ def get_preprocessing_fn(
     #             "prompt": sample["context"] + sample["qas"],
     #         }
 
-    if is_eval and ds_name in EVAL_INTX_TEMPLATES:
+    if is_eval and (ds_name in EVAL_INTX_TEMPLATES) and not is_pretrain:
         prompt_template = EVAL_INTX_TEMPLATES[ds_name]
 
         def eval_intx_decorator(f):
@@ -294,12 +293,23 @@ def validate_columns(tokenized_ds):
     )
 
 
-def filter_long_samples(samples):
-    return [len(ctx) < 10000 for ctx in samples["context"]]
+def len_filter(sample, max_length: int, keys: list[str]):
+    m = [len(sample[k]) < max_length for k in keys]
+    return sum(m) == len(keys)
 
 
-def filter_long_chat(samples):
-    return [len(chat) < 2**13 for chat in samples["chat"]]
+# def len_filter(ds, max_length: int, keys: list[str]):
+#     for k in keys:
+#         ds = ds.select([i for i, x in enumerate(ds[k]) if len(x) <= max_length])
+#     return ds
+
+
+# def filter_long_samples(samples):
+#     return [len(ctx) < 10000 for ctx in samples["context"]]
+
+
+# def filter_long_chat(samples):
+#     return [len(chat) < 2**13 for chat in samples["chat"]]
 
 
 def add_repeat_prompt_fn(samples: dict[str, list[str]], prob: float):
@@ -388,13 +398,16 @@ def add_negative_prompt_fn(samples):
     )
 
 
-def filter_none(samples):
-    out = [True] * len(samples["context"])
-    for k in samples:
-        for i, sample in enumerate(samples[k]):
-            if not bool(sample):
-                out[i] = False
-    return out
+def filter_none(sample):
+    # out = [True] * len(samples["context"])
+    # for k in samples:
+    #     for i, sample in enumerate(samples[k]):
+    #         if not bool(sample):
+    #             out[i] = False
+    for v in sample.values():
+        if v is None:
+            return False
+    return True
 
 
 def load_and_process_dataset(
@@ -403,20 +416,11 @@ def load_and_process_dataset(
     add_negative_prompt: bool,
     add_repeat_prompt: bool,
     repeat_prob: float,
+    is_pretrain: bool,
     streaming: bool,
     num_proc: int,
+    ds_path: str,
 ):
-    load_and_process_kwargs = dict(
-        ds_name=ds_name,
-        split=split,
-        add_negative_prompt=add_negative_prompt,
-        add_repeat_prompt=add_repeat_prompt,
-        repeat_prob=repeat_prob,
-        streaming=streaming,
-    )
-    ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
-    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
-
     if path.exists(ds_path) and split == "train":
         # load the cached ds
         logger.info(f"Loaded processed dataset from {ds_path}")
@@ -453,20 +457,27 @@ def load_and_process_dataset(
         )
         return None
     cols_to_remove = [
-        col for col in ds.column_names if col not in ["context", "prompt", "response"]
+        col
+        for col in ds.column_names
+        if col not in ["context", "prompt", "response", "qas"]
     ]
     is_eval = split != "train"
     ds = ds.map(
-        get_preprocessing_fn(ds_name, is_eval),
+        get_preprocessing_fn(ds_name, is_eval, is_pretrain),
         remove_columns=cols_to_remove,
-        num_proc=num_proc,
+        # num_proc=num_proc,
     )
     # ds = ds.remove_columns(cols_to_remove)
-    ds = ds.filter(filter_none, batched=True, num_proc=num_proc)
+    ds = ds.filter(
+        filter_none,
+        batched=False,
+        # num_proc=num_proc,
+    )
 
     if split == "train":
         # TODO: drop samples or split into multiple contexts
-        ds = ds.filter(filter_long_samples, batched=True, num_proc=num_proc)
+        # for multi-lora training
+        # ds = ds.filter(filter_long_samples, batched=True, num_proc=num_proc)
         if add_negative_prompt:
             # TODO: add explicit dataset for this
             # w/ qs that are answerable 0-shot
@@ -475,20 +486,21 @@ def load_and_process_dataset(
                 add_negative_prompt_fn,
                 batched=True,
                 batch_size=100_000,
-                num_proc=num_proc,
+                # num_proc=num_proc,
             )
-        if add_repeat_prompt and "context_numbers" not in ds_name:
+        if (
+            add_repeat_prompt
+            and "context_numbers" not in ds_name
+            and "pretrain" not in ds_name
+        ):
             ds = ds.map(
                 add_repeat_prompt_fn,
                 fn_kwargs={"prob": repeat_prob},
                 batched=True,
                 batch_size=100_000,
-                num_proc=num_proc,
+                # num_proc=num_proc,
             )
         ds.save_to_disk(ds_path, num_proc=num_proc)
-        time.sleep(5)
-        # force loading the cached version for newly created ds
-        ds = datasets.load_from_disk(ds_path)
     return ds
 
 
@@ -514,6 +526,7 @@ def get_tokenized_dataset(
         assert repeat_prob > 0, f"add_repeat_prompt is set but repeat_prob = 0"
     logger.debug(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = not add_ctx_to_chat and bool(ctx_model_max_len)
+    is_pretrain = "pretrain" in ds_name
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,
@@ -521,14 +534,21 @@ def get_tokenized_dataset(
         add_negative_prompt=add_negative_prompt,
         add_repeat_prompt=add_repeat_prompt,
         repeat_prob=repeat_prob,
+        is_pretrain=is_pretrain,
         streaming=streaming,
     )
-    num_proc = None if streaming and split == "train" else 2
+    ds_hash = hashlib.sha256(json.dumps(load_and_process_kwargs).encode()).hexdigest()
+    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
+    num_proc = None if streaming and split == "train" else 8
 
     ds = load_and_process_dataset(
         **load_and_process_kwargs,
+        ds_path=ds_path,
         num_proc=num_proc,
     )
+    if split == "train":
+        # force loading from disk when processing for the first time
+        ds = datasets.load_from_disk(ds_path)
 
     tokenized_ds = construct_and_tokenize_ctx_qa(
         base_model_max_len,
@@ -540,6 +560,7 @@ def get_tokenized_dataset(
         add_ctx_to_chat,
         use_kl_loss,
         need_ctx_ids,
+        is_pretrain,
         ds,
         split,
         set_format,
@@ -558,6 +579,7 @@ def construct_and_tokenize_ctx_qa(
     add_ctx_to_chat,
     use_kl_loss,
     need_ctx_ids,
+    is_pretrain,
     ds,
     split,
     set_format=None,
@@ -573,6 +595,7 @@ def construct_and_tokenize_ctx_qa(
         add_ctx_to_chat=add_ctx_to_chat,
         use_kl_loss=use_kl_loss,
         need_ctx_ids=need_ctx_ids,
+        is_pretrain=is_pretrain,
         ds=ds._fingerprint,
         split=split,
         set_format=set_format,
@@ -586,45 +609,77 @@ def construct_and_tokenize_ctx_qa(
         logger.info(f"Loaded tokenized dataset from {ds_path}")
         ds = datasets.load_from_disk(ds_path)
         return ds
-    # for sft + chat_model, we need to convert the dataset to chat format
-    # add "messages" field
-    ds = ds.map(
-        convert_ctx_prompt_response_to_messages,
-        fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-        num_proc=num_proc,
-    )
-    # add "chat" field
-    ds = ds.map(
-        get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
-        batched=True,
-        batch_size=100_000,
-        num_proc=num_proc,
-    )
-    # tokenize the chat + mask the assistant inputs
-    # TODO: drop samples or split into multiple contexts
-    if split == "train":
-        ds = ds.filter(
-            filter_long_chat,
+    if is_pretrain:
+        ds = ds.map(
+            build_intx_pretrain,
+            # batched=True,
+            # batch_size=100_000,
+            # # num_proc=num_proc,
+        )
+        tokenized_ds = ds.map(
+            tokenize_pretrain,
+            fn_kwargs={"tokenizer": tokenizer, "tokenizer_kwargs": tokenizer_kwargs},
             batched=True,
             batch_size=100_000,
-            num_proc=num_proc,
+            # # num_proc=num_proc,
         )
 
-    # add "input_ids", "attention_mask", "labels"
-    tokenized_ds = ds.map(
-        tokenize_chat_messages,
-        fn_kwargs={
-            "tokenizer": tokenizer,
-            "mask_assistant_inputs": True,
-            "tokenizer_kwargs": tokenizer_kwargs,
-        },
-        num_proc=num_proc,
-    )
+    else:
+        # for sft + chat_model, we need to convert the dataset to chat format
+        # add "messages" field
+
+        ds = ds.map(
+            convert_ctx_prompt_response_to_messages,
+            fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+            # # num_proc=num_proc,
+        )
+        # add "chat" field
+        tokenized_ds = ds.map(
+            get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
+            batched=True,
+            batch_size=100_000,
+            # # num_proc=num_proc,
+        )
+        # tokenize the chat + mask the assistant inputs
+        # TODO: drop samples or split into multiple contexts
+        # if split == "train":
+        #     ds = ds.filter(
+        #         filter_long_chat,
+        #         batched=True,
+        #         batch_size=100_000,
+        #         num_proc=num_proc,
+        #     )
+
+        # add "input_ids", "attention_mask", "labels"
+        # TODO: this is slow!
+        # replace manual assistant mask with `return_assistant_tokens_mask`
+        # when using apply_chat_template (function above)
+        # tokenized_ds = ds.map(
+        #     tokenize_chat_messages,
+        #     fn_kwargs={
+        #         "tokenizer": tokenizer,
+        #         "mask_assistant_inputs": True,
+        #         "tokenizer_kwargs": tokenizer_kwargs,
+        #     },
+        #     # # num_proc=num_proc,
+        # )
     if split == "train":
-        # drop?
         # base model cant handle these samples naturally
         # should skip
-        ...
+        tokenized_ds = tokenized_ds.filter(
+            len_filter,
+            fn_kwargs={
+                "max_length": base_model_max_len,
+                "keys": ["input_ids", "labels"],
+            },
+            # batched=False,
+            # batch_size=0,
+            # num_proc=num_proc,
+        )
+        # tokenized_ds = len_filter(
+        #     tokenized_ds, base_model_max_len, ["input_ids", "labels"]
+        # )
+
     else:
         tokenized_ds = tokenized_ds.map(
             truncate_middle_if_too_long,
@@ -633,16 +688,16 @@ def construct_and_tokenize_ctx_qa(
                 "columns": ["input_ids", "attention_mask"],
                 "max_new_tokens": 256,
             },
-            batched=True,
-            batch_size=100_000,
-            num_proc=num_proc,
+            # batched=True,
+            # batch_size=100_000,
+            # # num_proc=num_proc,
         )
         tokenized_ds = tokenized_ds.map(
             add_length_info,
             fn_kwargs={"columns": ["input_ids"]},
-            batched=True,
-            batch_size=100_000,
-            num_proc=num_proc,
+            # batched=True,
+            # batch_size=100_000,
+            # # num_proc=num_proc,
         )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
@@ -674,12 +729,19 @@ def construct_and_tokenize_ctx_qa(
             fn_kwargs={"tokenizer": ctx_tokenizer},
             batched=True,
             batch_size=100_000,
-            num_proc=num_proc,
+            # # num_proc=num_proc,
         )
         if split == "train":
             # TODO: do something if ctx length is longer than the ctx model length
             # e.g., drop or split for multi-lora training
-            ...
+            tokenized_ds = tokenized_ds.filter(
+                len_filter,
+                fn_kwargs={"max_length": ctx_model_max_len, "keys": ["ctx_ids"]},
+                # batched=False,
+                # batch_size=0,
+                # # num_proc=num_proc,
+            )
+            # tokenized_ds = len_filter(tokenized_ds, ctx_model_max_len, ["ctx_ids"])
 
         else:
             # truncate in the middle
@@ -688,23 +750,27 @@ def construct_and_tokenize_ctx_qa(
                 fn_kwargs={
                     "max_length": ctx_model_max_len,
                     "columns": ["ctx_ids", "ctx_attn_mask"],
-                    # no need to add new_tokens here (used only for the ctx encoder)
+                    # cxt encoder doesnt need to add new_tokens
                     "max_new_tokens": 0,
                 },
-                batched=True,
-                batch_size=100_000,
-                num_proc=num_proc,
+                # batched=True,
+                # batch_size=100_000,
+                # # num_proc=num_proc,
             )
             tokenized_ds = tokenized_ds.map(
                 add_length_info,
                 fn_kwargs={"columns": ["ctx_ids"]},
-                batched=True,
-                batch_size=100_000,
-                num_proc=num_proc,
+                # batched=True,
+                # batch_size=100_000,
+                # # num_proc=num_proc,
             )
-    tokenized_ds = tokenized_ds.remove_columns(
-        ["messages", "chat", "context", "prompt", "response"]
-    )
+
+    if is_pretrain:
+        tokenized_ds = tokenized_ds.remove_columns(["context", "qas", "text"])
+    else:
+        tokenized_ds = tokenized_ds.remove_columns(
+            ["messages", "context", "prompt", "response"]
+        )
     if set_format:
         tokenized_ds.set_format(type=set_format)
     # if isinstance(tokenized_ds, IterableDataset):
@@ -713,9 +779,15 @@ def construct_and_tokenize_ctx_qa(
     # validate_columns(tokenized_ds)
     if split == "train":
         tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
-        del tokenized_ds
-        return datasets.load_from_disk(ds_path)
     return tokenized_ds
+
+
+# def build_intx_pretrain(samples: dict[str, any]):
+#     return {"text": [ctx + qa for ctx, qa in zip(samples["context"], samples["qas"])]}
+
+
+def build_intx_pretrain(sample: dict[str, str]):
+    return {"text": sample["context"] + sample["qas"]}
 
 
 def get_sft_prompt_formatting_fn(
@@ -765,11 +837,27 @@ def get_sft_prompt_formatting_fn(
     #             output_texts["response"].append(str(inp_txt[metadata["response_field"]]))
     #     return output_texts
 
+    # def f_intx(example):
+    #     chat_text = tokenizer.apply_chat_template(
+    #         example["messages"], tokenize=False, add_generation_prompt=False
+    #     )
+    #     return dict(chat=chat_text)
     def f_intx(example):
-        chat_text = tokenizer.apply_chat_template(
-            example["messages"], tokenize=False, add_generation_prompt=False
+        tokens = tokenizer.apply_chat_template(
+            example["messages"],
+            tokenize=True,
+            add_special_token=False,
+            truncation=False,
+            add_generation_prompt=False,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
         )
-        return dict(chat=chat_text)
+        labels = []
+        for tok_ids, masks in zip(tokens["input_ids"], tokens["assistant_masks"]):
+            o = [id_ if mask else IGNORE_INDEX for id_, mask in zip(tok_ids, masks)]
+            labels.append(o)
+        tokens["labels"] = labels
+        return tokens
 
     # return f if not apply_chat_template_fn is not None else f_intx
     return f_intx
@@ -915,12 +1003,12 @@ def tokenize_chat_messages(
         truncation=False,
         **(tokenizer_kwargs or {}),
     )
-    if tokenizer_kwargs and (
-        len(conversation_ids["input_ids"]) >= tokenizer_kwargs["max_length"]
-    ):
-        raise ValueError(
-            f"Conversation length {len(conversation_ids['input_ids'])} exceeds max length {tokenizer_kwargs['max_length']}"
-        )
+    # if tokenizer_kwargs and (
+    #     len(conversation_ids["input_ids"]) >= tokenizer_kwargs["max_length"]
+    # ):
+    #     raise ValueError(
+    #         f"Conversation length {len(conversation_ids['input_ids'])} exceeds max length {tokenizer_kwargs['max_length']}"
+    #     )
 
     if mask_assistant_inputs:
         assistant_ranges = get_assistant_start_end_indices(
@@ -942,14 +1030,54 @@ def tokenize_chat_messages(
     return conversation_ids
 
 
-def add_length_info(samples: dict[str, any], columns: list[str]) -> dict[str, any]:
-    for col in columns:
-        samples[f"{col}_len"] = [len(t) for t in samples[col]]
-    return samples
+def tokenize_pretrain(
+    samples: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+    tokenizer_kwargs: dict[str, Any] | None = None,
+):
+    """
+    Tokenize text for pre-training tasks.
+
+    Args:
+        samples: Dictionary containing 'text' key
+        tokenizer: Tokenizer to use
+        tokenizer_kwargs: Additional arguments to pass to tokenizer
+
+    Returns:
+        Dictionary containing tokenized inputs and labels
+    """
+    add_bos_val = tokenizer.add_bos_token
+    add_eos_val = tokenizer.add_eos_token
+    tokenizer.add_bos_token = True
+    tokenizer.add_eos_token = False  # no eos for pre-training samples
+    tokens = tokenizer(
+        samples["text"],
+        add_special_tokens=True,
+        truncation=False,
+        **(tokenizer_kwargs or {}),
+    )
+
+    # if tokenizer.bos_token_id is not None:
+    #     for i in range(len(tokens["input_ids"])):
+    #         # add bos
+    #         tokens["input_ids"][i] = [tokenizer.bos_token_id] + tokens["input_ids"][i]
+    #         tokens["attention_mask"][i] = [1] + tokens["attention_mask"][i]
+    tokenizer.add_bos_token = add_bos_val
+    tokenizer.add_eos_token = add_eos_val
+
+    tokens["labels"] = tokens["input_ids"]
+    return tokens
+
+
+def add_length_info(sample: dict[str, any], columns: list[str]) -> dict[str, any]:
+    return {f"{k}_len": len(sample[k]) for k in columns}
+    # for col in columns:
+    #     samples[f"{col}_len"] = [len(t) for t in samples[col]]
+    # return samples
 
 
 def truncate_middle_if_too_long(
-    samples: dict[str, any],
+    sample: dict[str, any],
     max_length: int,
     columns: list[str],
     max_new_tokens: int = 256,
@@ -970,10 +1098,9 @@ def truncate_middle_if_too_long(
     for col in columns:
         # if len(samples[col]) <= max_length:
         #     return samples[col]
-        samples[col] = [
-            t[:half] + t[-half:] if len(t) > max_length else t for t in samples[col]
-        ]
-    return samples
+        t = sample[col]
+        sample[col] = t[:half] + t[-half:] if len(t) > max_length else t
+    return sample
 
 
 def tokenize_ctx_text(
@@ -981,20 +1108,27 @@ def tokenize_ctx_text(
     tokenizer: PreTrainedTokenizerBase,
 ) -> dict[str, Any]:
     if tokenizer.chat_template:
-        txt = tokenizer.apply_chat_template(
+        tokenized_text = tokenizer.apply_chat_template(
             [
-                [{"role": "user", "content": text.strip()}]
+                [
+                    {"role": "system", "content": ""},
+                    {"role": "user", "content": text.strip()},
+                ]
                 for text in samples["context"]
             ],
-            tokenize=False,
-            add_generation_prompt=False,
+            tokenize=True,
+            add_generation_prompt=True,
+            padding=False,
+            truncation=False,
+            add_special_tokens=False,
+            return_dict=True,
         )
         # special tokens are already added by the chat template
-        tokenized_text = tokenizer(txt, truncation=False, add_special_tokens=False)
+        # tokenized_text = tokenizer(txt, truncation=False, add_special_tokens=False)
     else:
-        txt = samples["context"]
-        tokenized_text = tokenizer(txt, truncation=False)
-
+        raise NotImplementedError("Only support chat models.")
+        # txt = samples["context"]
+        # tokenized_text = tokenizer(txt, truncation=False, add_special_tokens=False)
     ctx_ids = tokenized_text["input_ids"]
     ctx_attn_mask = tokenized_text["attention_mask"]
     return dict(ctx_ids=ctx_ids, ctx_attn_mask=ctx_attn_mask)

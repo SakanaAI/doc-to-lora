@@ -136,6 +136,13 @@ DS_KWARGS = {
             split="train[:100000]",
         ),
     ),
+    "fw_qa_3_small": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob("data/raw_datasets/fw_qa_3/000*[!val].parquet"),
+            split="train",
+        ),
+    ),
     "fw_qa_3_medium": dict(
         train=dict(
             path="parquet",
@@ -155,14 +162,23 @@ DS_KWARGS = {
             split="train",
         ),
     ),
-    "fw_qa_3_intx_pretrain_mini": dict(
+    "fw_qa_3_mini_pretrain": dict(
         train=dict(
             path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/000_00001.parquet"),
+            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/000_00004.parquet"),
             split="train[:100000]",
         )
     ),
-    "fw_qa_3_intx_pretrain_medium": dict(
+    "fw_qa_3_small_pretrain": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob(
+                "data/raw_datasets/fw_qa_intx_pretrain/000_*[!val].parquet"
+            ),
+            split="train",
+        )
+    ),
+    "fw_qa_3_medium_pretrain": dict(
         train=dict(
             path="parquet",
             data_files=glob(
@@ -171,7 +187,7 @@ DS_KWARGS = {
             split="train",
         )
     ),
-    "fw_qa_3_intx_pretrain": dict(
+    "fw_qa_3_pretrain": dict(
         train=dict(
             path="parquet",
             data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*[!val].parquet"),

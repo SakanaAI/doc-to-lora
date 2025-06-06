@@ -57,6 +57,8 @@ def get_tokenizer(
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name_or_path,
+        add_bos_tokens=False,
+        add_eos_tokens=False,
         padding_side=padding_side,
         truncation_side=truncation_side,
         trust_remote_code=True,
@@ -67,11 +69,12 @@ def get_tokenizer(
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     template_path = f"chat_templates/{model_name_or_path}.jinja"
-    if os.path.exists(template_path):
-        logger.info(f"Using chat template from {template_path}")
-        chat_template = open(template_path).read()
-        chat_template = chat_template.replace("    ", "").replace("\n", "")
-        tokenizer.chat_template = chat_template
+    assert os.path.exists(template_path), f"Chat template not found at {template_path}."
+
+    logger.info(f"Using chat template from {template_path}")
+    chat_template = open(template_path).read()
+    chat_template = chat_template.replace("    ", "").replace("\n", "")
+    tokenizer.chat_template = chat_template
     return tokenizer
 
 

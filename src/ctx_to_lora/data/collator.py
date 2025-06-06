@@ -141,6 +141,7 @@ def generation_collator(inp_list, tokenizer):
     for i, label in enumerate(labels):
         # remove the response tokens
         idx = np.argmax(label != -100)
+        idx = max(1, idx)
         input_ids[i] = input_ids[i][:idx]
         attn_mask[i] = attn_mask[i][:idx]
     out = tokenizer.pad(
