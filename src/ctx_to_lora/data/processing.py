@@ -533,10 +533,8 @@ def get_tokenized_dataset(
     )
     tokenize_kwargs = dict(
         base_model_max_len=base_model_max_len,
-        tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,
         ctx_model_max_len=ctx_model_max_len,
-        ctx_tokenizer=ctx_tokenizer,
         ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
         use_kl_loss=use_kl_loss,
@@ -549,6 +547,7 @@ def get_tokenized_dataset(
 
     all_kwargs = {**load_and_process_kwargs, **tokenize_kwargs}
     kwargs_str = json.dumps(all_kwargs)
+    kwargs_str += repr(tokenizer) + repr(ctx_tokenizer)
     logger.debug(f"Tokenizing dataset with kwargs: {kwargs_str}")
     ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
     ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
@@ -567,6 +566,8 @@ def get_tokenized_dataset(
     logger.info(f"Constructing and tokenizing {ds_name} with {split} split...")
     tokenized_ds = construct_and_tokenize_ctx_qa(
         ds=ds,
+        tokenizer=tokenizer,
+        ctx_tokenizer=ctx_tokenizer,
         num_proc=num_proc,
         **tokenize_kwargs,
     )
