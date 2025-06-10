@@ -6,10 +6,10 @@
 #SBATCH --output=outputs/%x-%j.out
 #SBATCH --error=outputs/%x-%j.out
 
-uv run accelerate launch --num_processes=4 --gradient_accumulation_steps=8 --gradient_clipping=1.0 \
+uv run accelerate launch --num_processes=4 --gradient_accumulation_steps=16 --gradient_clipping=1.0 \
 --gpu_ids all --main_process_port 29562 intx_sft.py configs/self_gen_3_small.yaml \
---model_name_or_path=google/gemma-2-2b-it --num_train_epochs=4 --per_device_train_batch_size=32 \
---gradient_accumulation_steps=8 --per_device_eval_batch_size=32 --exp_setup=hyper_lora --aggregator_type=perceiver \
+--model_name_or_path=google/gemma-2-2b-it --num_train_epochs=3 --per_device_train_batch_size=8 \
+--gradient_accumulation_steps=16 --per_device_eval_batch_size=4 --exp_setup=hyper_lora --aggregator_type=perceiver \
 --target_modules=down_proj \
 --num_self_attends_per_block=4 --num_latent_factor=1 \
 --lora_r=8 \
