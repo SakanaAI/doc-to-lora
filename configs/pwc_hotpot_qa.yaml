@@ -45,7 +45,3 @@ train_ds_names:
 val_ds_names:
   - pwc
   - hotpot_qa
-
-test_ds_names:
-  - pwc
-  - hotpot_qa

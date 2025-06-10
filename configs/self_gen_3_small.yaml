@@ -50,7 +50,7 @@ train_ds_names:
 
 val_ds_names:
   - fw_qa_3_pretrain
-  - self_gen/google/gemma-2-2b-it/fw_qa_3
+  - self_gen/google/gemma-2-2b-it/fw_qa_3_small
   - self_gen/google/gemma-2-2b-it/ctx_qa
   - self_gen/google/gemma-2-2b-it/pwc
   - self_gen/google/gemma-2-2b-it/hotpot_qa
@@ -62,4 +62,4 @@ val_ds_names:
   - squad
 
 load_best_model_at_end: false
-metric_for_best_model: eval_pwc_loss
+metric_for_best_model: eval_fw_qa_3_pretrain_loss 
