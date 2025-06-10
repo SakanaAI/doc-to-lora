@@ -673,7 +673,8 @@ class ModulatedPretrainedModel(nn.Module):
             return sd
 
         load_result = self.hypernet.load_state_dict(
-            remove_compile_prefix(state_dict), strict=True, *args, **kwargs
+            remove_compile_prefix(state_dict),
+            strict=True,  # , *args, **kwargs
         )
         logger.info(f"load result: {load_result}")
         return load_result
