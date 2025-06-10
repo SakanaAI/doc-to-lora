@@ -1,8 +1,9 @@
+import contextlib
 import logging
 import os
 from copy import deepcopy
 from functools import partial
-from math import ceil, isclose
+from math import isclose
 
 import numpy as np
 import torch
@@ -30,8 +31,11 @@ from ctx_to_lora.configs import (
     ModelArguments,
     TrainingArguments,
 )
-from ctx_to_lora.data.collator import train_collator, train_packed_collator
-from ctx_to_lora.data.processing import get_tokenized_dataset
+from ctx_to_lora.data.collator import (  # train_packed_collator,; DefaultDataCollator,
+    flatten_if_not_packed,
+    train_collator,
+)
+from ctx_to_lora.data.processing import get_tokenized_dataset, pack
 from ctx_to_lora.metrics import (
     Evaluator,
     compute_metrics,
@@ -269,24 +273,33 @@ def main():
         set_format=None if ctx_args.use_sequence_packing else "pt",
         # streaming=data_args.streaming,
     )
-    tokenized_ds = {"train": dict(), "validation": dict(), "test": dict()}
+    tokenized_ds = {"train": dict(), "validation": dict()}
     for split, ds_names in zip(
-        ["train", "validation", "test"],
-        [data_args.train_ds_names, data_args.val_ds_names, data_args.test_ds_names],
+        ["train", "validation"],
+        [data_args.train_ds_names, data_args.val_ds_names],
     ):
         if not ds_names:
             continue
         streaming = (split == "train") and data_args.streaming
-        for ds_name in ds_names:
-            ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
+        ctx_mgr = (
+            training_args.main_process_first()
+            if split == "train"
+            else contextlib.nullcontext()
+        )
+        with ctx_mgr:
+            # process and tokenize on the main process
+            # then other replicas can just load the cached dataset
+            # we dont save cache for validation ds
+            for ds_name in ds_names:
+                ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
 
-            base_name = os.path.basename(ds_name)
-            if ds_name.startswith("self_gen/"):
-                ds_name = "self_gen/" + base_name
-            else:
-                ds_name = base_name
+                base_name = os.path.basename(ds_name)
+                if ds_name.startswith("self_gen/"):
+                    ds_name = "self_gen/" + base_name
+                else:
+                    ds_name = base_name
 
-            tokenized_ds[split][ds_name] = ds
+                tokenized_ds[split][ds_name] = ds
 
     train_ds = tokenized_ds["train"]
     logging.info(f"train_ds: {train_ds}")
@@ -328,27 +341,43 @@ def main():
     #     seed=training_args.seed,
     # )
     # else:
+
     train_ds_len = [len(ds) for ds in train_ds.values()]
     total_len = sum(train_ds_len)
-    max_steps = ceil(
-        total_len
-        * training_args.num_train_epochs
-        / training_args.per_device_train_batch_size
-        / training_args.gradient_accumulation_steps
-        / training_args.world_size
-    )
-    training_args.max_steps = max_steps
+    # max_steps = ceil(
+    #     total_len
+    #     * training_args.num_train_epochs
+    #     / training_args.per_device_train_batch_size
+    #     / training_args.gradient_accumulation_steps
+    #     / training_args.world_size
+    # )
+    # training_args.max_steps = max_steps
     train_ds = interleave_datasets(
         list(train_ds.values()),
         probabilities=get_ds_prob(train_ds_len, total_len),
         seed=training_args.seed,
+        stopping_strategy="all_exhausted",
     )
+
+    if ctx_args.use_sequence_packing:
+        logging.info("Packing dataset")
+        train_ds = pack(
+            train_ds,
+            ctx_args.max_packed_inp_len,
+            ctx_args.max_packed_ctx_len,
+            max_packed_size=-1,
+            num_proc=8,
+        )
+        # TODO: add stats here
+        logging.info("Setting per_device_train_batch_size to 1")
+        training_args.per_device_train_batch_size = 1
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
 
     collator = (
-        train_packed_collator
+        flatten_if_not_packed
+        # DefaultDataCollator(return_tensors="pt")
         if ctx_args.use_sequence_packing
         else partial(train_collator, tokenizer=tokenizer)
     )

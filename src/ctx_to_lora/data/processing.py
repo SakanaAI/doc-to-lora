@@ -9,7 +9,7 @@ from typing import Any
 
 import datasets
 import numpy as np
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.data.definitions import (
@@ -21,6 +21,7 @@ from ctx_to_lora.data.definitions import (
     SELF_GEN_DATA_DIR,
     TRANSFORMED_DATA_DIR,
 )
+from ctx_to_lora.data.packing import pack_batch
 from ctx_to_lora.utils import TRAINING_TASK
 
 logger = logging.getLogger()
@@ -294,7 +295,7 @@ def validate_columns(tokenized_ds):
 
 
 def len_filter(sample, max_length: int, keys: list[str]):
-    m = [len(sample[k]) < max_length for k in keys]
+    m = [len(sample[k]) <= max_length for k in keys]
     return sum(m) == len(keys)
 
 
@@ -459,13 +460,13 @@ def load_and_process_dataset(
     ds = ds.map(
         get_preprocessing_fn(ds_name, is_eval, is_pretrain),
         remove_columns=cols_to_remove,
-        # num_proc=num_proc,
+        num_proc=num_proc,
     )
     # ds = ds.remove_columns(cols_to_remove)
     ds = ds.filter(
         filter_none,
         batched=False,
-        # num_proc=num_proc,
+        num_proc=num_proc,
     )
 
     if split == "train":
@@ -573,7 +574,8 @@ def get_tokenized_dataset(
     )
     if split == "train":
         tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
-
+        # force reload from disk for fingerprint consistency
+        tokenized_ds = datasets.load_from_disk(ds_path)
     return tokenized_ds
 
 
@@ -598,16 +600,17 @@ def construct_and_tokenize_ctx_qa(
         if is_paraphrased:
             ds = ds.map(
                 build_paraphrase_pretrain,
-                batched=True,
-                batch_size=100_000,
+                # batched=True,
+                # batch_size=100_000,
                 remove_columns=["variation"],
+                num_proc=num_proc,
             )
         else:
             ds = ds.map(
                 build_intx_pretrain,
                 # batched=True,
                 # batch_size=100_000,
-                # # num_proc=num_proc,
+                num_proc=num_proc,
             )
         tokenized_ds = ds.map(
             tokenize_pretrain,
@@ -628,7 +631,7 @@ def construct_and_tokenize_ctx_qa(
         ds = ds.map(
             convert_ctx_prompt_response_to_messages,
             fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-            # # num_proc=num_proc,
+            num_proc=num_proc,
         )
         # add "chat" field
         tokenized_ds = ds.map(
@@ -671,7 +674,7 @@ def construct_and_tokenize_ctx_qa(
             },
             # batched=False,
             # batch_size=0,
-            # num_proc=num_proc,
+            num_proc=num_proc,
         )
         # tokenized_ds = len_filter(
         #     tokenized_ds, base_model_max_len, ["input_ids", "labels"]
@@ -687,14 +690,14 @@ def construct_and_tokenize_ctx_qa(
             },
             # batched=True,
             # batch_size=100_000,
-            # # num_proc=num_proc,
+            # num_proc=num_proc,
         )
         tokenized_ds = tokenized_ds.map(
             add_length_info,
             fn_kwargs={"columns": ["input_ids"]},
             # batched=True,
             # batch_size=100_000,
-            # # num_proc=num_proc,
+            # num_proc=num_proc,
         )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
@@ -736,7 +739,7 @@ def construct_and_tokenize_ctx_qa(
                 fn_kwargs={"max_length": ctx_model_max_len, "keys": ["ctx_ids"]},
                 # batched=False,
                 # batch_size=0,
-                # # num_proc=num_proc,
+                num_proc=num_proc,
             )
             # tokenized_ds = len_filter(tokenized_ds, ctx_model_max_len, ["ctx_ids"])
 
@@ -752,14 +755,14 @@ def construct_and_tokenize_ctx_qa(
                 },
                 # batched=True,
                 # batch_size=100_000,
-                # # num_proc=num_proc,
+                # num_proc=num_proc,
             )
             tokenized_ds = tokenized_ds.map(
                 add_length_info,
                 fn_kwargs={"columns": ["ctx_ids"]},
                 # batched=True,
                 # batch_size=100_000,
-                # # num_proc=num_proc,
+                # num_proc=num_proc,
             )
 
     if is_pretrain:
@@ -858,6 +861,7 @@ def get_sft_prompt_formatting_fn(
         for tok_ids, masks in zip(tokens["input_ids"], tokens["assistant_masks"]):
             o = [id_ if mask else IGNORE_INDEX for id_, mask in zip(tok_ids, masks)]
             labels.append(o)
+        del tokens["assistant_masks"]
         tokens["labels"] = labels
         return tokens
 
@@ -1059,7 +1063,6 @@ def tokenize_pretrain(
         truncation=False,
         **(tokenizer_kwargs or {}),
     )
-
     # if tokenizer.bos_token_id is not None:
     #     for i in range(len(tokens["input_ids"])):
     #         # add bos
@@ -1135,6 +1138,49 @@ def tokenize_ctx_text(
     ctx_ids = tokenized_text["input_ids"]
     ctx_attn_mask = tokenized_text["attention_mask"]
     return dict(ctx_ids=ctx_ids, ctx_attn_mask=ctx_attn_mask)
+
+
+def pack(
+    ds: Dataset,
+    max_packed_inp_len: int,
+    max_packed_ctx_len: int,
+    max_packed_size: int,
+    num_proc: int = 0,
+):
+    # TODO: packing has to happen after concat'ing all the ds
+    # might have to do this on the fly...
+    # or have a giant cached file for the already concat'd + packed ds
+    kwargs = dict(
+        max_packed_inp_len=max_packed_inp_len,
+        max_packed_ctx_len=max_packed_ctx_len,
+        max_packed_size=max_packed_size,
+    )
+    ds_hash = hashlib.sha256(
+        (ds._fingerprint + json.dumps(kwargs)).encode()
+    ).hexdigest()
+    ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
+    logger.info(
+        f"Packing dataset {ds_hash} with max_packed_inp_len={max_packed_inp_len} and max_packed_ctx_len={max_packed_ctx_len}"
+    )
+    if path.exists(ds_path):
+        logger.info(f"Loading a cached packed dataset for {ds_path}")
+        return datasets.load_from_disk(ds_path)
+    else:
+        ds = ds.map(
+            pack_batch,
+            fn_kwargs={
+                "max_packed_inp_len": max_packed_inp_len,
+                "max_packed_ctx_len": max_packed_ctx_len,
+                "max_packed_size": max_packed_size,
+            },
+            batched=True,
+            batch_size=1_000_000,
+            num_proc=num_proc,
+            remove_columns=ds.column_names,
+        )
+
+        ds.save_to_disk(ds_path, num_proc=num_proc)
+    return ds
 
 
 if __name__ == "__main__":

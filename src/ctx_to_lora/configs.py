@@ -307,12 +307,16 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to use sequence packing."},
     )
-    per_device_train_max_batch_len: int | None = field(
-        default=2**12,
-        metadata={
-            "help": "Maximum batch length for training. Only used with multipack sampler."
-        },
+    max_packed_inp_len: int | None = field(
+        default=2**14,
+        metadata={"help": "Maximum packed input length for training."},
     )
+    max_packed_ctx_len: int | None = field(
+        # forward pass of the ctx encoder is cheaper --> longer packed len
+        default=2**15,
+        metadata={"help": "Maximum packed context length for training."},
+    )
+
     max_new_tokens: int | None = field(
         default=2**10,
         metadata={"help": "Maximum new tokens for generation-based evaluation."},
@@ -355,6 +359,7 @@ class DataArguments:
         default=None,
         metadata={"help": "Training dataset names."},
     )
+
     streaming: bool = field(
         default=False,
         metadata={"help": "Whether to use streaming dataset for training."},

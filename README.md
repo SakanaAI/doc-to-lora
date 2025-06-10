@@ -40,13 +40,14 @@ WANDB_MODE=disabled uv run intx_sft.py configs/pwc_hotpot_qa.yaml \
 --gradient_accumulation_steps=1 --per_device_eval_batch_size=32 --exp_setup=hyper_lora \
 --aggregator_type=perceiver \
 --target_modules=down_proj \
---num_self_attends_per_block=4 --num_latent_factor=2 \
+--num_self_attends_per_block=8 --num_latent_factor=2 \
 --lora_r=8 \
 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 \
 --neftune_noise_alpha=5 --use_light_weight_lora=False \
---load_best_model_at_end=True --metric_for_best_model=pwc_loss --add_negative_prompt=False \
+--load_best_model_at_end=True --metric_for_best_model=eval_pwc_loss --add_negative_prompt=False \
 --add_repeat_prompt=False \
---use_sequence_packing=True --per_rank_gen=True \
+--use_sequence_packing=True --max_packed_inp_len=20000 --max_packed_ctx_len=40000 \
+--per_rank_gen=True \
 --per_layer_processing=True \
 --gen_lora_l1_reg_coef=0.1 \
 ```

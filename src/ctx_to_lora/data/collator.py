@@ -1,20 +1,44 @@
 import numpy as np
 import torch
-from transformers.data import DataCollatorWithFlattening
+from transformers.data import (
+    DataCollatorWithFlattening,
+    default_data_collator,
+)
 
 flattener = DataCollatorWithFlattening()
 
 
-def train_packed_collator(inp_list):
+# def train_packed_collator(inp_list):
+#     # no padding
+#     packed_inputs = flattener(inp_list, return_tensors="pt")
+#     if "ctx_ids" in inp_list[0]:
+#         ctx_ids = [{"input_ids": example["ctx_ids"]} for example in inp_list]
+#         packed_ctx = flattener(ctx_ids, return_tensors="pt")
+#         packed_inputs["ctx_ids"] = packed_ctx["input_ids"]
+#         packed_inputs["ctx_position_ids"] = packed_ctx["position_ids"]
+#         # for eval info
+#         if "ctx_ids_len" in inp_list[0]:
+#             packed_inputs["ctx_ids_len"] = [
+#                 example["ctx_ids_len"] for example in inp_list
+#             ]
+
+#     return packed_inputs
+
+
+def flatten_if_not_packed(inp_list):
     # no padding
+    sample = inp_list[0]
+    if "position_ids" in sample:
+        return default_data_collator(inp_list, return_tensors="pt")
+
     packed_inputs = flattener(inp_list, return_tensors="pt")
-    if "ctx_ids" in inp_list[0]:
+    if "ctx_ids" in sample:
         ctx_ids = [{"input_ids": example["ctx_ids"]} for example in inp_list]
         packed_ctx = flattener(ctx_ids, return_tensors="pt")
         packed_inputs["ctx_ids"] = packed_ctx["input_ids"]
         packed_inputs["ctx_position_ids"] = packed_ctx["position_ids"]
         # for eval info
-        if "ctx_ids_len" in inp_list[0]:
+        if "ctx_ids_len" in sample:
             packed_inputs["ctx_ids_len"] = [
                 example["ctx_ids_len"] for example in inp_list
             ]
