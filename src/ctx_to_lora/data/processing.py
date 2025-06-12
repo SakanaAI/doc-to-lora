@@ -27,6 +27,23 @@ from ctx_to_lora.utils import TRAINING_TASK
 logger = logging.getLogger()
 
 
+def load_answers(ds_name, split):
+    if ds_name.startswith("longbench"):
+
+        def extract_ans(sample):
+            return {"answers": sample["answers"]}
+
+    elif ds_name == "squad":
+
+        def extract_ans(sample):
+            return {"answers": sample["answers"]["text"]}
+
+    ds_kwargs = get_ds_kwargs(ds_name, split)
+    ds = load_dataset(**ds_kwargs, trust_remote_code=True)
+    ds = ds.map(extract_ans, num_proc=8)
+    return ds
+
+
 def closed_qa_prompting(prompt: str):
     template = random.choice(CLOSED_QA_INTX_TEMPLATES)
     return template.format(input=prompt)
@@ -52,7 +69,36 @@ def get_preprocessing_fn(
     """
     f = lambda x: x
 
-    if ds_name.startswith("pwc"):
+    if ds_name.startswith("longbench"):
+
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["input"],
+                "response": sample["answers"][0],
+            }
+
+    elif ds_name == "negative_nq":
+
+        def f(sample):
+            q = sample["prompt"]
+            prompt = closed_qa_prompting(q) if not is_eval else q
+            return {
+                "context": sample["context"],
+                "prompt": prompt,
+                "response": sample["answer"],
+            }
+
+    elif ds_name == "triviaqa_retrieved":
+        # only used for eval
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["prompt"],
+                "response": sample["answer"],
+            }
+
+    elif ds_name.startswith("pwc"):
 
         def f(sample):
             return {
@@ -187,46 +233,6 @@ def get_preprocessing_fn(
                 "prompt": sample["instruction"],
                 "response": "```python\n" + sample["code"].strip() + "\n```",
             }
-
-    elif ds_name.startswith("longbench"):
-
-        def f(sample):
-            return {
-                "context": sample["context"],
-                "prompt": sample["input"],
-                "response": sample["answers"][0],
-            }
-
-    elif ds_name == "negative_nq":
-
-        def f(sample):
-            q = sample["prompt"]
-            prompt = closed_qa_prompting(q) if not is_eval else q
-            return {
-                "context": sample["context"],
-                "prompt": prompt,
-                "response": sample["answer"],
-            }
-
-    elif ds_name == "triviaqa_retrieved":
-        # only used for eval
-        def f(sample):
-            return {
-                "context": sample["context"],
-                "prompt": sample["prompt"],
-                "response": sample["answer"],
-            }
-
-    # elif "intx_pretrain" in ds_name:
-    #     # concat ctx and QAs
-    #     # use all as labels
-    #     # what about prefix??
-    #     # neede for pre-training style lm objective
-    #     def f(sample):
-    #         return {
-    #             "context": sample["context"],
-    #             "prompt": sample["context"] + sample["qas"],
-    #         }
 
     if is_eval and (ds_name in EVAL_INTX_TEMPLATES) and not is_pretrain:
         prompt_template = EVAL_INTX_TEMPLATES[ds_name]

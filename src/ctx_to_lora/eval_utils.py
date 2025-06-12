@@ -30,8 +30,9 @@ from ctx_to_lora.data.definitions import (
     CLOSED_QA_DATASETS,
     LONGBENCH_E_TASKS,
     LONGBENCH_TASKS,
+    MULTI_ANSWER_DATASETS,
 )
-from ctx_to_lora.data.processing import get_tokenized_dataset
+from ctx_to_lora.data.processing import get_tokenized_dataset, load_answers
 from ctx_to_lora.metrics import (
     LENGTH_BINS,
     Evaluator,
@@ -90,20 +91,22 @@ def f1_score(prediction: str, ground_truth: str) -> float:
 
 
 def compute_qa_f1_score(
-    pred_texts: list[str], label_texts: list[str]
+    pred_texts: list[str], answers_list: list[list[str]]
 ) -> dict[str, float]:
     """
     Word-level F1 score for evaluating question answering systems.
     Order of the words does not matter.
     """
     res = []
-    for prediction, label in zip(pred_texts, label_texts):
+    for prediction, answers in zip(pred_texts, answers_list):
         normalized_prediction = normalize_answer(prediction)
-        normalized_label = normalize_answer(label)
-
         prediction_words = normalized_prediction.split()
-        label_words = normalized_label.split()
-        res.append(f1_score(prediction_words, label_words))
+        score = 0
+        for answer in answers:
+            normalized_label = normalize_answer(answer)
+            label_words = normalized_label.split()
+            score = max(score, f1_score(prediction_words, label_words))
+        res.append(score)
     return dict(qa_f1=np.mean(res))
 
 
@@ -408,7 +411,14 @@ def decode_test_result(
 
 @torch.inference_mode()
 def eval_generation(
-    eval_trainer, tokenizer, ctx_tokenizer, datasets, split, remove_context, gen_kwargs
+    eval_trainer,
+    tokenizer,
+    ctx_tokenizer,
+    datasets,
+    answers,
+    split,
+    remove_context,
+    gen_kwargs,
 ) -> dict[str, dict]:
     """Evaluate model using generation and save metrics to CSV."""
     if not isinstance(datasets, dict):
@@ -427,16 +437,19 @@ def eval_generation(
             **gen_kwargs,
         )
         decoded_txts = decode_test_result(ds, eval_result, tokenizer, ctx_tokenizer)
+
         pred_texts = [txt["generated"] for txt in decoded_txts]
         label_texts = [txt["label"] for txt in decoded_txts]
+        if ds_name in answers:
+            answers_list = answers[ds_name]["answers"]
+        else:
+            answers_list = [[txt] for txt in label_texts]
         n = len(pred_texts)
 
         if ds_name in CLOSED_QA_DATASETS:
             print("Computing QA F1 Score")
-            qa_f1_metric = compute_qa_f1_score(
-                [txt["generated"] for txt in decoded_txts],
-                [txt["label"] for txt in decoded_txts],
-            )
+            print(answers_list)
+            qa_f1_metric = compute_qa_f1_score(pred_texts, answers_list)
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
                 eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
@@ -468,8 +481,27 @@ def eval_generation(
         for group_key, data in grouped_texts.items():
             if data["count"] > 0:
                 if ds_name in CLOSED_QA_DATASETS:
+                    # Get corresponding answers for this group
+                    group_answers = []
+                    group_idx = 0
+                    for i, txt in enumerate(decoded_txts):
+                        len_key = (
+                            "ctx_ids_len" if "ctx_ids_len" in txt else "input_ids_len"
+                        )
+                        input_len = txt[len_key]
+                        for low, high in LENGTH_BINS:
+                            if low <= input_len <= high:
+                                if f"{low}-{high}" == group_key:
+                                    if ds_name in answers:
+                                        group_answers.append(
+                                            answers[ds_name]["answers"][i]
+                                        )
+                                    else:
+                                        group_answers.append([txt["label"]])
+                                break
+
                     group_qa_f1_metric = compute_qa_f1_score(
-                        data["generated"], data["label"]
+                        data["generated"], group_answers
                     )
                     for k, v in group_qa_f1_metric.items():
                         eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
@@ -637,11 +669,16 @@ def evaluate(
     )
 
     datasets = dict()
+    answers = dict()
     ds_names = args.val_ds_names if split == "validation" else args.test_ds_names
     add_longbench_tasks(ds_names)
     for ds_name in ds_names:
         datasets[ds_name] = _get_tokenized_dataset(ds_name, split)
-    print(datasets)
+        # handling cases where there are multiple answers
+        if ds_name in MULTI_ANSWER_DATASETS:
+            answers[ds_name] = load_answers(ds_name, split)
+    print(f"Datasets: {datasets}")
+    print(f"Answers: {answers}")
 
     # truncating num val samples
     max_eval_samples_per_ds = getattr(args, "max_val_samples_per_ds", 0)
@@ -650,7 +687,10 @@ def evaluate(
         for ds_name, ds in datasets.items():
             val_indices = np.random.permutation(len(ds))[:max_eval_samples_per_ds]
             datasets[ds_name] = ds.select(val_indices)
-    print(datasets)
+            answers[ds_name] = answers.select(val_indices)
+
+    print(f"Datasets: {datasets}")
+    print(f"Answers: {answers}")
 
     gen_kwargs = dict(
         do_sample=False,
@@ -716,6 +756,7 @@ def evaluate(
             tokenizer,
             ctx_tokenizer,
             datasets,
+            answers,
             split,
             args.remove_context,
             gen_kwargs,

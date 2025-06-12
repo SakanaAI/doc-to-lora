@@ -365,10 +365,25 @@ CLOSED_QA_DATASETS = {
     "negative_nq",
 }
 
+MULTI_ANSWER_DATASETS = {
+    "longbench/narrativeqa",
+    "longbench/qasper",
+    "longbench/multifieldqa_en",
+    "longbench/hotpotqa",
+    "longbench/2wikimqa",
+    "longbench/musique",
+    "squad",
+}
+
 
 for ds_name in list(CLOSED_QA_DATASETS):
     if ds_name.startswith("longbench/"):
         CLOSED_QA_DATASETS.add(f"{ds_name}_e")
+
+
+for ds_name in list(MULTI_ANSWER_DATASETS):
+    if ds_name.startswith("longbench/"):
+        MULTI_ANSWER_DATASETS.add(f"{ds_name}_e")
 
 
 # for training closed qa datasets, e.g., hotpot_qa, squad, etc.
