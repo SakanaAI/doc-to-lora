@@ -161,6 +161,9 @@ def _extract_model_info(eval_trainer) -> tuple[str, bool]:
     if "/" in model_name:
         model_name = model_name.split("/")[-1]
 
+    if getattr(eval_trainer.args, "run_name", None):
+        model_name += f"_{eval_trainer.args.run_name}"
+
     return model_name, is_hypernet
 
 
@@ -215,7 +218,7 @@ def _sort_length_groups(length_groups: set[str]) -> list[str]:
             return (1, 0, 0)  # Put "overall" after numerical ranges
         try:
             # Parse "low-high" format
-            low, high = map(int, length_group.split("-"))
+            low, high = map(float, length_group.split("-"))
             return (0, low, high)
         except (ValueError, IndexError):
             return (2, 0, 0)  # Put any malformed strings last
@@ -232,8 +235,8 @@ def create_metrics_csv(
     csv_suffix: str = "",
 ) -> None:
     """
-    Create a human-readable CSV file from evaluation metrics with hierarchical columns.
-    One row per model with columns structured as task_metric_lengthgroup.
+    Create a CSV file with columns: model_name, group_len, tasks, num_samples, and all available metrics.
+    One row per model-length-task combination.
 
     Args:
         metrics_dict: Dictionary containing evaluation metrics for each dataset/split
@@ -249,48 +252,94 @@ def create_metrics_csv(
     all_metrics, all_length_groups, all_splits = _parse_metrics_for_csv(metrics_dict)
 
     # Sort for consistent ordering
-    all_metrics = sorted(all_metrics)
     all_length_groups = _sort_length_groups(all_length_groups)
     all_splits = sorted(all_splits)
 
-    # Create single row with hierarchical columns
-    row_data = {
-        "model": model_name,
-        "model_type": "hypernet" if is_hypernet_model else "base",
-    }
+    # Create rows for each model-length-task combination
+    rows = []
 
-    # Create hierarchical column structure: task_metric_lengthgroup
     for task in all_splits:
         metrics = metrics_dict[task]
-        is_qa_task = any(qa_task in task for qa_task in CLOSED_QA_DATASETS)
 
-        for metric in all_metrics:
-            # Skip inappropriate metrics for the task type
-            if is_qa_task and ("rougeL" in metric):
-                continue
-            if not is_qa_task and ("qa_f1" in metric):
-                continue
+        for length_group in all_length_groups:
+            # Initialize row with basic info
+            row = {
+                "model_name": model_name,
+                "group_len": length_group,
+                "tasks": task,
+                "num_samples": 0,
+            }
 
-            for length_group in all_length_groups:
-                if length_group == "overall":
-                    metric_key = f"{task}_{metric}"
-                    column_name = f"{task}_{metric}_overall"
-                else:
-                    metric_key = f"{task}_{metric}_len_{length_group}"
-                    column_name = f"{task}_{metric}_{length_group}"
+            # Look for all metrics for this task and length group
+            if length_group == "overall":
+                # Look for overall metrics (no length suffix)
+                for metric_key in metrics:
+                    if not metric_key.startswith(f"{task}_"):
+                        continue
 
-                value = metrics.get(metric_key, "N/A")
-                # Handle None values and convert to string
-                if value is None or value == "None":
-                    value = "N/A"
-                elif isinstance(value, (int, float)):
-                    value = f"{value:.4f}"
+                    # Skip length-specific metrics
+                    if "_len_" in metric_key:
+                        continue
 
-                row_data[column_name] = value
+                    # Extract metric name after task prefix
+                    metric_name = metric_key[len(task) + 1 :]
+                    if metric_name in [
+                        "samples_per_second",
+                        "steps_per_second",
+                        "model_preparation_time",
+                        "runtime",
+                    ]:
+                        # Skip timing and performance metrics
+                        continue
 
-    # Create DataFrame with single row
-    if len(row_data) > 2:  # More than just model and model_type
-        df = pd.DataFrame([row_data])
+                    # Handle num_samples specially
+                    if metric_name.startswith("num_samples_"):
+                        row["num_samples"] = metrics[metric_key]
+                    else:
+                        # Add all other metrics as columns
+                        row[metric_name] = metrics[metric_key]
+            else:
+                # Look for length-specific metrics
+                for metric_key in metrics:
+                    if not metric_key.startswith(f"{task}_"):
+                        continue
+
+                    # Only process metrics for this specific length group
+                    if f"_len_{length_group}" not in metric_key:
+                        continue
+
+                    # Extract metric name (remove task prefix and length suffix)
+                    metric_part = metric_key[len(task) + 1 :]
+                    metric_name = metric_part.replace(f"_len_{length_group}", "")
+                    if metric_name in [
+                        "samples_per_second",
+                        "steps_per_second",
+                        "model_preparation_time",
+                        "runtime",
+                    ]:
+                        # Skip timing and performance metrics
+                        continue
+
+                    # Handle num_samples specially
+                    if metric_name.startswith("num_samples_"):
+                        row["num_samples"] = metrics[metric_key]
+                    else:
+                        # Add all other metrics as columns
+                        row[metric_name] = metrics[metric_key]
+
+            # Fill missing metrics with N/A for consistent columns
+            for metric in all_metrics:
+                if metric not in row and not metric.startswith("num_samples"):
+                    row[metric] = "N/A"
+
+            rows.append(row)
+
+    # Create DataFrame
+    if rows:
+        df = pd.DataFrame(rows)
+
+        # Sort by tasks, then by length group
+        df = df.sort_values(["tasks"]).reset_index(drop=True)
 
         # Construct filename
         csv_filename = "evaluation_results"
@@ -592,6 +641,15 @@ def evaluate(
     add_longbench_tasks(ds_names)
     for ds_name in ds_names:
         datasets[ds_name] = _get_tokenized_dataset(ds_name, split)
+    print(datasets)
+
+    # truncating num val samples
+    max_eval_samples_per_ds = getattr(args, "max_val_samples_per_ds", 0)
+    if split == "validation" and max_eval_samples_per_ds > 0:
+        print(f"Truncating all validation ds to {max_eval_samples_per_ds} samples")
+        for ds_name, ds in datasets.items():
+            val_indices = np.random.permutation(len(ds))[:max_eval_samples_per_ds]
+            datasets[ds_name] = ds.select(val_indices)
     print(datasets)
 
     gen_kwargs = dict(

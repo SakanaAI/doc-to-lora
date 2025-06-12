@@ -100,12 +100,11 @@ class Evaluator:
                 else:
                     self.accum_metrics[key] += v
                 for start, end in LENGTH_BINS:
-                    key = f"{k}_len_{start}_{end}"
-                    if key not in self.accum_metrics:
+                    key_w_len = f"{key}_len_{start}-{end}"
+                    if key_w_len not in self.accum_metrics:
                         # add key here so that it shows up in the output
-                        self.accum_metrics[key] = [0]
-                        self.count[key] = [0]
-
+                        self.accum_metrics[key_w_len] = [0]
+                        self.count[key_w_len] = [0]
             # split samples into length groups, calculate metric for each group
             if lengths is not None:
                 for start, end in LENGTH_BINS:
@@ -129,11 +128,11 @@ class Evaluator:
                     )
                     for k, v in metric.items():
                         if k.startswith("n_"):
-                            key = f"{k[2:]}_len_{start}_{end}"
-                            self.count[f"{k[2:]}_len_{start}_{end}"].append(v)
+                            key = f"{k[2:]}_len_{start}-{end}"
+                            self.count[key].append(v)
                         else:
-                            key = f"{k}_len_{start}_{end}"
-                            self.accum_metrics[f"{k}_len_{start}_{end}"] += v
+                            key = f"{k}_len_{start}-{end}"
+                            self.accum_metrics[key] += v
 
     def compute(self):
         # Get result across entire eval set
@@ -141,11 +140,11 @@ class Evaluator:
             k: np.sum(v) / np.sum(self.count[k]) if np.sum(v) != 0 else "None"
             for k, v in self.accum_metrics.items()
         }
-        for k, v in self.count.items():
-            if "_len_" in k:
-                result[k.replace("_len_", "_num_samples_len_")] = sum(v)
-            else:
-                result[k + "_num_samples"] = sum(v)
+        # for k, v in self.count.items():
+        #     if "_len_" in k:
+        #         result[k.replace("_len_", "_num_samples_len_")] = sum(v)
+        #     else:
+        #         result[k + "_num_samples"] = sum(v)
         # Reset batch statistics
         self.reset()
         return result
