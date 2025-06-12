@@ -353,6 +353,7 @@ def create_metrics_csv(
         csv_filename += ".csv"
 
         csv_path = os.path.join(output_dir, csv_filename)
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         df.to_csv(csv_path, index=False)
         print(f"Evaluation results saved to: {csv_path}")
     else:
@@ -448,7 +449,6 @@ def eval_generation(
 
         if ds_name in CLOSED_QA_DATASETS:
             print("Computing QA F1 Score")
-            print(answers_list)
             qa_f1_metric = compute_qa_f1_score(pred_texts, answers_list)
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
@@ -555,6 +555,11 @@ def eval_teacher_forcing(
     out = {}
     for ds_name, ds in datasets.items():
         split_name = f"{split}_{ds_name}" if ds_name else split
+        if "/" in split_name:
+            os.makedirs(
+                f"{eval_trainer.args.output_dir}/{split_name.split('/')[0]}",
+                exist_ok=True,
+            )
         if remove_context:
             split_name += "_no_context"
 
@@ -689,8 +694,8 @@ def evaluate(
             datasets[ds_name] = ds.select(val_indices)
             answers[ds_name] = answers.select(val_indices)
 
-    print(f"Datasets: {datasets}")
-    print(f"Answers: {answers}")
+        print(f"Datasets: {datasets}")
+        print(f"Answers: {answers}")
 
     gen_kwargs = dict(
         do_sample=False,
@@ -711,6 +716,11 @@ def evaluate(
     eval_trainer_args["batch_eval_metrics"] = True
     eval_trainer_args["per_device_eval_batch_size"] = eval_batch_size
     eval_trainer_args["include_for_metrics"] = ["inputs"]
+    eval_trainer_args["batch_eval_metrics"] = True
+    eval_trainer_args["remove_unused_columns"] = False
+    eval_trainer_args["bf16"] = True
+    eval_trainer_args["tf32"] = True
+    eval_trainer_args["use_liger_kernel"] = True
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
@@ -817,6 +827,7 @@ def run_eval(
             test_ds_names=[],
             remove_context=remove_context,
         )
+    print(args)
     setup_logging(args.logging_dir)
 
     # Override dataset names if provided via CLI
