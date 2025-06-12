@@ -691,7 +691,7 @@ def construct_and_tokenize_ctx_qa(
             truncate_middle_if_too_long,
             fn_kwargs={
                 "max_length": base_model_max_len,
-                "columns": ["input_ids", "attention_mask"],
+                "columns": ["input_ids", "attention_mask", "labels"],
                 "max_new_tokens": 256,
             },
             # batched=True,
