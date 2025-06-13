@@ -1,34 +1,9 @@
 from glob import glob
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-
-# convert to llm-comparator format
-"""{
-    "metadata": {
-        "source_path": "Any string for your records (e.g., run id)",
-        "custom_fields_schema": []
-    },
-    "models": [
-        {"name": "Short name of your first model"},
-        {"name": "Short name of your second model"}
-    ],
-    "examples": [
-        {
-            "input_text": "This is a prompt.",
-            "tags": ["Math"],  # A list of keywords for categorizing prompts
-            "output_text_a": "Response to the prompt from the first model (A)",
-            "output_text_b": "Response to the prompt from the other model (B)",
-            "score": -1.25,  # Score from the judge LLM
-            "individual_rater_scores": [],
-            "custom_fields": {}
-        },
-        {
-            "input_text": "This is a next prompt.",
-            ...
-        }
-    ]
-}
-"""
+from matplotlib.colors import LinearSegmentedColormap
 
 
 def convert_to_llm_comparator_format(
@@ -134,8 +109,8 @@ def convert_to_llm_comparator_format(
                     "custom_fields": {
                         "question": sample.input_checkpoint,
                         "label": sample.label,
-                        "is_base_model_correct": score_b >= 0.5,
-                        "is_checkpoint_model_correct": score_a >= 0.5,
+                        "is_base_model_correct": score_b >= 0.4,
+                        "is_checkpoint_model_correct": score_a >= 0.4,
                         "ctx_ids_len": sample.ctx_ids_len,
                         "query_ids_len": sample.input_ids_len_checkpoint,
                     },
@@ -151,8 +126,8 @@ def convert_to_llm_comparator_format(
 
 def build_confusion_matrix(
     comparator_json: dict,
-    model_a_name: str = "checkpoint",
-    model_b_name: str = "model",
+    model_a_name: str = "Adapted model",
+    model_b_name: str = "Base model",
 ) -> pd.DataFrame:
     """
     Build a confusion matrix from the comparator JSON.
@@ -162,8 +137,14 @@ def build_confusion_matrix(
     df["is_correct_a"] = df["custom_fields"].apply(
         lambda x: x.get("is_checkpoint_model_correct")
     )
+    df["is_correct_a"] = pd.Categorical(
+        df["is_correct_a"], categories=[True, False], ordered=True
+    )
     df["is_correct_b"] = df["custom_fields"].apply(
         lambda x: x.get("is_base_model_correct")
+    )
+    df["is_correct_b"] = pd.Categorical(
+        df["is_correct_b"], categories=[True, False], ordered=True
     )
 
     confusion_matrix = pd.crosstab(
@@ -173,8 +154,125 @@ def build_confusion_matrix(
         colnames=[model_b_name],
         margins=True,
         margins_name="Total",
+        dropna=False,
+        normalize="all",
     )
     return confusion_matrix
+
+
+def plot_confusion_matrix(
+    confusion_matrix: pd.DataFrame,
+    title: str = "Confusion Matrix",
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Plot a confusion matrix using matplotlib with a soothing color palette.
+
+    Args:
+        confusion_matrix: DataFrame with confusion matrix data
+        title: Title for the plot
+        save_path: Path to save the plot (optional)
+
+    Returns:
+        Matplotlib Figure object
+    """
+    # Remove the 'Total' row and column for visualization
+    viz_matrix = confusion_matrix.iloc[:-1, :-1]
+
+    # Set up the figure with a clean, modern style
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Create a soothing color palette (soft blues to deeper blues)
+    colors = ["#f0f8ff", "#e6f3ff", "#b3d9ff", "#4d94ff", "#0066cc"]
+    soothing_cmap = LinearSegmentedColormap.from_list("soothing_blues", colors)
+
+    # Create the heatmap
+    im = ax.imshow(viz_matrix.values, interpolation="nearest", cmap=soothing_cmap)
+
+    # Add colorbar with proper formatting
+    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label("Proportion", rotation=270, labelpad=20, fontsize=12)
+
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(viz_matrix.columns)))
+    ax.set_yticks(np.arange(len(viz_matrix.index)))
+    ax.set_xticklabels(viz_matrix.columns, fontsize=11)
+    ax.set_yticklabels(viz_matrix.index, fontsize=11)
+
+    # Add text annotations with values
+    for i in range(len(viz_matrix.index)):
+        for j in range(len(viz_matrix.columns)):
+            text = ax.text(
+                j,
+                i,
+                f"{viz_matrix.iloc[i, j]:.3f}",
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=12,
+                fontweight="bold",
+            )
+
+    # Set labels and title
+    ax.set_xlabel(
+        f"{viz_matrix.columns.name} (Correct)", fontsize=13, fontweight="bold"
+    )
+    ax.set_ylabel(f"Adapted model (Correct)", fontsize=13, fontweight="bold")
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=20)
+
+    # Calculate and add performance metrics annotations
+    same_results = viz_matrix.loc[True, True] + viz_matrix.loc[False, False]
+
+    # Calculate boost rate and resilience rate from the full confusion matrix
+    full_matrix = confusion_matrix.iloc[:-1, :-1]  # Remove totals for calculations
+    total_base_correct = confusion_matrix.loc["Total", True]
+    boost_rate = (
+        full_matrix.loc[True, False] / total_base_correct
+        if total_base_correct > 0
+        else 0
+    )
+    resilience_rate = (
+        full_matrix.loc[True, True] / total_base_correct
+        if total_base_correct > 0
+        else 0
+    )
+
+    # Add metrics text box
+    metrics_text = (
+        f"Same results: {same_results * 100:.2f}%\n\n"
+        f"Boost Rate: {boost_rate * 100:.2f}%\n"
+        f"Resilience Rate: {resilience_rate * 100:.2f}%"
+    )
+
+    ax.text(
+        0.02,
+        0.98,
+        metrics_text,
+        transform=ax.transAxes,
+        fontsize=11,
+        fontweight="bold",
+        bbox=dict(
+            boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.9
+        ),
+        verticalalignment="top",
+    )
+
+    # Improve layout
+    plt.tight_layout()
+
+    if save_path:
+        if save_path.endswith(".pdf"):
+            plt.savefig(save_path, format="pdf", dpi=300, bbox_inches="tight")
+        elif save_path.endswith(".png"):
+            plt.savefig(save_path, format="png", dpi=300, bbox_inches="tight")
+        else:
+            # Default to PDF if no extension specified
+            save_path = save_path + ".pdf"
+            plt.savefig(save_path, format="pdf", dpi=300, bbox_inches="tight")
+        print(f"Confusion matrix plot saved to: {save_path}")
+
+    return fig
 
 
 if __name__ == "__main__":
@@ -183,9 +281,31 @@ if __name__ == "__main__":
 
     eval_checkpoint_dir = "train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/eval-results-105000"
     model_dir = "google/gemma-2-2b-it"
-    comparator_json = convert_to_llm_comparator_format(eval_checkpoint_dir, model_dir)
-    confusion_matrix = build_confusion_matrix(comparator_json)
+    compare_to_no_context = False
+    comparator_json = convert_to_llm_comparator_format(
+        eval_checkpoint_dir, model_dir, compare_to_no_context
+    )
+    confusion_matrix = build_confusion_matrix(
+        comparator_json,
+        model_a_name="Adapted model",
+        model_b_name="Base model no context" if compare_to_no_context else "Base model",
+    )
     print(confusion_matrix)
+    print(
+        f"Boost rate: {confusion_matrix.loc[True, False] / confusion_matrix.loc['Total', True] * 100:.2f}%"
+    )
+    print(
+        f"Resilience rate: {confusion_matrix.loc[True, True] / confusion_matrix.loc['Total', True] * 100:.2f}%"
+    )
+
+    # Plot and save confusion matrix
+    checkpoint_name = "/".join(eval_checkpoint_dir.strip("/").split("/")[-2:])
+    plot_title = f"Model Comparison: {checkpoint_name} vs {model_dir}"
+    save_path = f"{eval_checkpoint_dir}/confusion_matrix.pdf"
+    # TODO: add resilience + boost rate
+    fig = plot_confusion_matrix(confusion_matrix, title=plot_title, save_path=save_path)
+    # fig.show()
+
     # Save the comparator JSON to a file
     with open(f"{eval_checkpoint_dir}/comparator.json", "w") as f:
         json.dump(comparator_json, f)
