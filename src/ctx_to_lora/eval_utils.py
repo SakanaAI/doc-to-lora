@@ -107,7 +107,7 @@ def compute_qa_f1_score(
             label_words = normalized_label.split()
             score = max(score, f1_score(prediction_words, label_words))
         res.append(score)
-    return dict(qa_f1=np.mean(res))
+    return dict(qa_f1_score=np.mean(res)), dict(qa_f1_score=res)
 
 
 def add_longbench_tasks(ds_names: list[str]) -> None:
@@ -120,7 +120,12 @@ def add_longbench_tasks(ds_names: list[str]) -> None:
         ds_names += LONGBENCH_E_TASKS
 
 
-def save_generated_text(samples: list[dict], output_dir: str, split: str) -> None:
+def save_generated_text(
+    samples: list[dict],
+    per_sample_metric: dict[str, list[float]],
+    output_dir: str,
+    split: str,
+) -> None:
     """Save generated text samples to JSONL file."""
     os.makedirs(output_dir, exist_ok=True)
     # Create any necessary subdirectories if split contains path separators
@@ -128,8 +133,12 @@ def save_generated_text(samples: list[dict], output_dir: str, split: str) -> Non
         split_dir = os.path.join(output_dir, os.path.dirname(split))
         os.makedirs(split_dir, exist_ok=True)
 
+    metric_keys = list(per_sample_metric.keys())
+    assert len(metric_keys) == 1
+    metric_name = metric_keys[0]
     with open(f"{output_dir}/{split}_generated_text.jsonl", "w") as f:
-        for sample in samples:
+        for sample, metric_val in zip(samples, per_sample_metric[metric_name]):
+            sample[f"{metric_name}"] = metric_val
             f.write(json.dumps(sample) + "\n")
 
 
@@ -339,10 +348,15 @@ def create_metrics_csv(
 
     # Create DataFrame
     if rows:
-        df = pd.DataFrame(rows)
+        new_df = pd.DataFrame(rows)
+        # define categories so that they're sorted properly
+        new_df["group_len"] = pd.Categorical(
+            new_df["group_len"],
+            categories=[f"{i}-{j}" for (i, j) in LENGTH_BINS] + ["overall"],
+        )
 
         # Sort by tasks, then by length group
-        df = df.sort_values(["tasks"]).reset_index(drop=True)
+        new_df = new_df.sort_values(["tasks", "group_len"]).reset_index(drop=True)
 
         # Construct filename
         csv_filename = "evaluation_results"
@@ -354,7 +368,33 @@ def create_metrics_csv(
 
         csv_path = os.path.join(output_dir, csv_filename)
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+
+        # Check if CSV already exists and merge if it does
+        if os.path.exists(csv_path):
+            try:
+                existing_df = pd.read_csv(csv_path)
+
+                # Remove existing rows with the same model_name, group_len, and tasks
+                # to avoid duplicates when updating
+                mask = ~existing_df["tasks"].isin(new_df["tasks"])
+                existing_df = existing_df[mask]
+
+                # Concatenate existing and new data
+                df = pd.concat([existing_df, new_df], ignore_index=True)
+
+                # Sort by tasks, then by length group
+                df = df.sort_values(["tasks"]).reset_index(drop=True)
+
+                print(f"Updated existing CSV with {len(new_df)} new rows")
+            except Exception as e:
+                print(f"Warning: Could not read existing CSV ({e}), creating new file")
+                df = new_df
+        else:
+            df = new_df
+            print(f"Created new CSV with {len(new_df)} rows")
+
         df.to_csv(csv_path, index=False)
+
         print(f"Evaluation results saved to: {csv_path}")
     else:
         print("No evaluation data found to save to CSV")
@@ -449,12 +489,14 @@ def eval_generation(
 
         if ds_name in CLOSED_QA_DATASETS:
             print("Computing QA F1 Score")
-            qa_f1_metric = compute_qa_f1_score(pred_texts, answers_list)
+            qa_f1_metric, per_sample_metric = compute_qa_f1_score(
+                pred_texts, answers_list
+            )
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
                 eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
         else:
-            rouge_metrics = compute_rouge(pred_texts, label_texts)
+            rouge_metrics, per_sample_metric = compute_rouge(pred_texts, label_texts)
             for k, v in rouge_metrics.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
                 eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
@@ -500,7 +542,7 @@ def eval_generation(
                                         group_answers.append([txt["label"]])
                                 break
 
-                    group_qa_f1_metric = compute_qa_f1_score(
+                    group_qa_f1_metric, _ = compute_qa_f1_score(
                         data["generated"], group_answers
                     )
                     for k, v in group_qa_f1_metric.items():
@@ -509,7 +551,7 @@ def eval_generation(
                             f"{split_name}_num_samples_{k}_len_{group_key}"
                         ] = data["count"]
                 else:
-                    group_rouge_metrics = compute_rouge(
+                    group_rouge_metrics, _ = compute_rouge(
                         data["generated"], data["label"]
                     )
                     for k, v in group_rouge_metrics.items():
@@ -521,6 +563,7 @@ def eval_generation(
 
         save_generated_text(
             decoded_txts,
+            per_sample_metric,
             split=split_name,
             output_dir=eval_trainer.args.output_dir,
         )
@@ -692,7 +735,7 @@ def evaluate(
         for ds_name, ds in datasets.items():
             val_indices = np.random.permutation(len(ds))[:max_eval_samples_per_ds]
             datasets[ds_name] = ds.select(val_indices)
-            answers[ds_name] = answers.select(val_indices)
+            answers[ds_name] = answers[ds_name].select(val_indices)
 
         print(f"Datasets: {datasets}")
         print(f"Answers: {answers}")
@@ -827,7 +870,6 @@ def run_eval(
             test_ds_names=[],
             remove_context=remove_context,
         )
-    print(args)
     setup_logging(args.logging_dir)
 
     # Override dataset names if provided via CLI

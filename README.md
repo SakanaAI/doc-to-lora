@@ -92,10 +92,12 @@ uv run data/download_fineweb_edu.py
 # 1 and 2 can be run in parallel (depends on step 0)
 
 # 1. generate QA data (3 QAs for each context)
+# 000_0000[0-1] to 000_0000[8-9] for small split
 vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python generate_fw_edu_qa_vllm.py "00*_*" 3
 
 # 2. Augmenting pre-training data w/ paraphrasing
-uv run python data/generate_fw_edu_augment_vllm.py
+# (000_00000 to 000_00009 for small split)
+vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python data/generate_fw_edu_augment_vllm.py 000_00000 
 
 # ===
 # 3 and 4 can be run in parallel (depends on step 0 and 1)
@@ -109,6 +111,7 @@ uv run python data/generate_pretrain_from_fw_qa.py
 # the responses are not the same as the ones in the pretraining though
 # Example commands using gemma-2-2b-it
 # self-gen data for fw_qa
+# 000_0000[0-1] to 000_0000[8-9] for small split
 uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_3/00*_*'
 # self-gen data for other ds listed in qa_no_fw.yaml
 uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_no_fw.yaml
@@ -141,16 +144,16 @@ run python intx_sft.py configs/...yaml ... --from_pretrained_checkpoint=train_ou
 LongBench
 ```bash
 # generative
-run python run_eval.py --checkpoint_path train_outputs/runs/.../pytorch_model.bin --datasets negative_nq triviaqa_retrieved squad longbench_e --split test
+WANDB_MODE=disabled uv run python run_eval.py --checkpoint_path train_outputs/runs/.../pytorch_model.bin --datasets negative_nq triviaqa_retrieved squad longbench_e --split test
 
 # hypernet checkpoint
-uv run python run_eval.py --checkpoint_path train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/checkpoint-105000/pytorch_model.bin --datasets negative_nq triviaqa_retrieved squad longbench_e --split test
+WANDB_MODE=disabled uv run python run_eval.py --checkpoint_path train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/checkpoint-105000/pytorch_model.bin --datasets negative_nq triviaqa_retrieved squad longbench_e --split test
 
 # base model
-uv run python run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets negative_nq triviaqa_retrieved squad longbench_e --split test --eval_batch_size 2
+WANDB_MODE=disabled uv run python run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets negative_nq triviaqa_retrieved squad longbench_e --split test --eval_batch_size 2
 
 # base model w/o context
-run uv run python run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets negative_nq triviaqa_retrieved squad longbench_e --split test --remove_context
+WANDB_MODE=disabled uv run python run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets negative_nq triviaqa_retrieved squad longbench_e --split test --remove_context
 
 # # benchmark
 # cd LongBench/LongBench
@@ -158,4 +161,30 @@ run uv run python run_eval.py --model_name_or_path google/gemma-2-2b-it --datase
 # run python pred_ctx_to_lora.py  --checkpoint_path ../../train_outputs/runs/Mar16_12-38-01_slurm0-a3nodeset-12_54818_32426662/checkpoint-136782/pytorch_model.bin
 
 # run python eval_ctx_to_lora.py --model_name Mar16_12-38-01_slurm0-a3nodeset-12_54818_32426662/checkpoint-136782 --checkpoint_path ../../train_outputs/runs/Mar16_12-38-01_slurm0-a3nodeset-12_54818_32426662/checkpoint-136782/pytorch_model.bin
+```
+
+### LLM-comparator
+```bash
+# install nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+nvm install 16
+nvm use 16
+
+git clone https://github.com/PAIR-code/llm-comparator.git
+cd llm-comparator
+npm install
+npm run build
+# running llm-comparator webui
+npm run serve
+
+# in another terminal
+# run http server for file fetching
+
+# cd back to root folder first
+# taken from https://stackoverflow.com/a/79135787
+alias srv='echo -e "from sys import argv as a\nfrom http.server import HTTPServer as H, SimpleHTTPRequestHandler as HH, test as t\nclass C(HH):\n def end_headers (self):\n  self.send_header(a[2],a[3])\n  HH.end_headers(self)\nt(C,H,port=int(a[1]))" | /usr/bin/env python3 -- - 8001 "Access-Control-Allow-Origin" "*"'
+srv
+
+# copy-paste the relative path from the root
+# e.g., http://localhost:8001/train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/eval-results-105000/comparator.json
 ```

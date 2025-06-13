@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from glob import glob
 from os import path
 from typing import Any
@@ -40,7 +40,7 @@ def load_answers(ds_name, split):
 
     ds_kwargs = get_ds_kwargs(ds_name, split)
     ds = load_dataset(**ds_kwargs, trust_remote_code=True)
-    ds = ds.map(extract_ans, num_proc=8)
+    ds = ds.map(extract_ans, num_proc=8, remove_columns=ds.column_names)
     return ds
 
 
@@ -460,7 +460,7 @@ def load_and_process_dataset(
     cols_to_remove = [
         col
         for col in ds.column_names
-        if col not in ["context", "prompt", "response", "qas"]
+        if col not in ["context", "prompt", "response", "qas", "variation"]
     ]
     is_eval = split != "train"
     ds = ds.map(
@@ -955,91 +955,91 @@ def get_assistant_start_end_indices(
     return assistant_ranges
 
 
-def get_masked_labels(
-    conversation_ids: dict[str, list[Any]],
-    assistant_ranges: list[tuple[int, int]],
-) -> Iterator[int]:
-    """
-    Generate masked labels for conversation, masking non-assistant tokens.
-    NOTE: This will also includes extra tokens between assistant and user messages
-    in multi-turn conversations.
-    E.g., {assistant_msg} <|eot_id|><|start_header_id|>user<|end_header_id|> {user_msg}
-    for Llama 3 models.
+# def get_masked_labels(
+#     conversation_ids: dict[str, list[Any]],
+#     assistant_ranges: list[tuple[int, int]],
+# ) -> Iterator[int]:
+#     """
+#     Generate masked labels for conversation, masking non-assistant tokens.
+#     NOTE: This will also includes extra tokens between assistant and user messages
+#     in multi-turn conversations.
+#     E.g., {assistant_msg} <|eot_id|><|start_header_id|>user<|end_header_id|> {user_msg}
+#     for Llama 3 models.
 
-    Args:
-        conversation_ids: Dictionary with tokenized conversation info
-        assistant_ranges: List of (start, end) indices for assistant messages
+#     Args:
+#         conversation_ids: Dictionary with tokenized conversation info
+#         assistant_ranges: List of (start, end) indices for assistant messages
 
-    Yields:
-        Token ID or IGNORE_INDEX for each position
-    """
-    for id_, (id_s, id_e) in list(
-        zip(conversation_ids["input_ids"], conversation_ids["offset_mapping"])
-    ):
-        if any(id_s >= s and id_e <= e for s, e in assistant_ranges):
-            yield id_
-        else:
-            yield IGNORE_INDEX
+#     Yields:
+#         Token ID or IGNORE_INDEX for each position
+#     """
+#     for id_, (id_s, id_e) in list(
+#         zip(conversation_ids["input_ids"], conversation_ids["offset_mapping"])
+#     ):
+#         if any(id_s >= s and id_e <= e for s, e in assistant_ranges):
+#             yield id_
+#         else:
+#             yield IGNORE_INDEX
 
 
-def tokenize_chat_messages(
-    example: dict[str, Any],
-    tokenizer: PreTrainedTokenizerBase,
-    mask_assistant_inputs: bool = True,
-    for_kl_loss: bool = False,
-    tokenizer_kwargs: dict[str, Any] | None = None,
-) -> dict[str, list[int]]:
-    """
-    Tokenize chat messages and optionally mask non-assistant tokens.
+# def tokenize_chat_messages(
+#     example: dict[str, Any],
+#     tokenizer: PreTrainedTokenizerBase,
+#     mask_assistant_inputs: bool = True,
+#     for_kl_loss: bool = False,
+#     tokenizer_kwargs: dict[str, Any] | None = None,
+# ) -> dict[str, list[int]]:
+#     """
+#     Tokenize chat messages and optionally mask non-assistant tokens.
 
-    Args:
-        example: Dictionary containing 'chat' and 'messages' keys
-        tokenizer: Tokenizer to use
-        mask_assistant_inputs: Whether to mask non-assistant tokens
-        for_kl_loss: change the column names to "chat_ids" and "chat_attn_mask"
-        tokenizer_kwargs: Additional arguments to pass to tokenizer
+#     Args:
+#         example: Dictionary containing 'chat' and 'messages' keys
+#         tokenizer: Tokenizer to use
+#         mask_assistant_inputs: Whether to mask non-assistant tokens
+#         for_kl_loss: change the column names to "chat_ids" and "chat_attn_mask"
+#         tokenizer_kwargs: Additional arguments to pass to tokenizer
 
-    Returns:
-        Dictionary containing tokenized inputs and labels
-    """
-    # should be used only with chat models
-    text = example["chat"]
-    messages = example["messages"]
-    n_response = len([m for m in messages if m["role"] == "assistant"])
-    if n_response != 1:
-        raise ValueError(f"Expected 1 assistant response. Got {n_response}.")
-    conversation_ids = tokenizer(
-        text,
-        # return_offsets_mapping=mask_assistant_inputs,
-        add_special_tokens=False,
-        truncation=False,
-        **(tokenizer_kwargs or {}),
-    )
-    # if tokenizer_kwargs and (
-    #     len(conversation_ids["input_ids"]) >= tokenizer_kwargs["max_length"]
-    # ):
-    #     raise ValueError(
-    #         f"Conversation length {len(conversation_ids['input_ids'])} exceeds max length {tokenizer_kwargs['max_length']}"
-    #     )
+#     Returns:
+#         Dictionary containing tokenized inputs and labels
+#     """
+#     # should be used only with chat models
+#     text = example["chat"]
+#     messages = example["messages"]
+#     n_response = len([m for m in messages if m["role"] == "assistant"])
+#     if n_response != 1:
+#         raise ValueError(f"Expected 1 assistant response. Got {n_response}.")
+#     conversation_ids = tokenizer(
+#         text,
+#         # return_offsets_mapping=mask_assistant_inputs,
+#         add_special_tokens=False,
+#         truncation=False,
+#         **(tokenizer_kwargs or {}),
+#     )
+#     # if tokenizer_kwargs and (
+#     #     len(conversation_ids["input_ids"]) >= tokenizer_kwargs["max_length"]
+#     # ):
+#     #     raise ValueError(
+#     #         f"Conversation length {len(conversation_ids['input_ids'])} exceeds max length {tokenizer_kwargs['max_length']}"
+#     #     )
 
-    if mask_assistant_inputs:
-        assistant_ranges = get_assistant_start_end_indices(
-            messages, tokenizer, conversation_ids["input_ids"]
-        )
-        # labels = get_masked_labels(conversation_ids, assistant_ranges)
-        labels = [
-            id_ if any(s <= i < e for s, e in assistant_ranges) else IGNORE_INDEX
-            for i, id_ in enumerate(conversation_ids["input_ids"])
-        ]
-        conversation_ids["labels"] = labels
-        # del conversation_ids["offset_mapping"]
-    else:
-        conversation_ids["labels"] = conversation_ids["input_ids"]
-    if for_kl_loss:
-        conversation_ids["chat_ids"] = conversation_ids.pop("input_ids")
-        conversation_ids["chat_attn_mask"] = conversation_ids.pop("attention_mask")
-        conversation_ids["chat_labels"] = conversation_ids.pop("labels")
-    return conversation_ids
+#     if mask_assistant_inputs:
+#         assistant_ranges = get_assistant_start_end_indices(
+#             messages, tokenizer, conversation_ids["input_ids"]
+#         )
+#         # labels = get_masked_labels(conversation_ids, assistant_ranges)
+#         labels = [
+#             id_ if any(s <= i < e for s, e in assistant_ranges) else IGNORE_INDEX
+#             for i, id_ in enumerate(conversation_ids["input_ids"])
+#         ]
+#         conversation_ids["labels"] = labels
+#         # del conversation_ids["offset_mapping"]
+#     else:
+#         conversation_ids["labels"] = conversation_ids["input_ids"]
+#     if for_kl_loss:
+#         conversation_ids["chat_ids"] = conversation_ids.pop("input_ids")
+#         conversation_ids["chat_attn_mask"] = conversation_ids.pop("attention_mask")
+#         conversation_ids["chat_labels"] = conversation_ids.pop("labels")
+#     return conversation_ids
 
 
 def tokenize_pretrain(
@@ -1180,7 +1180,7 @@ def pack(
                 "max_packed_size": max_packed_size,
             },
             batched=True,
-            batch_size=1_000_000,
+            batch_size=250_000,
             num_proc=num_proc,
             remove_columns=ds.column_names,
         )

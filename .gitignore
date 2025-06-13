@@ -5,6 +5,7 @@ openai_batches/
 models/
 results/
 datasets/
+llm-comparator/
 /data/
 __pycache__/
 *egg-info/

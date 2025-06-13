@@ -32,9 +32,10 @@ def compute_rouge(pred_texts, label_texts):
         scores = scorer.score(pred_text, label_text)
         for k, v in scores.items():
             out[f"{k}.f1"].append(v.fmeasure)
+    out_mean = dict()
     for k in out:
-        out[k] = np.mean(out[k])
-    return out
+        out_mean[k] = np.mean(out[k])
+    return out_mean, out
 
 
 @torch.inference_mode()
@@ -85,8 +86,8 @@ class Evaluator:
         self.reset()
 
     def reset(self):
-        self.accum_metrics = defaultdict(list)
-        self.count = defaultdict(list)
+        self.accum_metrics = defaultdict(lambda: list((0,)))
+        self.count = defaultdict(lambda: list((0,)))
 
     def update(self, shift_logits, shift_labels, valid_masks, lengths=None):
         for metric_fn in self.metric_fns:
@@ -137,7 +138,7 @@ class Evaluator:
     def compute(self):
         # Get result across entire eval set
         result = {
-            k: np.sum(v) / np.sum(self.count[k]) if np.sum(v) != 0 else "None"
+            k: np.sum(v) / np.sum(self.count[k]) if len(v) > 1 else "None"
             for k, v in self.accum_metrics.items()
         }
         # for k, v in self.count.items():

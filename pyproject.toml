@@ -50,6 +50,7 @@ exclude = [
     "EditingLlama",
     "icae_v2",
     "lm-evaluation-harness",
+    "llm-comparator",
     "LongBench",
     "scripts",
     "train_outputs",
