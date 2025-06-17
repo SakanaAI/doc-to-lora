@@ -28,11 +28,18 @@ def convert_to_llm_comparator_format(
         files_model = sorted(
             glob(f"{eval_model_dir}/**/*no_context*generated*.jsonl", recursive=True)
         )
+        files_model = {
+            file.split("/")[-1].replace("_no_context", ""): file for file in files_model
+        }
     else:
         files_model = sorted(
-            glob(f"{eval_model_dir}/**/*[!no_context]*generated*.jsonl", recursive=True)
+            glob(f"{eval_model_dir}/**/*generated*.jsonl", recursive=True)
         )
-    files_model = {file.split("/")[-1]: file for file in files_model}
+        files_model = {
+            file.split("/")[-1]: file
+            for file in files_model
+            if "no_context" not in file
+        }
 
     overlap_files = set(files_checkpoint) & set(files_model)
     if not overlap_files:
@@ -301,11 +308,19 @@ if __name__ == "__main__":
     # Plot and save confusion matrix
     checkpoint_name = "/".join(eval_checkpoint_dir.strip("/").split("/")[-2:])
     plot_title = f"Model Comparison: {checkpoint_name} vs {model_dir}"
-    save_path = f"{eval_checkpoint_dir}/confusion_matrix.pdf"
+    fname = (
+        "confusion_matrix_no_context" if compare_to_no_context else "confusion_matrix"
+    )
+    save_path = f"{eval_checkpoint_dir}/{fname}.pdf"
     # TODO: add resilience + boost rate
     fig = plot_confusion_matrix(confusion_matrix, title=plot_title, save_path=save_path)
     # fig.show()
 
     # Save the comparator JSON to a file
-    with open(f"{eval_checkpoint_dir}/comparator.json", "w") as f:
+    comparator_fname = (
+        "comparator_no_context.json" if compare_to_no_context else "comparator.json"
+    )
+    with open(f"{eval_checkpoint_dir}/{comparator_fname}", "w") as f:
         json.dump(comparator_json, f)
+    print(f"Comparator JSON saved to: {eval_checkpoint_dir}/{comparator_fname}")
+    print("Done!")

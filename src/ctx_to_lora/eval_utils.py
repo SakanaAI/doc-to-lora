@@ -599,10 +599,10 @@ def eval_teacher_forcing(
     for ds_name, ds in datasets.items():
         split_name = f"{split}_{ds_name}" if ds_name else split
         if "/" in split_name:
-            os.makedirs(
-                f"{eval_trainer.args.output_dir}/{split_name.split('/')[0]}",
-                exist_ok=True,
+            split_dir = os.path.join(
+                eval_trainer.args.output_dir, os.path.dirname(split_name)
             )
+            os.makedirs(split_dir, exist_ok=True)
         if remove_context:
             split_name += "_no_context"
 
@@ -735,7 +735,8 @@ def evaluate(
         for ds_name, ds in datasets.items():
             val_indices = np.random.permutation(len(ds))[:max_eval_samples_per_ds]
             datasets[ds_name] = ds.select(val_indices)
-            answers[ds_name] = answers[ds_name].select(val_indices)
+            if ds_name in answers:
+                answers[ds_name] = answers[ds_name].select(val_indices)
 
         print(f"Datasets: {datasets}")
         print(f"Answers: {answers}")
@@ -879,7 +880,7 @@ def run_eval(
         else:
             args.test_ds_names = datasets
 
-    evaluate(
+    return evaluate(
         checkpoint_path,
         model_name_or_path,
         eval_batch_size,
