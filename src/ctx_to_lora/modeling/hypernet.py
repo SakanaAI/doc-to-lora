@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from einops import einsum, rearrange, unpack
+from einops import rearrange, unpack
 from einops.layers.torch import EinMix as Mix
 from jaxtyping import Float, Integer
 from peft import (
@@ -59,6 +59,7 @@ class HypernetConfig:
     per_rank_gen: bool
     per_layer_processing: bool
     use_token_mixing: bool
+    num_pre_head_layers: int
     dropout_rate: float
 
     lora_config: LoraConfig
@@ -240,7 +241,7 @@ class HyperLoRA(nn.Module):
                         self.d_latent * 4,
                         self.d_latent,
                     )
-                    for _ in range(4)
+                    for _ in range(self.config.num_pre_head_layers)
                 ]
             else:
                 layers = [
@@ -250,49 +251,86 @@ class HyperLoRA(nn.Module):
                         output_size=self.config.latent_size,
                         dropout_rate=getattr(self.config, "dropout_rate", 0),
                     )
-                    for _ in range(4)
+                    for _ in range(self.config.num_pre_head_layers)
                 ]
 
             self.layers = nn.Sequential(*layers)
 
             d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
-            # if self.config.use_light_weight_lora:
-            #     # light-weight lora projection (per module)
+            if self.config.use_light_weight_lora:
+                # light-weight lora projection (per layer, per module)
+                # self.pre_lora_projection = nn.ParameterDict(
+                #     {
+                #         k: nn.Parameter(
+                #             torch.randn(
+                #                 self.d_in[k], self.config.light_weight_latent_size
+                #             )
+                #         )
+                #         for k in self.target_modules
+                #     }
+                # )
+                self.pre_lora_projection = nn.ParameterDict(
+                    {
+                        k: Mix(
+                            "bs n_layers r d_latent -> bs n_layers r d_in",
+                            weight_shape="n_layers d_latent d_in",
+                            bias_shape="n_layers d_in",
+                            n_layers=len(self.layer_indices),
+                            d_latent=self.config.light_weight_latent_size,
+                            d_in=self.d_in[k],
+                        )
+                        for k in self.target_modules
+                    }
+                )
+                with torch.no_grad():
+                    for param in self.pre_lora_projection.values():
+                        for i in range(param.weight.shape[0]):
+                            nn.init.orthogonal_(
+                                param.weight[i],
+                                # 1 / self.config.light_weight_latent_size**0.5,
+                            )
+                            param.bias.data[:] = 0
 
-            #     self.pre_lora_projection = nn.ParameterDict(
-            #         {
-            #             k: nn.Parameter(
-            #                 torch.randn(
-            #                     self.d_in[k], self.config.light_weight_latent_size
-            #                 )
-            #             )
-            #             for k in self.target_modules
-            #         }
-            #     )
-            #     for param in self.pre_lora_projection.values():
-            #         nn.init.orthogonal_(param)
+                # self.post_lora_projection = nn.ParameterDict(
+                #     {
+                #         k: nn.Parameter(
+                #             torch.randn(
+                #                 self.d_out[k], self.config.light_weight_latent_size
+                #             )
+                #         )
+                #         for k in self.target_modules
+                #     }
+                # )
+                self.post_lora_projection = nn.ParameterDict(
+                    {
+                        k: Mix(
+                            "bs n_layers d_latent r -> bs n_layers d_out r",
+                            weight_shape="n_layers d_latent d_out",
+                            bias_shape="n_layers d_out",
+                            n_layers=len(self.layer_indices),
+                            d_latent=self.config.light_weight_latent_size,
+                            d_out=self.d_out[k],
+                        )
+                        for k in self.target_modules
+                    }
+                )
+                with torch.no_grad():
+                    for param in self.post_lora_projection.values():
+                        for i in range(param.weight.shape[0]):
+                            nn.init.orthogonal_(
+                                param.weight[i],
+                                # 1 / self.config.light_weight_latent_size**0.5,
+                            )
+                            param.bias.data[:] = 0
 
-            #     self.post_lora_projection = nn.ParameterDict(
-            #         {
-            #             k: nn.Parameter(
-            #                 torch.randn(
-            #                     self.d_out[k], self.config.light_weight_latent_size
-            #                 )
-            #             )
-            #             for k in self.target_modules
-            #         }
-            #     )
-            #     for param in self.post_lora_projection.values():
-            #         nn.init.orthogonal_(param)
+                d_lora = self.config.light_weight_latent_size * 2
+                self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
+                self.d_out = {
+                    k: self.config.light_weight_latent_size for k in self.d_out
+                }
 
-            #     d_lora = self.config.light_weight_latent_size * 2
-            #     self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
-            #     self.d_out = {
-            #         k: self.config.light_weight_latent_size for k in self.d_out
-            #     }
-
-            #     logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
+                logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
 
             n_modules = len(self.target_modules)
             # have to do this otherwise doesnt work with adamw_torch_fused
@@ -404,7 +442,7 @@ class HyperLoRA(nn.Module):
         #     #             output_size=self.config.latent_size,
         #     #             dropout_rate=getattr(self.config, "dropout_rate", 0),
         #     #         )
-        #     #         for _ in range(4)
+        #     #         for _ in range(self.config.num_pre_head_layers)
         #     #     ]
         #     # )
         #     self.extra_layers = ResMLPBlock(
@@ -464,16 +502,18 @@ class HyperLoRA(nn.Module):
             # transpose B
             B = rearrange(B, "bs n_layers r d_out -> bs n_layers d_out r")
             if self.config.use_light_weight_lora:
-                A = einsum(
-                    self.pre_lora_projection[module],
-                    A,
-                    "d_in d_latent, bs n_layers r d_latent -> bs n_layers r d_in",
-                )
-                B = einsum(
-                    self.post_lora_projection[module],
-                    B,
-                    "d_out d_latent, bs n_layers d_latent r -> bs n_layers d_out r",
-                )
+                # A = einsum(
+                #     self.pre_lora_projection[module],
+                #     A,
+                #     "d_in d_latent, bs n_layers r d_latent -> bs n_layers r d_in",
+                # )
+                # B = einsum(
+                #     self.post_lora_projection[module],
+                #     B,
+                #     "d_out d_latent, bs n_layers d_latent r -> bs n_layers d_out r",
+                # )
+                A = self.pre_lora_projection[module](A)
+                B = self.post_lora_projection[module](B)
 
             lora_dict[module] = dict(A=A, B=B)
 
@@ -573,6 +613,8 @@ class ModulatedPretrainedModel(nn.Module):
             use_flash_attn=use_flash_attn,
         )
         hypernet_config = state_dict["hypernet_config"]
+        if getattr(hypernet_config, "num_pre_head_layers", None) is None:
+            hypernet_config.num_pre_head_layers = 4
         ctx_encoder_args = state_dict["ctx_encoder_args"]
         model = cls(base_model, hypernet_config, ctx_encoder_args)
         model.load_state_dict(state_dict)
@@ -631,13 +673,15 @@ class ModulatedPretrainedModel(nn.Module):
                     A = A[0:1]
                     B = B[:, 0:1]
                 biases = [A, B.T]
-                # TODO: scale the biases by the output size?
-                # e.g., rank=16 gives bigger (2x?) gradient magnitudes at initialization
-                # compared to rank=8
 
                 # bias-hyperinit
                 # init weights to zeros and bias to the base weights
                 bias_cat = torch.cat(biases, dim=1)
+                # scale the biases by the output size
+                # e.g., rank=16 gives bigger (2x?) gradient magnitudes at initialization
+                # compared to rank=8
+                r = self.hypernet_config.lora_config.r
+                bias_cat = bias_cat / r
                 self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
 
     def state_dict(self, *args, **kwargs):
