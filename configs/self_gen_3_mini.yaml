@@ -49,7 +49,7 @@ train_ds_names:
   - self_gen/google/gemma-2-2b-it/synthetic_convqa # 40k
 
 val_ds_names:
-  - self_gen/google/gemma-2-2b-it/fw_qa_3
+  - self_gen/google/gemma-2-2b-it/fw_qa_3_small
   - self_gen/google/gemma-2-2b-it/fw_qa_xl
   - self_gen/google/gemma-2-2b-it/ctx_qa
   - self_gen/google/gemma-2-2b-it/pwc
@@ -64,3 +64,4 @@ val_ds_names:
 
 load_best_model_at_end: true
 metric_for_best_model: eval_pwc_loss
+# metric_for_best_model: eval_fw_qa_3_loss

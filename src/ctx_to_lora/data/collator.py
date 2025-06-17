@@ -1,3 +1,5 @@
+import itertools
+
 import numpy as np
 import torch
 from transformers.data import (
@@ -6,6 +8,17 @@ from transformers.data import (
 )
 
 flattener = DataCollatorWithFlattening()
+
+
+def concat_batch(inp_list):
+    sample = inp_list[0]
+    out = [
+        {
+            k: list(itertools.chain.from_iterable([x[k] for x in inp_list]))
+            for k in sample
+        }
+    ]
+    return out
 
 
 # def train_packed_collator(inp_list):
@@ -28,8 +41,12 @@ flattener = DataCollatorWithFlattening()
 def flatten_if_not_packed(inp_list):
     # no padding
     sample = inp_list[0]
+    n = len(sample)
     if "position_ids" in sample:
-        return default_data_collator(inp_list, return_tensors="pt")
+        if n == 1:
+            return default_data_collator(inp_list, return_tensors="pt")
+        elif n > 1:
+            return default_data_collator(concat_batch(inp_list), return_tensors="pt")
 
     packed_inputs = flattener(inp_list, return_tensors="pt")
     if "ctx_ids" in sample:
@@ -154,6 +171,10 @@ def eval_collator(inp_list, tokenizer):
         out["chat_ids"] = chat_ids
         out["chat_attn_mask"] = chat_attn_mask
         out["chat_labels"] = chat_labels
+    # if "input_ids_len" in inp_list[0]:
+    #     out["input_ids_len"] = [x.pop("input_ids_len") for x in inp_list]
+    # if "ctx_ids_len" in inp_list[0]:
+    #     out["ctx_ids_len"] = [x.pop("ctx_ids_len") for x in inp_list]
     return out
 
 

@@ -190,7 +190,7 @@ class TrainingArguments(TrainingArguments):
         metadata={"help": "Number of warmup steps."},
     )
     eval_on_start: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to evaluate on the start of training."},
     )
     eval_strategy: str = field(
@@ -242,6 +242,14 @@ class TrainingArguments(TrainingArguments):
     # w/o this the trainer stores logits of all sample in memory...
     batch_eval_metrics: bool = field(
         default=True,
+    )
+    logging_first_step: bool = field(
+        default=True,
+        metadata={"help": "Whether to log the first step."},
+    )
+    ddp_timeout: int = field(
+        default=2**20,
+        metadata={"help": "Timeout for distributed data parallel training."},
     )
 
 
@@ -373,13 +381,13 @@ class DataArguments:
         metadata={"help": "Test dataset names."},
     )
     max_val_samples_per_ds: int | None = field(
-        default=5000,
+        default=1000,
         metadata={"help": "Maximum number of validation samples per dataset."},
     )
-    max_test_samples_per_ds: int | None = field(
-        default=1000,
-        metadata={"help": "Maximum number of test samples per dataset."},
-    )
+    # max_test_samples_per_ds: int | None = field(
+    #     default=1000,
+    #     metadata={"help": "Maximum number of test samples per dataset."},
+    # )
 
 
 @dataclass
@@ -416,6 +424,9 @@ class HypernetArguments:
         default=False,
         metadata={"help": "Whether to use token mixing block."},
     )
+    num_pre_head_layers: int = field(
+        default=4, metadata={"help": "# of layers before hypernet head"}
+    )
 
 
 @dataclass
@@ -424,6 +435,7 @@ class CtxEncoderArguments:
         default=None,
         metadata={"help": "Context encoder model name or path."},
     )
+    # TODO: allow using activations from multiple layers?
     layer_idx: int | None = field(
         default=None,
         metadata={

@@ -113,6 +113,10 @@ def train_model(
         logger.info("Training with modulated model. Using CustomTrainer.")
         trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
         del training_args.gen_lora_l1_reg_coef
+    if training_args.auto_find_batch_size:
+        # set the batch size to some high number
+        # which will be lowered by the Trainer
+        training_args.per_device_train_batch_size = 128
 
     trainer = trainer_cls(**trainer_kwargs)
 

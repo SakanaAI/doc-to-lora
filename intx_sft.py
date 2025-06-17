@@ -229,6 +229,8 @@ def main():
             if ctx_name is None:
                 ctx_name = model.base_model.config.name_or_path
             ctx_tokenizer = get_tokenizer(ctx_name, train=True)
+            training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
+
         if len([p for p in model.ctx_encoder.parameters() if p.requires_grad]):
             raise ValueError("ctx_encoder contains trainable parameters")
         if len([p for p in model.base_model.parameters() if p.requires_grad]):
@@ -358,19 +360,25 @@ def main():
         seed=training_args.seed,
         stopping_strategy="all_exhausted",
     )
+    logger.info(f"Train dataset length: {len(train_ds)}")
 
     if ctx_args.use_sequence_packing:
-        logging.info("Packing dataset")
-        train_ds = pack(
-            train_ds,
-            ctx_args.max_packed_inp_len,
-            ctx_args.max_packed_ctx_len,
-            max_packed_size=-1,
-            num_proc=8,
-        )
-        # TODO: add stats here
-        logging.info("Setting per_device_train_batch_size to 1")
-        training_args.per_device_train_batch_size = 1
+        with training_args.main_process_first():
+            logging.info("Packing dataset")
+            old_ds_len = len(train_ds)
+            train_ds = pack(
+                train_ds,
+                ctx_args.max_packed_inp_len,
+                ctx_args.max_packed_ctx_len,
+                max_packed_size=-1,
+                num_proc=8,
+            )
+            logger.info(f"Train dataset length: {len(train_ds)}")
+            logger.info(
+                f"Avg. # of samples per packed sequence: {old_ds_len / len(train_ds)}"
+            )
+            logger.info("Setting per_device_train_batch_size to 1")
+            training_args.per_device_train_batch_size = 1
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
@@ -383,11 +391,13 @@ def main():
     )
 
     # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
-    # TODO: use packing with SFTTrainer
 
     # HACK [local patch]: deepspeed model loading problem (for resume training)
     # see https://github.com/microsoft/DeepSpeed/pull/6626/files
     # /home/rujikorn_sakana_ai/.conda/envs/ctx-to-lora/lib/python3.10/site-packages/deepspeed/runtime/engine.py
+    # HACK: [local path]: make liger kernel works with gemma3
+    # see .venv/lib/python3.10/site-packages/liger_kernel/transformers/monkey_patch.py
+    # L810:814 + L781
     if training_args.use_liger_kernel and is_liger_kernel_available():
         from liger_kernel.transformers import _apply_liger_kernel_to_instance
 

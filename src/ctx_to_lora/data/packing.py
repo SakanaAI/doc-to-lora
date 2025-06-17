@@ -50,10 +50,10 @@ def pack_data_points_by_length(
         valid_ends = valid_ends_inp & valid_ends_ctx
 
         # this should never happen?
-        # if not np.any(valid_ends):
-        #     # Single item exceeds max_packed_inp_len, skip it
-        #     i += 1
-        #     continue
+        if not np.any(valid_ends):
+            # Single item exceeds max_packed_inp_len, skip it
+            i += 1
+            continue
 
         # Find the last valid index
         max_valid_idx = i + np.where(valid_ends)[0][-1]
