@@ -27,9 +27,11 @@
 ' + (first_user_prefix if loop.first else "") }}
     {%- if message['content'] is string -%}
         {%- if message['role'] == 'assistant' -%}
-            {% generation %}{{ message['content'] | trim }}
+            {% generation %}{{ message['content'] | trim + '<end_of_turn>
+' }}{% endgeneration %}
         {%- else -%}
-            {{ message['content'] | trim }}
+            {{ message['content'] | trim + '<end_of_turn>
+' }}
         {%- endif -%}
     {# {%- elif message['content'] is iterable -%}
         {%- for item in message['content'] -%}
@@ -38,14 +40,9 @@
             {%- elif item['type'] == 'text' -%}
                 {{ item['text'] | trim }}
             {%- endif -%}
-        {%- endfor -%}
-    {%- else -%} #}
+        {%- endfor -%} #}
+    {%- else -%}
         {{ raise_exception("Invalid content type") }}
-    {%- endif -%}
-    {{ '<end_of_turn>
-' }}
-    {%- if (message['role'] == 'assistant') -%}
-            {% endgeneration %}
     {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
