@@ -74,24 +74,31 @@ if __name__ == "__main__":
     # Set random seed for reproducibility
     random.seed(42)
 
-    # Generate dataset
-    for k in range(2, 257):
-        save_dir = f"context_numbers_{k}"
+    for k in range(2, 11):
+        save_dir = f"data/raw_datasets/context_numbers_{k}"
         os.makedirs(save_dir, exist_ok=True)
         generate_number_dataset(n=12_000, k=k, save_dir=save_dir)
 
         print(f"Dataset generated and saved at {save_dir}")
 
-    # for k in range(144, 257, 16):
-    #     save_dir = f"context_numbers_{k}"
+    # # Generate dataset
+    # for k in range(2, 257):
+    #     save_dir = f"data/raw_datasets/context_numbers_{k}"
+    #     os.makedirs(save_dir, exist_ok=True)
+    #     generate_number_dataset(n=12_000, k=k, save_dir=save_dir)
+
+    #     print(f"Dataset generated and saved at {save_dir}")
+
+    # # for k in range(144, 257, 16):
+    # #     save_dir = f"context_numbers_{k}"
+    # #     os.makedirs(save_dir, exist_ok=True)
+    # #     generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
+
+    # # print(f"Dataset generated and saved at {save_dir}")
+
+    # for k in [512]:
+    #     save_dir = f"data/raw_datasets/context_numbers_{k}"
     #     os.makedirs(save_dir, exist_ok=True)
     #     generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
 
-    # print(f"Dataset generated and saved at {save_dir}")
-
-    for k in [512]:
-        save_dir = f"context_numbers_{k}"
-        os.makedirs(save_dir, exist_ok=True)
-        generate_number_dataset(n=100_000, k=k, save_dir=save_dir)
-
-        print(f"Dataset generated and saved at {save_dir}")
+    #     print(f"Dataset generated and saved at {save_dir}")
