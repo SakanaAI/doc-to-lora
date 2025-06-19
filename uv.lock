@@ -682,6 +682,7 @@ dependencies = [
     { name = "fasttext-wheel" },
     { name = "flask" },
     { name = "hf-transfer" },
+    { name = "huggingface-hub", extra = ["hf-transfer"] },
     { name = "inflect" },
     { name = "jaxtyping" },
     { name = "jupyter" },
@@ -710,6 +711,7 @@ requires-dist = [
     { name = "fasttext-wheel" },
     { name = "flask" },
     { name = "hf-transfer" },
+    { name = "huggingface-hub", extras = ["hf-transfer"], specifier = ">=0.32.0" },
     { name = "inflect" },
     { name = "jaxtyping" },
     { name = "jupyter" },
@@ -1535,6 +1537,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+hf-transfer = [
+    { name = "hf-transfer" },
+]
 hf-xet = [
     { name = "hf-xet" },
 ]
