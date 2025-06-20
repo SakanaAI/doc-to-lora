@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import torch
@@ -42,10 +43,17 @@ from ctx_to_lora.model_loading import (
 )
 from ctx_to_lora.modeling.aggregator import AG, AggregatorConfig, get_aggregator_config
 from ctx_to_lora.modeling.ctx_encoder import EarlyExit
+from ctx_to_lora.modeling.lora_layer import (
+    apply_lora_to_layers,
+    lora_forward,
+    lora_forward_packed,
+)
 from ctx_to_lora.utils import (
     get_base_model,
+    get_layers,
     get_num_layers,
     get_peft_in_out_features,
+    get_peft_modules,
 )
 
 logger = logging.getLogger()
@@ -580,13 +588,16 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_encoder_args: CtxEncoderArguments,
         # use_kl_loss is only used for training
         use_kl_loss: bool = False,
+        use_sequence_packing: bool = False,
         use_base_input_as_ctx: bool = False,
     ):
         super().__init__()
         self.device = base_model.device
+        self.peft_config = base_model.peft_config["default"]
         self.hypernet_config = hypernet_config
         self.ctx_encoder_args = ctx_encoder_args
         self.use_kl_loss = use_kl_loss
+        self.use_sequence_packing = use_sequence_packing
         self.use_base_input_as_ctx = use_base_input_as_ctx
         self.lora_id = 1
         self.active_adapters = []
@@ -621,9 +632,31 @@ class ModulatedPretrainedModel(nn.Module):
         return model
 
     def _init_model(self):
+        # disable adapter of the base model
+        # this only works with LoRA(?)
+        # we disable to avoid peft lora computation
+        self.base_model.disable_adapter_layers()
+
         self.hypernet = (
             HyperLoRA(self.hypernet_config).to(self.device).to(torch.float32)
         )
+
+        layers = get_layers(self.base_model)
+        lora_forward_fn = (
+            lora_forward if not self.use_sequence_packing else lora_forward_packed
+        )
+        for layer_idx in self.hypernet.layer_indices:
+            for module_info in get_peft_modules(layers[layer_idx], self.peft_config):
+                name = module_info["name"]
+                module = module_info["module"]
+                logger.debug(f"Applying LoRA forward to {name}")
+                module.forward = partial(
+                    lora_forward_fn,
+                    self=module,
+                    lora_dropout_p=self.peft_config.lora_dropout,
+                    scaling=self.peft_config.lora_alpha,
+                )
+
         ctx_model_name = self.ctx_encoder_args.ctx_encoder_model_name_or_path
         if ctx_model_name is None:
             ctx_model_name = self.base_model.config.name_or_path
@@ -780,7 +813,8 @@ class ModulatedPretrainedModel(nn.Module):
         **model_inputs_kwargs: dict[str, Any],
     ) -> tuple | ModelOutput:
         """Forward pass of the modulated model."""
-
+        # TODO: allow more than one LoRA per sample (multi-lora)
+        # TODO: allow multi queries per one LoRA (for efficient training)
         generated_loras = None
         generated_layernorms = None
         if ctx_ids is None and not self.use_base_input_as_ctx:
@@ -820,23 +854,28 @@ class ModulatedPretrainedModel(nn.Module):
             if "position_ids" in model_inputs_kwargs
             else None
         )
-        with (
-            apply_generated_loras(
-                self.base_model,
-                generated_loras,
-                self.hypernet.layer_indices,
-                position_ids,
-                self.training,
-            ),
-            apply_generated_layernorm(
-                self.base_model,
-                generated_layernorms,
-                self.hypernet.layer_indices,
-                position_ids,
-                self.training,
-            ),
-        ):
-            model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
+        # with (
+        #     apply_generated_loras(
+        #         self.base_model,
+        #         generated_loras,
+        #         self.hypernet.layer_indices,
+        #         position_ids,
+        #         self.training,
+        #     ),
+        #     apply_generated_layernorm(
+        #         self.base_model,
+        #         generated_layernorms,
+        #         self.hypernet.layer_indices,
+        #         position_ids,
+        #         self.training,
+        #     ),
+        # ):
+        #     model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
+
+        apply_lora_to_layers(
+            self.base_model, self.hypernet.layer_indices, generated_loras, position_ids
+        )
+        model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
         if return_generated_lora:
             return model_outputs, (generated_loras, generated_layernorms)
@@ -886,7 +925,7 @@ class ModulatedPretrainedModel(nn.Module):
     @torch.inference_mode()
     def generate(
         self,
-        # TODO: allow more than one LoRA per sample
+        # TODO: allow more than one LoRA per sample (multi-lora)
         ctx_ids: Integer[Tensor, "bs ctx_length"] | None = None,
         ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
         ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
@@ -1111,16 +1150,6 @@ def apply_generated_loras(
         yield base_model
     finally:
         remove_hook_handles(hooks)
-
-
-@contextmanager
-def apply_generated_loras_packed_sequence(
-    base_model: nn.Module,
-    generated_loras: dict | None = None,
-    layer_indices: Iterable[int] | None = None,
-    training: bool = False,
-):
-    pass
 
 
 # needed for loading model from checkpoint

@@ -161,6 +161,16 @@ def save_yaml(data, path):
         yaml.dump(data, file)
 
 
+def get_peft_modules(model: PeftModel, peft_config: PeftConfig) -> list[dict[str, str]]:
+    return [
+        {"name": name, "module": module}
+        for name, module in model.named_modules()
+        if name.split(".")[-1] in peft_config.target_modules
+        and isinstance(module, BaseTunerLayer)
+        and check_target_module_exists(peft_config, name)
+    ]
+
+
 def get_peft_in_out_features(
     model: PeftModel,
     peft_config: PeftConfig | None = None,
@@ -169,11 +179,9 @@ def get_peft_in_out_features(
         return None, None
     in_features = dict()
     out_features = dict()
-    for module_name, module in model.named_modules():
-        if not check_target_module_exists(peft_config, module_name):
-            continue
-        if not isinstance(module, BaseTunerLayer):
-            continue
+    for module_info in get_peft_modules(model, peft_config):
+        module_name = module_info["name"]
+        module = module_info["module"]
         # support just Linear layer for now
         # all modules should be a leave module that is Linear layer
         assert isinstance(module.base_layer, torch.nn.Linear), (
@@ -237,6 +245,12 @@ def get_lora_module_names(
                     module_names[target_module][layer_idx].append(k)
                     break
     return module_names
+
+
+def compile_linear(model):
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear):
+            module.compile()
 
 
 def clear_gpu():

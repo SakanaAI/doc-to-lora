@@ -54,6 +54,7 @@ from ctx_to_lora.modeling.hypernet import (
 )
 from ctx_to_lora.trainer import train_model
 from ctx_to_lora.utils import (
+    compile_linear,
     extract_cli_args,
     get_run_name,
     log_num_train_params,
@@ -213,6 +214,7 @@ def main():
                 hypernet_config,
                 ctx_encoder_args,
                 ctx_args.use_kl_loss,
+                ctx_args.use_sequence_packing,
             )
             training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
         else:
@@ -223,6 +225,7 @@ def main():
                 torch.load(ctx_args.from_pretrained_checkpoint, weights_only=False),
                 train=True,
                 use_flash_attn=model_args.use_flash_attn,
+                use_sequence_packing=ctx_args.use_sequence_packing,
             )
             tokenizer = get_tokenizer(model.base_model.config.name_or_path, train=True)
             ctx_name = model.ctx_encoder_args.ctx_encoder_model_name_or_path
@@ -404,15 +407,23 @@ def main():
         if isinstance(model, ModulatedPretrainedModel):
             logger.info("Applying liger-kernel to ModulatedPretrainedModel")
             if isinstance(model.base_model, PeftModel):
-                _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
+                base_model = model.base_model.base_model
             else:
-                _apply_liger_kernel_to_instance(model=model.base_model.model)
+                base_model = model.base_model
+
             if ctx_name is not None:
                 logger.info("Applying liger-kernel to ctx_encoder_model")
-                _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)
+                ctx_base_model = model.ctx_encoder.base_model
+                _apply_liger_kernel_to_instance(model=ctx_base_model)
+                compile_linear(ctx_base_model)
+
         elif isinstance(model, PeftModel):
             logger.info("Applying liger-kernel to PeftModel")
-            _apply_liger_kernel_to_instance(model=model.base_model.model)
+            base_model = model.base_model
+
+        _apply_liger_kernel_to_instance(model=base_model.model)
+        compile_linear(base_model)
+        base_model.loss_function = torch.compile(base_model.loss_function)
 
     if LOCAL_RANK == 0:
         wandb.init(

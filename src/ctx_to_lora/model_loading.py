@@ -49,8 +49,8 @@ def get_tokenizer(
     padding_side = "left" if not train else "right"
     truncation_side = "left"
 
-    if peft_config:
-        model_name_or_path = peft_config.base_model_name_or_path
+    # if peft_config:
+    #     model_name_or_path = peft_config.base_model_name_or_path
 
     if tokenizer_kwargs is None:
         tokenizer_kwargs = {}
