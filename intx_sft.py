@@ -416,14 +416,18 @@ def main():
                 ctx_base_model = model.ctx_encoder.base_model
                 _apply_liger_kernel_to_instance(model=ctx_base_model)
                 compile_linear(ctx_base_model)
+                # model.ctx_encoder.compile(fullgraph=True)
 
         elif isinstance(model, PeftModel):
             logger.info("Applying liger-kernel to PeftModel")
             base_model = model.base_model
 
         _apply_liger_kernel_to_instance(model=base_model.model)
-        compile_linear(base_model)
-        base_model.loss_function = torch.compile(base_model.loss_function)
+        # compile_linear(base_model)
+        base_model.compile(fullgraph=True)
+        base_model.loss_function = torch.compile(
+            base_model.loss_function, fullgraph=True
+        )
 
     if LOCAL_RANK == 0:
         wandb.init(
