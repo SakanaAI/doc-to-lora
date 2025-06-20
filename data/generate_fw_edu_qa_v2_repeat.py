@@ -168,6 +168,8 @@ if __name__ == "__main__":
             "Path must contain '_level' to indicate the dataset level"
         )
         shard_name = path.split("/")[-1].split(".")[0].split("_debug")[0]
+        if "/" in shard_pattern:
+            shard_name = "/".join(shard_pattern.split("/")[:-1]) + "/" + shard_name
         cur_level = int(shard_name.split("_level_")[-1])
         next_level = cur_level + 1
         ds = load_dataset(
