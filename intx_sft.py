@@ -240,7 +240,8 @@ def main():
             raise ValueError("base model contains trainable parameters")
         # we can't compile the base model bc we will be
         # adding/removing forward hooks during training
-        model.hypernet = torch.compile(model.hypernet)
+        model.hypernet.compile(fullgraph=True, mode="max-autotune")
+
     else:
         # activate LoRA
         base_model_config = AutoConfig.from_pretrained(
@@ -424,9 +425,9 @@ def main():
 
         _apply_liger_kernel_to_instance(model=base_model.model)
         # compile_linear(base_model)
-        base_model.compile(fullgraph=True)
+        base_model.compile(fullgraph=True, mode="max-autotune")
         base_model.loss_function = torch.compile(
-            base_model.loss_function, fullgraph=True
+            base_model.loss_function, fullgraph=True, mode="max-autotune"
         )
 
     if LOCAL_RANK == 0:
