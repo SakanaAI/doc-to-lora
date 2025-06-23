@@ -805,16 +805,16 @@ class ModulatedPretrainedModel(nn.Module):
 
     def forward(
         self,
-        ctx_ids: Integer[Tensor, "bs ctx_len"] | None = None,
-        ctx_attn_mask: Integer[Tensor, "bs ctx_len"] | None = None,
-        ctx_position_ids: Integer[Tensor, "bs ctx_len"] | None = None,
+        ctx_ids: Integer[Tensor, "n_ctx ctx_len"] | None = None,
+        ctx_attn_mask: Integer[Tensor, "n_ctx ctx_len"] | None = None,
+        ctx_position_ids: Integer[Tensor, "n_ctx ctx_len"] | None = None,
+        n_queries: Integer[Tensor, "n_ctx"] | None = None,
         return_generated_lora: bool | None = False,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ) -> tuple | ModelOutput:
         """Forward pass of the modulated model."""
         # TODO: allow more than one LoRA per sample (multi-lora)
-        # TODO: allow multi queries per one LoRA (for efficient training)
         generated_loras = None
         generated_layernorms = None
         if ctx_ids is None and not self.use_base_input_as_ctx:
@@ -872,8 +872,24 @@ class ModulatedPretrainedModel(nn.Module):
         # ):
         #     model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
+        if n_queries is None:
+            if ctx_position_ids is None:
+                n_queries = torch.ones(
+                    ctx_ids.shape[0], dtype=torch.int32, device=self.device
+                )
+            else:
+                # quite redundant (we do cu_seqlens many places)
+                # TODO: compute cu_seqlens here and propagate that
+                n_queries = torch.ones(
+                    (ctx_position_ids == 0).sum(), dtype=torch.int32, device=self.device
+                )
+
         apply_lora_to_layers(
-            self.base_model, self.hypernet.layer_indices, generated_loras, position_ids
+            self.base_model,
+            self.hypernet.layer_indices,
+            generated_loras,
+            n_queries,
+            position_ids,
         )
         model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
