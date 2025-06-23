@@ -31,11 +31,9 @@ weight_decay: 0.01
 
 # LoRA
 lora_r: 16
-lora_dropout: 0.05
+lora_dropout: 0.0
 target_modules:
   - down_proj
-  - up_proj
-  - gate_proj
 
 # data
 train_ds_names:
@@ -59,10 +57,3 @@ val_ds_names:
 - data/raw_datasets/context_numbers_8
 - data/raw_datasets/context_numbers_9
 - data/raw_datasets/context_numbers_10
-
-test_ds_names:
-- data/raw_datasets/context_numbers_11
-- data/raw_datasets/context_numbers_12
-- data/raw_datasets/context_numbers_13
-- data/raw_datasets/context_numbers_14
-- data/raw_datasets/context_numbers_15

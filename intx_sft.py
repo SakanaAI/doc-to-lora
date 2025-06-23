@@ -470,9 +470,11 @@ if __name__ == "__main__":
     # os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
     os.environ["OMP_NUM_THREADS"] = "23"
     # os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "137438953472"  # 128 TB
+    torch._dynamo.config.capture_scalar_outputs = True
+
+    # DOES THIS CAUSE ACCURACY DEGRADATION?
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    torch._dynamo.config.capture_scalar_outputs = True
     if os.getenv("DEBUG", False):
         disable_caching()
     main()

@@ -8,8 +8,7 @@ from os import path
 from typing import Any
 
 import datasets
-import numpy as np
-from datasets import Dataset, load_dataset
+from datasets import Dataset, is_caching_enabled, load_dataset
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.data.definitions import (
@@ -22,7 +21,7 @@ from ctx_to_lora.data.definitions import (
     TRANSFORMED_DATA_DIR,
 )
 from ctx_to_lora.data.packing import pack_batch
-from ctx_to_lora.utils import TRAINING_TASK
+from ctx_to_lora.utils import TRAINING_TASK, concat_list
 
 logger = logging.getLogger()
 
@@ -69,7 +68,30 @@ def get_preprocessing_fn(
     """
     f = lambda x: x
 
-    if ds_name.startswith("longbench"):
+    if "fw_qa_v2" in ds_name and "level" in ds_name:
+
+        def f_train(sample):
+            # get questions/answers from all levels in the ds
+            q_cols = [col for col in sample.keys() if col.startswith("prompts_level")]
+            a_cols = [col for col in sample.keys() if col.startswith("answers_level")]
+            questions = concat_list([sample[col] for col in q_cols])
+            answers = concat_list([sample[col] for col in a_cols])
+            return {
+                "context": sample["context"],
+                "prompts": questions,
+                "responses": answers,
+            }
+
+        def f_eval(sample):
+            return {
+                "context": sample["context"],
+                "prompt": sample["prompt"],
+                "response": sample["response"],
+            }
+
+        f = f_eval if is_eval else f_train
+
+    elif ds_name.startswith("longbench"):
 
         def f(sample):
             return {
@@ -142,7 +164,7 @@ def get_preprocessing_fn(
             return {
                 "context": sample["passage"],
                 "prompt": prompt,
-                "response": ", ".join(sample["answers_spans"]["spans"]),
+                "response": ", ".join(set(sample["answers_spans"]["spans"])),
             }
 
     elif ds_name in ["narrativeqa", "quoref", "ropes"]:
@@ -247,6 +269,21 @@ def get_preprocessing_fn(
 
         f = eval_intx_decorator(f)
 
+    if not is_pretrain:
+
+        def maybe_convert_to_list(f):
+            def g(sample):
+                sample = f(sample)
+                if "prompt" in sample:
+                    sample["prompts"] = [sample.pop("prompt")]
+                if "response" in sample:
+                    sample["responses"] = [sample.pop("response")]
+                return sample
+
+            return g
+
+        f = maybe_convert_to_list(f)
+
     return f
 
 
@@ -305,6 +342,19 @@ def len_filter(sample, max_length: int, keys: list[str]):
     return sum(m) == len(keys)
 
 
+def len_filter_data(sample, max_length: int, keys: list[str]):
+    data = sample["data"]
+    indices = dict()
+    for k in keys:
+        indices[k] = {i for i, arr in enumerate(data[k]) if len(arr) <= max_length}
+
+    all_indices = set.intersection(*indices.values())
+    for k in data:
+        data[k] = [data[k][i] for i in all_indices]
+
+    return dict(data=data)
+
+
 # def len_filter(ds, max_length: int, keys: list[str]):
 #     for k in keys:
 #         ds = ds.select([i for i, x in enumerate(ds[k]) if len(x) <= max_length])
@@ -322,9 +372,7 @@ def len_filter(sample, max_length: int, keys: list[str]):
 def add_repeat_prompt_fn(samples: dict[str, list[str]], prob: float):
     unique_contexts = set()
     ctxs, prompts, responses = [], [], []
-    for ctx, prompt, response in zip(
-        samples["context"], samples["prompt"], samples["response"]
-    ):
+    for ctx in samples["context"]:
         if random.random() > prob:
             continue
         # Only process if the context is not already in the set
@@ -335,74 +383,74 @@ def add_repeat_prompt_fn(samples: dict[str, list[str]], prob: float):
         #     continue
         unique_contexts.add(ctx)
         ctxs.append(ctx)
-        responses.append(ctx)
-        prompts.append(get_repeat_prompt())
+        responses.append([ctx])
+        prompts.append([get_repeat_prompt()])
 
     logger.debug("Adding repeat prompt...")
     logger.debug(f"# unique contexts: {len(unique_contexts)}")
 
     return dict(
         context=ctxs + samples["context"],
-        response=responses + samples["response"],
-        prompt=prompts + samples["prompt"],
+        responses=responses + samples["responses"],
+        prompts=prompts + samples["prompts"],
     )
 
 
-def add_negative_prompt_fn(samples):
-    unique_contexts = set()
-    ctxs, prompts, responses = [], [], []
-    keywords = [
-        "repeat",
-        "rephrase",
-        "summarize",
-        "rewrite",
-        "title",
-        "keyword",
-        "continuation",
-    ]
+# def add_negative_prompt_fn(samples):
+#     unique_contexts = set()
+#     ctxs, prompts, responses = [], [], []
+#     keywords = [
+#         "repeat",
+#         "rephrase",
+#         "summarize",
+#         "rewrite",
+#         "title",
+#         "keyword",
+#         "continuation",
+#     ]
 
-    for ctx, prompt, response in zip(
-        samples["context"], samples["prompt"], samples["response"]
-    ):
-        if ctx in unique_contexts:
-            continue
-        unique_contexts.add(ctx)
-        if len(ctx) > 3000:
-            continue
-        if any(keyword in prompt for keyword in keywords):
-            # Skip samples where the prompt contains any of the specified keywords
-            continue
+#     for ctx, prompt, response in zip(
+#         samples["context"], samples["prompt"], samples["response"]
+#     ):
+#         if ctx in unique_contexts:
+#             continue
+#         unique_contexts.add(ctx)
+#         if len(ctx) > 3000:
+#             continue
+#         if any(keyword in prompt for keyword in keywords):
+#             # Skip samples where the prompt contains any of the specified keywords
+#             continue
 
-        ctxs.append(ctx)
-        prompts.append(prompt)
-        responses.append(response)
+#         ctxs.append(ctx)
+#         prompts.append(prompt)
+#         responses.append(response)
 
-    logger.debug("Adding negative prompt...")
-    logger.debug(f"# unique contexts: {len(unique_contexts)}")
+#     logger.debug("Adding negative prompt...")
+#     logger.debug(f"# unique contexts: {len(unique_contexts)}")
 
-    # remove one last sample if the number of samples is odd
-    if len(ctxs) % 2 != 0:
-        ctxs.pop()
-        prompts.pop()
-        responses.pop()
+#     # remove one last sample if the number of samples is odd
+#     if len(ctxs) % 2 != 0:
+#         ctxs.pop()
+#         prompts.pop()
+#         responses.pop()
 
-    # to make sure that the negative prompt/response is not the same as the original
-    indices = list(np.random.permutation(len(ctxs))) + list(
-        np.random.permutation(len(ctxs))
-    )
-    neg_ctxs, neg_prompts, neg_responses = [], [], []
-    for idx in range(0, len(indices), 2):
-        i = indices[idx]
-        j = indices[idx + 1]
-        neg_ctxs.append(ctxs[i])
-        neg_prompts.append(ctxs[j] + "\n\n" + prompts[j])
-        neg_responses.append(responses[j])
+#     # to make sure that the negative prompt/response is not the same as the original
+#     indices = list(np.random.permutation(len(ctxs))) + list(
+#         np.random.permutation(len(ctxs))
+#     )
+#     neg_ctxs, neg_prompts, neg_responses = [], [], []
+#     for idx in range(0, len(indices), 2):
+#         i = indices[idx]
+#         j = indices[idx + 1]
+#         neg_ctxs.append(ctxs[i])
+#         neg_prompts.append(ctxs[j] + "\n\n" + prompts[j])
+#         neg_responses.append(responses[j])
 
-    return dict(
-        context=neg_ctxs + samples["context"],
-        prompt=neg_prompts + samples["prompt"],
-        response=neg_responses + samples["response"],
-    )
+#     return dict(
+#         context=neg_ctxs + samples["context"],
+#         prompt=neg_prompts + samples["prompt"],
+#         response=neg_responses + samples["response"],
+#     )
 
 
 def filter_none(sample):
@@ -460,7 +508,7 @@ def load_and_process_dataset(
     cols_to_remove = [
         col
         for col in ds.column_names
-        if col not in ["context", "prompt", "response", "qas", "variation"]
+        if col not in ["context", "prompts", "responses", "qas", "variation"]
     ]
     is_eval = split != "train"
     ds = ds.map(
@@ -559,7 +607,7 @@ def get_tokenized_dataset(
     ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
     ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
 
-    if path.exists(ds_path) and split == "train":
+    if path.exists(ds_path) and split == "train" and is_caching_enabled():
         # load the cached ds
         logger.info(f"Loaded tokenized dataset from {ds_path}")
         tokenized_ds = datasets.load_from_disk(ds_path)
@@ -631,79 +679,47 @@ def construct_and_tokenize_ctx_qa(
         )
 
     else:
-        # for sft + chat_model, we need to convert the dataset to chat format
-        # add "messages" field
+        # convert everything into a new intermediate single column format
+        # (required for tracking n_queries and
+        # ejecting entire (ctx,questions,answers) triplet after filtering)
+        # then convert back to columns after filtering
 
+        # for sft + chat_model, we need to convert the dataset to chat format
+        # add "data" field
         ds = ds.map(
             convert_ctx_prompt_response_to_messages,
             fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
             num_proc=num_proc,
+            remove_columns=[col for col in ds.column_names if col != "context"],
         )
-        # add "chat" field
+        # add input_ids, attention_mask, labels to "data"
         tokenized_ds = ds.map(
             get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
             batched=True,
             batch_size=100_000,
             # # num_proc=num_proc,
         )
-        # tokenize the chat + mask the assistant inputs
-        # TODO: drop samples or split into multiple contexts
-        # if split == "train":
-        #     ds = ds.filter(
-        #         filter_long_chat,
-        #         batched=True,
-        #         batch_size=100_000,
-        #         num_proc=num_proc,
-        #     )
 
-        # add "input_ids", "attention_mask", "labels"
-        # TODO: this is slow!
-        # replace manual assistant mask with `return_assistant_tokens_mask`
-        # when using apply_chat_template (function above)
-        # tokenized_ds = ds.map(
-        #     tokenize_chat_messages,
-        #     fn_kwargs={
-        #         "tokenizer": tokenizer,
-        #         "mask_assistant_inputs": True,
-        #         "tokenizer_kwargs": tokenizer_kwargs,
-        #     },
-        #     # # num_proc=num_proc,
-        # )
     if split == "train":
         # base model cant handle these samples naturally
         # should skip
-        tokenized_ds = tokenized_ds.filter(
-            len_filter,
-            fn_kwargs={
-                "max_length": base_model_max_len,
-                "keys": ["input_ids", "labels"],
-            },
-            # batched=False,
-            # batch_size=0,
-            num_proc=num_proc,
-        )
-        # tokenized_ds = len_filter(
-        #     tokenized_ds, base_model_max_len, ["input_ids", "labels"]
+        # tokenized_ds = tokenized_ds.filter(
+        #     len_filter,
+        #     fn_kwargs={
+        #         "max_length": base_model_max_len,
+        #         "keys": ["input_ids", "labels"],
+        #     },
+        #     # batched=False,
+        #     # batch_size=0,
+        #     num_proc=num_proc,
         # )
-
-    else:
         tokenized_ds = tokenized_ds.map(
-            truncate_middle_if_too_long,
+            len_filter_data,
             fn_kwargs={
                 "max_length": base_model_max_len,
-                "columns": ["input_ids", "attention_mask", "labels"],
-                "max_new_tokens": 256,
+                "keys": ["input_ids"],
             },
-            # batched=True,
-            # batch_size=100_000,
-            # num_proc=num_proc,
-        )
-        tokenized_ds = tokenized_ds.map(
-            add_length_info,
-            fn_kwargs={"columns": ["input_ids"]},
-            # batched=True,
-            # batch_size=100_000,
-            # num_proc=num_proc,
+            num_proc=num_proc,
         )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
@@ -743,47 +759,61 @@ def construct_and_tokenize_ctx_qa(
             tokenized_ds = tokenized_ds.filter(
                 len_filter,
                 fn_kwargs={"max_length": ctx_model_max_len, "keys": ["ctx_ids"]},
-                # batched=False,
-                # batch_size=0,
                 num_proc=num_proc,
             )
-            # tokenized_ds = len_filter(tokenized_ds, ctx_model_max_len, ["ctx_ids"])
 
+    if not is_pretrain:
+        if split == "train":
+            tokenized_ds = tokenized_ds.map(
+                unpack_data,
+                num_proc=num_proc,
+                remove_columns=["data"],
+            )
         else:
-            # truncate in the middle
+            tokenized_ds = tokenized_ds.map(
+                unpack_data_eval,
+                num_proc=num_proc,
+                remove_columns=["data"],
+                batched=True,
+                batch_size=100_000,
+            )
             tokenized_ds = tokenized_ds.map(
                 truncate_middle_if_too_long,
                 fn_kwargs={
-                    "max_length": ctx_model_max_len,
-                    "columns": ["ctx_ids", "ctx_attn_mask"],
-                    # cxt encoder doesnt need to add new_tokens
-                    "max_new_tokens": 0,
+                    "max_length": base_model_max_len,
+                    "columns": ["input_ids", "attention_mask", "labels"],
+                    "max_new_tokens": 256,
                 },
-                # batched=True,
-                # batch_size=100_000,
-                # num_proc=num_proc,
             )
             tokenized_ds = tokenized_ds.map(
                 add_length_info,
-                fn_kwargs={"columns": ["ctx_ids"]},
-                # batched=True,
-                # batch_size=100_000,
-                # num_proc=num_proc,
+                fn_kwargs={"columns": ["input_ids"]},
             )
+            if "ctx_ids" in tokenized_ds:
+                tokenized_ds = tokenized_ds.map(
+                    truncate_middle_if_too_long,
+                    fn_kwargs={
+                        "max_length": ctx_model_max_len,
+                        "columns": ["ctx_ids", "ctx_attn_mask"],
+                        # cxt encoder doesnt need to add new_tokens
+                        "max_new_tokens": 0,
+                    },
+                )
+                tokenized_ds = tokenized_ds.map(
+                    add_length_info,
+                    fn_kwargs={"columns": ["ctx_ids"]},
+                )
 
     if is_pretrain:
         tokenized_ds = tokenized_ds.remove_columns(["context", "text"])
         if not is_paraphrased:
             tokenized_ds = tokenized_ds.remove_columns(["qas"])
     else:
-        tokenized_ds = tokenized_ds.remove_columns(
-            ["messages", "context", "prompt", "response"]
-        )
+        tokenized_ds = tokenized_ds.remove_columns(["context"])
+
     if set_format:
         tokenized_ds.set_format(type=set_format)
-    # if isinstance(tokenized_ds, IterableDataset):
-    #     # the columns are unknown when using streaming dataset
-    #     tokenized_ds = tokenized_ds._resolve_features()
+
     # validate_columns(tokenized_ds)
 
     return tokenized_ds
@@ -829,33 +859,17 @@ def get_sft_prompt_formatting_fn(
             "Only chat models + SFT are supported. "
             "Training with pre-training data is not supported yet."
         )
-    # TODO: add support for causal_lm training (for pre-training data)
-    # TODO: add support for recon training (for pre-training data)
-    # TODO: add support for non-chat models
 
-    # def f(example):
-    #     output_texts = (
-    #         dict(text=[]) if sft_mode == "causal_lm" else dict(prompt=[], response=[])
-    #     )
-    #     df = pd.DataFrame(dict(example))
-    #     for i, inp_txt in df.iterrows():
-    #         if sft_mode == "causal_lm":
-    #             text = metadata["text_template"].format(**inp_txt)
-    #             output_texts["text"].append(text)
-    #         elif sft_mode == "completion":
-    #             prompt = metadata["user_prompt_template"].format(**inp_txt)
-    #             output_texts["prompt"].append(prompt)
-    #             output_texts["response"].append(str(inp_txt[metadata["response_field"]]))
-    #     return output_texts
+    def f_intx(samples):
+        # flatten all the messages into a list
+        # tokenize, the pack back correctly
+        messages_list = [x for x in samples["data"]]
 
-    # def f_intx(example):
-    #     chat_text = tokenizer.apply_chat_template(
-    #         example["messages"], tokenize=False, add_generation_prompt=False
-    #     )
-    #     return dict(chat=chat_text)
-    def f_intx(example):
+        n_queries = [len(x) for x in messages_list]
+        messages = concat_list(messages_list)
+        logger.info(f"Tokenizing {len(messages)} messages...")
         tokens = tokenizer.apply_chat_template(
-            example["messages"],
+            messages,
             tokenize=True,
             add_special_token=False,
             truncation=False,
@@ -869,7 +883,19 @@ def get_sft_prompt_formatting_fn(
             labels.append(o)
         del tokens["assistant_masks"]
         tokens["labels"] = labels
-        return tokens
+        per_ctx_tokens = []
+        i = 0
+        for n in n_queries:
+            per_ctx_tokens.append(
+                {
+                    "input_ids": tokens["input_ids"][i : i + n],
+                    "attention_mask": tokens["attention_mask"][i : i + n],
+                    "labels": tokens["labels"][i : i + n],
+                }
+            )
+            i += n
+
+        return dict(data=per_ctx_tokens)
 
     # return f if not apply_chat_template_fn is not None else f_intx
     return f_intx
@@ -877,7 +903,7 @@ def get_sft_prompt_formatting_fn(
 
 def convert_ctx_prompt_response_to_messages(
     example: dict[str, Any],
-    add_ctx_to_chat: bool = True,
+    add_ctx_to_chat: bool,
 ) -> dict[str, Any]:
     """
     Convert context/prompt/response format to chat messages format.
@@ -892,24 +918,52 @@ def convert_ctx_prompt_response_to_messages(
     Raises:
         ValueError: If 'prompt' or 'response' keys are missing
     """
-    if "prompt" not in example or "response" not in example:
-        raise ValueError(f"'prompt' and 'response' are required. Got: {example}")
+    prompt_field = "prompts"
+    res_field = "responses"
+
+    if prompt_field not in example or res_field not in example:
+        raise ValueError(
+            f"'{prompt_field}' and '{res_field}' are required. Got: {example}"
+        )
 
     system_msg = ""
     if "system_message" in example:
         system_msg = example["system_message"].strip()
 
-    user_msg = example["prompt"].strip()
-    if add_ctx_to_chat:
-        user_msg = example["context"].strip() + "\n\n" + user_msg.strip()
+    data = []
+    for prompt, response in zip(example[prompt_field], example[res_field]):
+        user_msg = prompt.strip()
+        if add_ctx_to_chat:
+            user_msg = example["context"].strip() + "\n\n" + user_msg
 
-    messages = [
-        {"role": "system", "content": system_msg.strip()},
-        {"role": "user", "content": user_msg.strip()},
-        {"role": "assistant", "content": example["response"].strip()},
-    ]
+        data.append(
+            [
+                {"role": "system", "content": system_msg.strip()},
+                {"role": "user", "content": user_msg.strip()},
+                {"role": "assistant", "content": response.strip()},
+            ]
+        )
 
-    return dict(messages=messages)
+    return dict(data=data)
+
+
+def unpack_data(sample):
+    return {k: sample["data"][k] for k in sample["data"]}
+
+
+def unpack_data_eval(samples):
+    data = samples["data"]
+    out = dict(input_ids=[], attention_mask=[], labels=[])
+    for d in data:
+        for tokens in zip(
+            d["input_ids"],
+            d["attention_mask"],
+            d["labels"],
+        ):
+            out["input_ids"].append(tokens[0])
+            out["attention_mask"].append(tokens[1])
+            out["labels"].append(tokens[2])
+    return out
 
 
 # adapted from https://github.com/huggingface/trl/issues/632#issuecomment-1972630547
@@ -1153,9 +1207,8 @@ def pack(
     max_packed_size: int,
     num_proc: int = 0,
 ):
-    # TODO: packing has to happen after concat'ing all the ds
-    # might have to do this on the fly...
-    # or have a giant cached file for the already concat'd + packed ds
+    # TODO: handle the new data format
+    # this would generate a giant cache file for the already concat'd + packed ds
     kwargs = dict(
         max_packed_inp_len=max_packed_inp_len,
         max_packed_ctx_len=max_packed_ctx_len,

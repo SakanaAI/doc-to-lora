@@ -258,3 +258,10 @@ def clear_gpu():
     torch.cuda.empty_cache()
     torch.cuda.reset_max_memory_allocated()
     torch.cuda.reset_max_memory_cached()
+
+
+def concat_list(l):
+    out = []
+    for x in l:
+        out += x
+    return out
