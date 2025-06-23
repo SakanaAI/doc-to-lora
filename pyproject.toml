@@ -31,6 +31,7 @@ dependencies = [
     "rouge-score",
     "vllm==0.8.5",
     "huggingface-hub[hf-transfer]>=0.32.0",
+    "opt-einsum>=3.4.0",
 ]
 
 [build-system]
