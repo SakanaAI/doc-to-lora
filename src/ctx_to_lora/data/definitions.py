@@ -129,83 +129,104 @@ DS_KWARGS = {
             split="train",
         ),
     ),
-    "fw_qa_3_mini": dict(
+    "fw_qa_v2_2k_len_level_0_tiny": dict(
         train=dict(
             path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/000_00001.parquet"),
-            split="train[:100000]",
-        ),
-    ),
-    "fw_qa_3_small": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/000*[!val].parquet"),
+            data_files="data/raw_datasets/fw_qa_v2/min_0_to_2000/000_00000_level_0.parquet",
             split="train",
         ),
     ),
-    "fw_qa_3_medium": dict(
+    "fw_qa_v2_2k_len_level_0": dict(
         train=dict(
             path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/00[0-5]*[!val].parquet"),
-            split="train",
-        ),
-    ),
-    "fw_qa_3": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/*[!val].parquet"),
+            data_files="data/raw_datasets/fw_qa_v2/min_0_to_2000/*level_0.parquet",
             split="train",
         ),
         validation=dict(
             path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_3/*val.parquet"),
-            split="train",
-        ),
-    ),
-    "fw_qa_3_mini_pretrain": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/000_00004.parquet"),
-            split="train[:100000]",
-        )
-    ),
-    "fw_qa_3_small_pretrain": dict(
-        train=dict(
-            path="parquet",
             data_files=glob(
-                "data/raw_datasets/fw_qa_intx_pretrain/000_*[!val].parquet"
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/*level_0_val.parquet"
             ),
             split="train",
-        )
-    ),
-    "fw_qa_3_small_aug_pretrain": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_aug_pretrain/000_*[!val].parquet"),
-            split="train",
-        )
-    ),
-    "fw_qa_3_medium_pretrain": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob(
-                "data/raw_datasets/fw_qa_intx_pretrain/00[0-5]*[!val].parquet"
-            ),
-            split="train",
-        )
-    ),
-    "fw_qa_3_pretrain": dict(
-        train=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*[!val].parquet"),
-            split="train",
-        ),
-        validation=dict(
-            path="parquet",
-            data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*val.parquet"),
-            split="train",
         ),
     ),
+    # "fw_qa_3_mini": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_3/000_00001.parquet"),
+    #         split="train[:100000]",
+    #     ),
+    # ),
+    # "fw_qa_3_small": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_3/000*[!val].parquet"),
+    #         split="train",
+    #     ),
+    # ),
+    # "fw_qa_3_medium": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_3/00[0-5]*[!val].parquet"),
+    #         split="train",
+    #     ),
+    # ),
+    # "fw_qa_3": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_3/*[!val].parquet"),
+    #         split="train",
+    #     ),
+    #     validation=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_3/*val.parquet"),
+    #         split="train",
+    #     ),
+    # ),
+    # "fw_qa_3_mini_pretrain": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/000_00004.parquet"),
+    #         split="train[:100000]",
+    #     )
+    # ),
+    # "fw_qa_3_small_pretrain": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob(
+    #             "data/raw_datasets/fw_qa_intx_pretrain/000_*[!val].parquet"
+    #         ),
+    #         split="train",
+    #     )
+    # ),
+    # "fw_qa_3_small_aug_pretrain": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_aug_pretrain/000_*[!val].parquet"),
+    #         split="train",
+    #     )
+    # ),
+    # "fw_qa_3_medium_pretrain": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob(
+    #             "data/raw_datasets/fw_qa_intx_pretrain/00[0-5]*[!val].parquet"
+    #         ),
+    #         split="train",
+    #     )
+    # ),
+    # "fw_qa_3_pretrain": dict(
+    #     train=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*[!val].parquet"),
+    #         split="train",
+    #     ),
+    #     validation=dict(
+    #         path="parquet",
+    #         data_files=glob("data/raw_datasets/fw_qa_intx_pretrain/*val.parquet"),
+    #         split="train",
+    #     ),
+    # ),
     "ctx_qa": dict(
         train=dict(
             path="parquet",
