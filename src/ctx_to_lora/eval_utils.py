@@ -58,6 +58,31 @@ sys.modules["ctx_to_lora.modeling_utils"] = hypernet
 # Metrics and Evaluation Utilities
 # ============================================================================
 
+# from https://gist.github.com/cloneofsimo/8abd0284d4738f28f04200628f9a83f5
+# https://github.com/Nordth/humanize-ai-lib/blob/main/src/humanize-string.ts
+import re
+
+_HIDDEN_CHARS = re.compile(
+    r"[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]"
+)
+_TRAILING_WS = re.compile(r"[ \t\x0B\f]+$", re.MULTILINE)
+_NBSP = re.compile(r"\u00A0")
+_DASHES = re.compile(r"[—–]+")  # em- & en-dashes → ASCII hyphen
+_DQUOTES = re.compile(r"[“”«»„]")  # curly / guillemets → "
+_SQUOTES = re.compile(r"[‘’ʼ]")  # curly apostrophes → '
+_ELLIPSIS = re.compile(r"…")  # single‐char ellipsis → "..."
+
+
+def humanize_str(text: str) -> str:
+    text = _HIDDEN_CHARS.sub("", text)
+    text = _TRAILING_WS.sub("", text)
+    text = _NBSP.sub(" ", text)
+    text = _DASHES.sub("-", text)
+    text = _DQUOTES.sub('"', text)
+    text = _SQUOTES.sub("'", text)
+    text = _ELLIPSIS.sub("...", text)
+    return text
+
 
 def normalize_answer(s: str) -> str:
     """Lower text and remove punctuation, articles and extra whitespace."""
@@ -75,7 +100,12 @@ def normalize_answer(s: str) -> str:
     def lower(text: str) -> str:
         return text.lower()
 
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    return white_space_fix(remove_articles(remove_punc(lower(humanize_str(s)))))
+
+
+def split_string(s: str) -> list[str]:
+    out = re.split(r"[- \s]", s)  # split by hyphen, space, or whitespace
+    return [x for x in out if x]  # remove empty spaces
 
 
 def f1_score(prediction: str, ground_truth: str) -> float:
@@ -100,11 +130,11 @@ def compute_qa_f1_score(
     res = []
     for prediction, answers in zip(pred_texts, answers_list):
         normalized_prediction = normalize_answer(prediction)
-        prediction_words = normalized_prediction.split()
+        prediction_words = split_string(normalized_prediction)
         score = 0
         for answer in answers:
             normalized_label = normalize_answer(answer)
-            label_words = normalized_label.split()
+            label_words = split_string(normalized_label)
             score = max(score, f1_score(prediction_words, label_words))
         res.append(score)
     return dict(qa_f1_score=np.mean(res)), dict(qa_f1_score=res)
