@@ -448,7 +448,7 @@ class CtxEncoderArguments:
 @dataclass
 class AggregatorArguments:
     aggregator_type: Literal["pooler", "perceiver"] = field(
-        default="pooler",
+        default="perceiver",
         metadata={"help": "Aggregator type for HyperLoRA."},
     )
 

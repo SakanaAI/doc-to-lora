@@ -1,4 +1,4 @@
-# uv pip install -e . 
+# uv pip install -e .
 # uv pip install flash-attn==2.6.3 --no-build-isolation
 # # huggingface-cli login
 
@@ -25,6 +25,9 @@ uv pip install flashinfer-python==0.2.2 -i https://flashinfer.ai/whl/cu124/torch
 
 # needed for gated models
 uv run huggingface-cli login
+
+# needed for logging with wandb
+wandb login
 
 # dev
 uv run pre-commit install

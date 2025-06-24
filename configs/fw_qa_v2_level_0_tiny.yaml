@@ -1,6 +1,6 @@
 output_dir: "" # just a placeholder
 bf16: true
-model_name_or_path: google/gemma-2-2b-it
+model_name_or_path: google/gemma-3-1b-it
 label_names: ["labels"]
 # eval_on_start: True
 # eval_strategy: "steps"
@@ -23,24 +23,24 @@ max_val_samples_per_ds: 1000
 
 learning_rate: 0.00004
 # lr_scheduler_type: "constant_with_warmup"
-neftune_noise_alpha: 5
+neftune_noise_alpha: 1
 weight_decay: 0.01
-#
+
 warmup_steps: 100
 
-dataloader_prefetch_factor: 8
+dataloader_prefetch_factor: 16
 dataloader_num_workers: 8
+
 # LoRA
 lora_r: 8
 lora_dropout: 0.0
 target_modules:
   - down_proj
+
 # data
 train_ds_names:
-  - fw_qa_3_small_pretrain
+  - fw_qa_v2_2k_len_level_0_tiny
 
 val_ds_names:
-  - fw_qa_3_pretrain
-
-load_best_model_at_end: true
-metric_for_best_model: eval_fw_qa_3_pretrain_loss
+  - fw_qa_v2_2k_len_level_0
+  - squad
