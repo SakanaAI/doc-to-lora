@@ -250,7 +250,7 @@ if __name__ == "__main__":
     tokenizer_kwargs = {"max_length": base_model_max_len}  # not used
     ctx_tokenizer_kwargs = {"max_length": base_model_max_len}  # not used for now
     ds = get_tokenized_dataset(
-        ds_name="squad",
+        ds_name="fw_qa_v2_2k_len_level_0_tiny",
         split="train",
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
