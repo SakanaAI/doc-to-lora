@@ -1,6 +1,3 @@
-import itertools
-from collections.abc import Iterable
-
 import numpy as np
 import torch
 from transformers.data import (
@@ -8,36 +5,40 @@ from transformers.data import (
     default_data_collator,
 )
 
-from ctx_to_lora.utils import concat_list
+from ctx_to_lora.utils import check_is_iterable, concat_list
 
 flattener = DataCollatorWithFlattening()
 
 
-def concat_batch(inp_list):
-    sample = inp_list[0]
-    out = [
-        {
-            k: list(itertools.chain.from_iterable([x[k] for x in inp_list]))
-            for k in sample
-        }
-    ]
-    return out
-
-
 def flatten_if_not_packed(inp_list):
-    # TODO: handle new data format
     # no padding
     sample = inp_list[0]
-    n = len(sample)
+    n = len(inp_list)
     if "position_ids" in sample:
         if n == 1:
-            return default_data_collator(inp_list, return_tensors="pt")
+            n_queries = sample.pop("n_queries")
+            batch = default_data_collator(inp_list, return_tensors="pt")
+            batch["n_queries"] = torch.tensor(n_queries)
+            return batch
         elif n > 1:
-            # needed for when batch_size > 1 (never used?)
-            return default_data_collator(concat_batch(inp_list), return_tensors="pt")
+            raise NotImplementedError("Please use batch_size=1 when using packed data")
+            # when batch_size > 1 (never used?)
+            # return default_data_collator(concat_batch(inp_list), return_tensors="pt")
 
-    # for eval data during training
-    packed_inputs = flattener(inp_list, return_tensors="pt")
+    # for eval data (not packed) during training
+    need_flatten = check_is_iterable(sample["input_ids"][0])
+    if need_flatten:
+        n_queries = torch.tensor([len(x["input_ids"]) for x in inp_list])
+        tokens = dict()
+        for k in ["input_ids", "attention_mask", "labels"]:
+            tokens[k] = concat_list([x[k] for x in inp_list])
+
+        packed_inputs = flattener(tokens, return_tensors="pt")
+    else:
+        n_queries = torch.ones(len(inp_list), dtype=torch.int32)
+        packed_inputs = flattener(inp_list, return_tensors="pt")
+
+    packed_inputs["n_queries"] = n_queries
     if "ctx_ids" in sample:
         ctx_ids = [{"input_ids": example["ctx_ids"]} for example in inp_list]
         packed_ctx = flattener(ctx_ids, return_tensors="pt")
@@ -81,7 +82,7 @@ def train_collator(inp_list, tokenizer):
             padding_value=0,
         )
 
-    need_flatten = isinstance(sample["input_ids"][0], Iterable)
+    need_flatten = check_is_iterable(sample["input_ids"][0])
 
     if need_flatten:
         # needed for one-lora-multi-q
@@ -89,17 +90,16 @@ def train_collator(inp_list, tokenizer):
         tokens = dict()
         for k in ["input_ids", "attention_mask", "labels"]:
             tokens[k] = concat_list([x[k] for x in inp_list])
-
         labels = tokens.pop("labels")
         padded_seq = tokenizer.pad(tokens, **padding_kwargs)
-        # hacky explicit padding since the labels are not padded by default
-        labels = tokenizer.pad({"input_ids": labels}, **padding_kwargs)["input_ids"]
     else:
         # needed for eval data during training
         labels = [x.pop("labels") for x in inp_list]
         padded_seq = tokenizer.pad(inp_list, **padding_kwargs)
         n_queries = torch.ones(len(inp_list), dtype=torch.int32)
 
+    # hacky explicit padding since the labels are not padded by default
+    labels = tokenizer.pad({"input_ids": labels}, **padding_kwargs)["input_ids"]
     labels = torch.where(padded_seq["attention_mask"] == 0, -100, labels)
     out = {**padded_seq, "labels": labels, "n_queries": n_queries}
     if ctx_ids is not None:

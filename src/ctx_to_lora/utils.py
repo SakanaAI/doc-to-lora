@@ -265,3 +265,11 @@ def concat_list(l):
     for x in l:
         out += x
     return out
+
+
+def check_is_iterable(x):
+    try:
+        iter(x)
+    except TypeError:
+        return False
+    return True

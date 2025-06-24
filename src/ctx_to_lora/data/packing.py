@@ -4,27 +4,27 @@ import logging
 
 import numpy as np
 
+from ctx_to_lora.utils import check_is_iterable, concat_list
+
 logger = logging.getLogger()
 
 
 def pack_data_points_by_length(
-    lens: list[int],
+    lens: list[list[int]],
     ctx_lens: list[int],
+    n_queries: list[int],
     max_packed_inp_len: int,
     max_packed_ctx_len: int,
     max_size: int = -1,
 ) -> list[int]:
-    """Fully vectorized version using NumPy operations for maximum performance.
-
-    This is an alternative implementation that's more complex but potentially faster
-    for very large datasets.
-    """
     if not lens:
         return []
 
-    len_arr = np.array(lens, dtype=np.int32)
+    len_arr = np.array([sum(l) for l in lens], dtype=np.int32)
     ctx_len_arr = np.array(ctx_lens, dtype=np.int32)
     n = len(len_arr)
+    assert len(ctx_len_arr) == n, "Length of ctx_lens must match length of lens"
+    assert len(n_queries) == n, "Length of n_queries must match length of lens"
 
     if n == 1:
         return (
@@ -36,8 +36,10 @@ def pack_data_points_by_length(
     # Create cumulative sum arrays for efficient range queries
     cumsum_inp_len = np.cumsum(len_arr)
     cumsum_ctx_len = np.cumsum(ctx_len_arr)
+    cumsum_n_queries = np.cumsum(n_queries)  # the last one is not used
 
-    boundaries = [0]
+    start_indices_inp = [0]
+    start_indices_ctx = [0]
     i = 0
 
     while i < n:
@@ -62,16 +64,16 @@ def pack_data_points_by_length(
         if max_size != -1:
             max_valid_idx = min(max_valid_idx, i + max_size - 1)
 
-        boundaries.append(max_valid_idx + 1)
+        start_indices_inp.append(cumsum_n_queries[max_valid_idx])
+        start_indices_ctx.append(max_valid_idx + 1)
         i = max_valid_idx + 1
 
-    return boundaries
+    return start_indices_inp, start_indices_ctx
 
 
 def pack_data_points_FA(
     batch: dict[str, any],
 ) -> dict[str, np.ndarray]:
-    """Optimized packing function using torch operations."""
     if not batch:
         raise ValueError("Batch is empty")
 
@@ -86,10 +88,7 @@ def pack_data_points_FA(
     labels = np.empty(total_inp_len, dtype=np.long)
 
     offset = ctx_offset = 0
-    for ctx_ids_b, input_ids_b, labels_b in zip(
-        batch["ctx_ids"], batch["input_ids"], batch["labels"]
-    ):
-        ctx_len = len(ctx_ids_b)
+    for input_ids_b, labels_b in zip(batch["input_ids"], batch["labels"]):
         inp_len = len(input_ids_b)
 
         inp_start, inp_end = offset, offset + inp_len
@@ -99,6 +98,8 @@ def pack_data_points_FA(
         labels[inp_start:inp_end] = labels_b
         offset += inp_len
 
+    for ctx_ids_b in batch["ctx_ids"]:
+        ctx_len = len(ctx_ids_b)
         ctx_start, ctx_end = ctx_offset, ctx_offset + ctx_len
         ctx_ids[ctx_start:ctx_end] = ctx_ids_b
         ctx_position_ids[ctx_start:ctx_end] = np.arange(ctx_len, dtype=np.long)
@@ -119,9 +120,20 @@ def pack_batch(
     max_packed_ctx_len: int,
     max_packed_size: int = -1,
 ) -> dict[str, any]:
+    # TODO: handle new data format
     # Extract lengths
     # we do not pad so we can just take the length of the tokens
-    inp_lens = [len(x) for x in batch["input_ids"]]
+    keys = list(batch.keys())
+    need_flatten = check_is_iterable(batch["input_ids"][0][0])
+    if need_flatten:
+        n_queries = [len(x) for x in batch["input_ids"]]
+        inp_lens = [[len(y) for y in x] for x in batch["input_ids"]]
+        # batch = {k: concat_list([x for x in batch[k]]) for k in keys}
+        for k in ["input_ids", "attention_mask", "labels"]:
+            batch[k] = concat_list([x for x in batch[k]])
+    else:
+        n_queries = [1] * len(batch["input_ids"])
+        inp_lens = [[len(x)] for x in batch["input_ids"]]
     inp_count = len(inp_lens)
     # total_original_tokens = sum(inp_lens)
     if "ctx_ids" not in batch:
@@ -130,34 +142,38 @@ def pack_batch(
     ctx_lens = [len(x) for x in batch["ctx_ids"]]
 
     # Group indices
-    boundaries = pack_data_points_by_length(
+    start_indices_inp, start_indices_ctx = pack_data_points_by_length(
         inp_lens,
         ctx_lens,
+        n_queries,
         max_packed_inp_len,
         max_packed_ctx_len,
         max_packed_size,
     )
 
     # Pack groups
-    n_samples = len(boundaries) - 1
+    # n_samples = len(boundaries) - 1
     packed_batch = {
         "ctx_ids": [],
         "ctx_position_ids": [],
         "input_ids": [],
         "position_ids": [],
         "labels": [],
+        "n_queries": [],
     }
 
     packing_efficiency_ratios = []
     ctx_packing_efficiency_ratios = []
 
-    for i in range(len(boundaries) - 1):
-        start_idx = boundaries[i]
-        end_idx = boundaries[i + 1]
+    for i in range(len(start_indices_inp) - 1):
+        start_idx_inp = start_indices_inp[i]
+        end_idx_inp = start_indices_inp[i + 1]
+        start_idx_ctx = start_indices_ctx[i]
+        end_idx_ctx = start_indices_ctx[i + 1]
         group_items = {
-            "ctx_ids": batch["ctx_ids"][start_idx:end_idx],
-            "input_ids": batch["input_ids"][start_idx:end_idx],
-            "labels": batch["labels"][start_idx:end_idx],
+            "ctx_ids": batch["ctx_ids"][start_idx_ctx:end_idx_ctx],
+            "input_ids": batch["input_ids"][start_idx_inp:end_idx_inp],
+            "labels": batch["labels"][start_idx_inp:end_idx_inp],
         }
         packed_item = pack_data_points_FA(group_items)
         packed_batch["ctx_ids"].append(packed_item["ctx_ids"])
@@ -165,6 +181,7 @@ def pack_batch(
         packed_batch["input_ids"].append(packed_item["input_ids"])
         packed_batch["position_ids"].append(packed_item["position_ids"])
         packed_batch["labels"].append(packed_item["labels"])
+        packed_batch["n_queries"].append(n_queries[start_idx_ctx:end_idx_ctx])
 
     #     # Track packing efficiency
     #     group_inp_tokens = sum(inp_lens[start_idx:end_idx])
@@ -216,8 +233,12 @@ def pack_batch(
 
 
 if __name__ == "__main__":
+    from datasets import disable_caching
+
     from ctx_to_lora.data.processing import get_tokenized_dataset
     from ctx_to_lora.model_loading import get_model_and_tokenizer
+
+    disable_caching()
 
     model, tokenizer = get_model_and_tokenizer(
         "google/gemma-2-2b-it",
@@ -229,7 +250,7 @@ if __name__ == "__main__":
     tokenizer_kwargs = {"max_length": base_model_max_len}  # not used
     ctx_tokenizer_kwargs = {"max_length": base_model_max_len}  # not used for now
     ds = get_tokenized_dataset(
-        ds_name="fw_qa_3_mini_pretrain",
+        ds_name="squad",
         split="train",
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
@@ -254,7 +275,7 @@ if __name__ == "__main__":
         batched=True,
         batch_size=1000,
         remove_columns=ds.column_names,
-        num_proc=8,
+        # num_proc=0,
     )
     print(packed_ds)
 

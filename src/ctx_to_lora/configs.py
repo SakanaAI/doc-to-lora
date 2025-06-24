@@ -154,7 +154,7 @@ class TrainingArguments(TrainingArguments):
         },
     )
     dataloader_prefetch_factor: int = field(
-        default=8,
+        default=16,
         metadata={"help": "Number of batches loaded in advance by each worker."},
     )
     dataloader_num_workers: int = field(

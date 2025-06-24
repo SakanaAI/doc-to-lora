@@ -626,7 +626,7 @@ def get_tokenized_dataset(
         num_proc=num_proc,
         **tokenize_kwargs,
     )
-    if split == "train":
+    if split == "train" and is_caching_enabled():
         tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
         # force reload from disk for fingerprint consistency
         tokenized_ds = datasets.load_from_disk(ds_path)
@@ -789,7 +789,7 @@ def construct_and_tokenize_ctx_qa(
                 add_length_info,
                 fn_kwargs={"columns": ["input_ids"]},
             )
-            if "ctx_ids" in tokenized_ds:
+            if "ctx_ids" in tokenized_ds.column_names:
                 tokenized_ds = tokenized_ds.map(
                     truncate_middle_if_too_long,
                     fn_kwargs={
@@ -952,6 +952,7 @@ def unpack_data(sample):
 
 
 def unpack_data_eval(samples):
+    # n_queries always == 1 for eval
     data = samples["data"]
     out = dict(input_ids=[], attention_mask=[], labels=[])
     for d in data:
@@ -1221,7 +1222,7 @@ def pack(
     logger.info(
         f"Packing dataset {ds_hash} with max_packed_inp_len={max_packed_inp_len} and max_packed_ctx_len={max_packed_ctx_len}"
     )
-    if path.exists(ds_path):
+    if path.exists(ds_path) and is_caching_enabled():
         logger.info(f"Loading a cached packed dataset for {ds_path}")
         return datasets.load_from_disk(ds_path)
     else:
