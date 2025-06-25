@@ -611,6 +611,7 @@ class ModulatedPretrainedModel(nn.Module):
         cls,
         state_dict: dict,
         train: bool = True,
+        base_model_kwargs: dict = None,
         use_flash_attn: bool = True,
     ):
         lora_config = state_dict["hypernet_config"].lora_config
@@ -621,6 +622,7 @@ class ModulatedPretrainedModel(nn.Module):
             train=train,
             requires_grad=False,
             peft_config=lora_config,
+            model_kwargs=base_model_kwargs,
             use_flash_attn=use_flash_attn,
         )
         hypernet_config = state_dict["hypernet_config"]
@@ -679,6 +681,10 @@ class ModulatedPretrainedModel(nn.Module):
     @property
     def config(self):
         return self.base_model.config
+
+    @property
+    def generation_config(self):
+        return self.base_model.generation_config
 
     def get_input_embeddings(self):
         return self.base_model.get_input_embeddings()
@@ -898,45 +904,44 @@ class ModulatedPretrainedModel(nn.Module):
         else:
             return model_outputs
 
-    # @contextmanager
-    @torch.inference_mode()
-    def generate_with_multi_loras(
-        self,
-        ctx_ids: Integer[Tensor, "bs ctx_length"],
-        ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
-        ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
-        *model_inputs_args: Any,
-        **model_inputs_kwargs: dict[str, Any],
-    ):
-        # TODO: make this persistent
-        generated_loras, _ = self.generate_weights(
-            ctx_ids, ctx_attn_mask, ctx_position_ids
-        )
-        # sum loras
-        for lora_at_module in generated_loras.values():
-            if len(lora_at_module["A"]) > 1:
-                print("Multiple LoRAs are generated, summing them up")
-            lora_at_module["A"] = torch.mean(lora_at_module["A"], dim=0, keepdim=True)
-            lora_at_module["B"] = torch.mean(lora_at_module["B"], dim=0, keepdim=True)
+    # @torch.inference_mode()
+    # def generate_with_multi_loras(
+    #     self,
+    #     ctx_ids: Integer[Tensor, "bs ctx_length"],
+    #     ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
+    #     ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
+    #     *model_inputs_args: Any,
+    #     **model_inputs_kwargs: dict[str, Any],
+    # ):
+    #     # TODO: make this persistent
+    #     generated_loras, _ = self.generate_weights(
+    #         ctx_ids, ctx_attn_mask, ctx_position_ids
+    #     )
+    #     # sum loras
+    #     for lora_at_module in generated_loras.values():
+    #         if len(lora_at_module["A"]) > 1:
+    #             print("Multiple LoRAs are generated, summing them up")
+    #         lora_at_module["A"] = torch.mean(lora_at_module["A"], dim=0, keepdim=True)
+    #         lora_at_module["B"] = torch.mean(lora_at_module["B"], dim=0, keepdim=True)
 
-        position_ids = (
-            model_inputs_kwargs["position_ids"]
-            if "position_ids" in model_inputs_kwargs
-            else None
-        )
+    #     position_ids = (
+    #         model_inputs_kwargs["position_ids"]
+    #         if "position_ids" in model_inputs_kwargs
+    #         else None
+    #     )
 
-        # apply loras
-        with apply_generated_loras(
-            self.base_model,
-            generated_loras,
-            self.hypernet.layer_indices,
-            position_ids,
-            self.training,
-        ):
-            model_outputs = self.base_model.generate(
-                *model_inputs_args, **model_inputs_kwargs
-            )
-        return model_outputs
+    #     # apply loras
+    #     with apply_generated_loras(
+    #         self.base_model,
+    #         generated_loras,
+    #         self.hypernet.layer_indices,
+    #         position_ids,
+    #         self.training,
+    #     ):
+    #         model_outputs = self.base_model.generate(
+    #             *model_inputs_args, **model_inputs_kwargs
+    #         )
+    #     return model_outputs
 
     @torch.inference_mode()
     def generate(
@@ -945,6 +950,7 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_ids: Integer[Tensor, "bs ctx_length"] | None = None,
         ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
         ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
+        n_queries: Integer[Tensor, "n_ctx"] | None = None,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
@@ -997,25 +1003,28 @@ class ModulatedPretrainedModel(nn.Module):
             if "position_ids" in model_inputs_kwargs
             else None
         )
-        with (
-            apply_generated_loras(
-                self.base_model,
-                generated_loras,
-                self.hypernet.layer_indices,
-                position_ids,
-                self.training,
-            ),
-            apply_generated_layernorm(
-                self.base_model,
-                generated_layernorms,
-                self.hypernet.layer_indices,
-                position_ids,
-                self.training,
-            ),
-        ):
-            model_outputs = self.base_model.generate(
-                *model_inputs_args, **model_inputs_kwargs
-            )
+        if n_queries is None:
+            if ctx_position_ids is None:
+                n_queries = torch.ones(
+                    ctx_ids.shape[0], dtype=torch.int32, device=self.device
+                )
+            else:
+                # quite redundant (we do cu_seqlens many places)
+                # TODO: compute cu_seqlens here and propagate that
+                n_queries = torch.ones(
+                    (ctx_position_ids == 0).sum(), dtype=torch.int32, device=self.device
+                )
+
+        apply_lora_to_layers(
+            self.base_model,
+            self.hypernet.layer_indices,
+            generated_loras,
+            n_queries,
+            position_ids,
+        )
+        model_outputs = self.base_model.generate(
+            *model_inputs_args, **model_inputs_kwargs
+        )
         return model_outputs
 
 
