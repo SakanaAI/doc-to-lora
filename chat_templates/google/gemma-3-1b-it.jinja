@@ -20,7 +20,7 @@
         {%- set role = message['role'] -%}
     {%- endif -%}
     {%- if (message['role'] == 'user') -%}
-        {{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}
+        {{ '<start_of_turn>' + role + '\n' + (first_user_prefix if loop.first else "") + message['content'] | trim + '<end_of_turn>\n' }}
     {%- elif (message['role'] == 'assistant') -%}
         {{ '<start_of_turn>' + role + '\n' }}{% generation %}{{ message['content'] | trim + '<end_of_turn>\n' }}{% endgeneration %}
     {%- endif -%}
