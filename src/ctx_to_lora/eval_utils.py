@@ -16,7 +16,6 @@ import yaml
 from datasets import disable_caching
 from peft import PeftModel
 from transformers import (
-    GenerationConfig,
     PreTrainedModel,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
@@ -71,6 +70,8 @@ _DASHES = re.compile(r"[—–]+")  # em- & en-dashes → ASCII hyphen
 _DQUOTES = re.compile(r"[“”«»„]")  # curly / guillemets → "
 _SQUOTES = re.compile(r"[‘’ʼ]")  # curly apostrophes → '
 _ELLIPSIS = re.compile(r"…")  # single‐char ellipsis → "..."
+_ENDASH = re.compile(r"\u2013")
+_EMDASH = re.compile(r"\u2014")
 
 
 def humanize_str(text: str) -> str:
@@ -78,6 +79,8 @@ def humanize_str(text: str) -> str:
     text = _TRAILING_WS.sub("", text)
     text = _NBSP.sub(" ", text)
     text = _DASHES.sub("-", text)
+    text = _ENDASH.sub("-", text)
+    text = _EMDASH.sub("-", text)
     text = _DQUOTES.sub('"', text)
     text = _SQUOTES.sub("'", text)
     text = _ELLIPSIS.sub("...", text)
@@ -462,11 +465,11 @@ def decode_test_result(
         gen_toks = gen_toks[start_idx:]
         gen_toks = np.where(gen_toks == -100, tokenizer.pad_token_id, gen_toks)
 
-        d["input"] = tokenizer.decode(input_toks, skip_special_tokens=True)
+        d["input"] = tokenizer.decode(input_toks, skip_special_tokens=False)
         d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True).strip()
         if "ctx_ids" in sample:
             d["context"] = ctx_tokenizer.decode(
-                sample["ctx_ids"], skip_special_tokens=True
+                sample["ctx_ids"], skip_special_tokens=False
             )
         for k in sample:
             if k.endswith("_len"):
@@ -668,6 +671,7 @@ def evaluate(
     """Main evaluation function."""
     assert split in ["validation", "test"]
     ctx_name = None
+    model_kwargs = dict(attn_implementation="flash_attention_2")
 
     if model_name_or_path is None:
         state_dict = torch.load(checkpoint_path, weights_only=False)
@@ -675,15 +679,16 @@ def evaluate(
         model = ModulatedPretrainedModel.from_state_dict(
             state_dict,
             train=False,
+            base_model_kwargs=model_kwargs,
             use_flash_attn=True,
         )
     else:
-        model_kwargs = dict(attn_implementation="flash_attention_2")
         model = get_model(
             model_name_or_path,
             train=False,
             requires_grad=False,
             model_kwargs=model_kwargs,
+            use_flash_attn=True,
         )
 
     if is_liger_kernel_available():
@@ -799,7 +804,7 @@ def evaluate(
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
         predict_with_generate=generative,
-        generation_config=GenerationConfig(**gen_kwargs),
+        # generation_config=GenerationConfig(**gen_kwargs),
     )
 
     print("=" * 80 + "\n" + "Evaluating model..." + "\n" + "=" * 80)
@@ -865,12 +870,14 @@ def run_eval(
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
 
+    disable_caching()
+    set_seed(42)
+
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
-    disable_caching()
-    set_seed(42)
-    torch.use_deterministic_algorithms(True, warn_only=True)
+
+    # torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
     torch.backends.cudnn.benchmark = False
