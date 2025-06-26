@@ -75,6 +75,7 @@ uv run python data/generate_fav_num_big.py
 ***Download a subset of generated Fineweb-QA directly***
 ```bash
 uv run data/download_generated_fineweb_qa.py
+uv run data/download_self_gen_qa.py
 ```
 
 ***Generate data from scratch***
