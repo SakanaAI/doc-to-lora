@@ -73,6 +73,9 @@ def get_preprocessing_fn(
         A preprocessing function that takes and returns a dictionary
     """
     f = lambda x: x
+    if ds_name.startswith("self_gen") or ds_name.endswith("_compact"):
+        # already processed data, do nothing
+        return f
 
     if "fw_qa_v2" in ds_name:
 
@@ -208,15 +211,6 @@ def get_preprocessing_fn(
                 "context": sample["document"],
                 "prompt": sample["messages"][-1]["content"],
                 "response": response,
-            }
-
-    elif ds_name.endswith("_compact"):
-        # already processed data, don't need to do anything
-        def f(sample):
-            return {
-                "context": sample["context"],
-                "prompts": sample["prompts"],
-                "responses": sample["responses"],
             }
 
     elif ds_name == "booksum":

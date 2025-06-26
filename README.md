@@ -78,6 +78,27 @@ uv run data/download_generated_fineweb_qa.py
 uv run data/download_self_gen_qa.py
 ```
 
+Loading self-generated data
+```python
+from ctx_to_lora.data.processing import load_and_process_dataset
+
+base_model_name = "google/gemma-2-2b-it"
+
+# currently available self_gen dataset names 
+# ["drop_compact", "pwc_compact", "ropes_compact", "squad_compact", "fw_qa_v2/min_0_to_2000"]
+
+ds_name = "fw_qa_v2/min_0_to_2000"
+ds = load_and_process_dataset(f"self_gen/{base_model_name}/{ds_name}",
+    split="train",
+    add_negative_prompt=False,
+    add_repeat_prompt=False,
+    repeat_prob=0,
+    is_pretrain=False,
+    streaming=False,
+    num_proc=8
+)
+```
+
 ***Generate data from scratch***
 0. download fineweb_edu to `data/raw_datasets/fineweb_edu
 ```bash
