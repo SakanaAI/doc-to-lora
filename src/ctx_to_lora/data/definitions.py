@@ -7,7 +7,8 @@ FW_QA_PATHS = [
 ]
 
 TRANSFORMED_DATA_DIR = "data/processed_datasets"
-SELF_GEN_DATA_DIR = "data/raw_datasets/self_gen/"
+RAW_DATA_DIR = "data/raw_datasets/"
+SELF_GEN_DATA_DIR = f"{RAW_DATA_DIR}/self_gen/"
 
 
 REPEAT_PROMPTS = [
@@ -101,14 +102,30 @@ DS_KWARGS = {
         validation=dict(path="sggetao/PwC", split="train[:900]"),
         test=dict(path="sggetao/PwC", split="test"),
     ),
-    "pwc_tiny": dict(
-        train=dict(path="sggetao/PwC", split="train[900:2000]"),
-        validation=dict(path="sggetao/PwC", split="train[:900]"),
+    "pwc_compact": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/pwc_compact/train/ds.parquet",
+            # correspond to skipping to first 900 samples in the original dataset
+            split="train[60:]",
+        ),
     ),
+    # "pwc_tiny": dict(
+    #     train=dict(path="sggetao/PwC", split="train[900:2000]"),
+    #     validation=dict(path="sggetao/PwC", split="train[:900]"),
+    # ),
     "squad": dict(
         train=dict(path="rajpurkar/squad", split="train[900:]"),
         validation=dict(path="rajpurkar/squad", split="train[:900]"),
         test=dict(path="rajpurkar/squad", split="validation"),
+    ),
+    "squad_compact": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/squad_compact/train/ds.parquet",
+            # correspond to skipping to first 900 samples in the original dataset
+            split="train[180:]",
+        ),
     ),
     "fw_qa_xl": dict(
         train=dict(
@@ -300,6 +317,22 @@ DS_KWARGS = {
             path="ucinlp/drop",
             split="train",
         ),
+        validation=dict(
+            path="ucinlp/drop",
+            split="validation[:900]",
+        ),
+        test=dict(
+            path="ucinlp/drop",
+            split="validation",
+        ),
+    ),
+    "drop_compact": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/drop_compact/train/ds.parquet",
+            # correspond to skipping to first 900 samples in the original dataset
+            split="train",
+        )
     ),
     "narrativeqa": dict(
         train=dict(
@@ -315,12 +348,30 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    # "ropes": dict(
+    #     train=dict(
+    #         path="nvidia/ChatQA-Training-Data",
+    #         name="ropes",
+    #         split="train",
+    #     ),
+    # ),
     "ropes": dict(
         train=dict(
-            path="nvidia/ChatQA-Training-Data",
-            name="ropes",
+            path="allenai/ropes",
             split="train",
         ),
+        validation=dict(
+            path="allenai/ropes",
+            split="validation[:900]",
+        ),
+        test=dict(path="allenai/ropes", split="validation"),
+    ),
+    "ropes_compact": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/ropes_compact/train/ds.parquet",
+            split="train",
+        )
     ),
     "synthetic_convqa": dict(
         train=dict(
@@ -450,6 +501,7 @@ MULTI_ANSWER_DATASETS = {
     "longbench/2wikimqa",
     "longbench/musique",
     "squad",
+    "drop",
 }
 
 

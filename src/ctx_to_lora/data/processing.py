@@ -38,6 +38,11 @@ def load_answers(ds_name, split):
         def extract_ans(sample):
             return {"answers": sample["answers"]["text"]}
 
+    elif ds_name == "drop":
+
+        def extract_ans(sample):
+            return {"answers": sample["answer_spans"]["spans"]}
+
     ds_kwargs = get_ds_kwargs(ds_name, split)
     ds = load_dataset(**ds_kwargs, trust_remote_code=True)
     ds = ds.map(extract_ans, num_proc=8, remove_columns=ds.column_names)
@@ -69,7 +74,7 @@ def get_preprocessing_fn(
     """
     f = lambda x: x
 
-    if "fw_qa_v2" in ds_name and "level" in ds_name:
+    if "fw_qa_v2" in ds_name:
 
         def f(sample):
             # get questions/answers from all levels in the ds
@@ -121,8 +126,8 @@ def get_preprocessing_fn(
                 "response": sample["answer"],
             }
 
-    elif ds_name.startswith("pwc"):
-
+    elif ds_name == "pwc":
+        # original pwc
         def f(sample):
             return {
                 "context": sample["input"],
@@ -146,8 +151,8 @@ def get_preprocessing_fn(
                 "response": sample["answer"],
             }
 
-    elif ds_name.startswith("squad"):
-
+    elif ds_name == "squad":
+        # original squad
         def f(sample):
             q = sample["question"]
             prompt = closed_qa_prompting(q) if not is_eval else q
@@ -168,7 +173,18 @@ def get_preprocessing_fn(
                 "response": ", ".join(set(sample["answers_spans"]["spans"])),
             }
 
-    elif ds_name in ["narrativeqa", "quoref", "ropes"]:
+    elif ds_name == "ropes":
+        ctx_template = "{background}\n{situation}"
+
+        def f(sample):
+            response = sample["answers"]["text"][0]
+            bg_txt = sample["background"]
+            situation_txt = sample["situation"]
+            ctx = ctx_template.format(background=bg_txt, situation=situation_txt)
+            q = sample["question"]
+            return {"context": ctx, "prompt": q, "response": response}
+
+    elif ds_name in ["narrativeqa", "quoref"]:  # , "ropes"]:
 
         def f(sample):
             response = sample["answers"][0]
@@ -192,6 +208,15 @@ def get_preprocessing_fn(
                 "context": sample["document"],
                 "prompt": sample["messages"][-1]["content"],
                 "response": response,
+            }
+
+    elif ds_name.endswith("_compact"):
+        # already processed data, don't need to do anything
+        def f(sample):
+            return {
+                "context": sample["context"],
+                "prompts": sample["prompts"],
+                "responses": sample["responses"],
             }
 
     elif ds_name == "booksum":

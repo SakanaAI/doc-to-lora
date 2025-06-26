@@ -97,10 +97,10 @@ run uv run python data/generate_fw_edu_qa_v2.py --shard_pattern "000_00000" --n_
 # Example commands using gemma-2-2b-it
 # self-gen data for fw_qa_v2
 # 000_0000[0-1] to 000_0000[8-9] for small split
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/013*'
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/013*'
 
 # self-gen data for other ds listed in qa_no_fw.yaml
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_no_fw.yaml
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/self_gen_qa_short_ctx_no_fw_qa.yaml
 ```
 
 

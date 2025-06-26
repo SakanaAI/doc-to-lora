@@ -8,8 +8,12 @@ import yaml
 from datasets import Dataset, load_dataset
 from vllm import LLM, SamplingParams
 
-from ctx_to_lora.data.definitions import SELF_GEN_DATA_DIR
-from ctx_to_lora.data.processing import load_and_process_dataset
+from ctx_to_lora.data.definitions import RAW_DATA_DIR, SELF_GEN_DATA_DIR
+from ctx_to_lora.data.processing import (
+    filter_none,
+    get_preprocessing_fn,
+    load_and_process_dataset,
+)
 from ctx_to_lora.utils import clear_gpu
 
 SYSTEM_TEMPLATE = (
@@ -59,7 +63,7 @@ def get_dataset_configs(
         # Process train datasets
         train_ds_names = config.get("train_ds_names", [])
         self_gen_train_ds_names = [
-            (ds_name, "train")
+            (ds_name.split("/")[-1], "train")
             for ds_name in train_ds_names
             if ds_name.startswith("self_gen/")
         ]
@@ -119,30 +123,39 @@ def self_generate(
     """Process a single dataset and generate QA pairs."""
 
     shard_name = ""
+    kwargs = dict(
+        ds_name=ds_name,
+        split=split,
+        add_negative_prompt=False,
+        add_repeat_prompt=False,
+        repeat_prob=0,
+        is_pretrain=False,
+    )
     if parquet_file:
         print(f"Loading dataset from parquet file: {parquet_file}")
 
-        ds = load_dataset(path="parquet", data_files=[parquet_file], split="train")
         split = "train"
-        ds_name = os.path.basename(os.path.dirname(parquet_file))
+        ds_name = "/".join(parquet_file.split(RAW_DATA_DIR)[-1].split("/")[:-1])
+        print(ds_name)
         shard_name = "_" + os.path.basename(parquet_file).replace(".parquet", "")
+        ds = load_dataset(path="parquet", data_files=[parquet_file], split="train")
+        processing_fn = get_preprocessing_fn(ds_name, is_eval=False, is_pretrain=False)
+        ds = ds.map(processing_fn, num_proc=8)
+
     else:
         ds_name = ds_name.split("/")[-1]  # Extract just the dataset name
 
         print(f"Loading dataset: {ds_name} with split: {split}")
-        kwargs = dict(
-            ds_name=ds_name,
-            split=split,
-            add_negative_prompt=False,
-            add_repeat_prompt=False,
-            repeat_prob=0,
-        )
+
         ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
     if args.debug:
         ds = ds.take(10)
 
+    ds = ds.filter(filter_none, batched=False, num_proc=8)
+
     ctxs = [sample["context"] for sample in ds]
     questions = [sample["prompts"] for sample in ds]
+    print(f"Loaded {len(ctxs)} contexts and {len(questions)} questions")
 
     messages = create_messages(ctxs, questions, args.vllm_model, SYSTEM_TEMPLATE)
 
@@ -155,20 +168,32 @@ def self_generate(
         ),
     )
 
+    self_gen_data = {ctx: {"prompts": [], "responses": []} for ctx in ctxs}
+    c = 0
+    for ctx, q_list in zip(ctxs, questions):
+        for i, q in enumerate(q_list):
+            self_gen_data[ctx]["prompts"].append(q)
+            self_gen_data[ctx]["responses"].append(completions[c + i].outputs[0].text)
+        c += i + 1
+
     samples = [
-        {"context": ctx, "prompt": q, "response": completion.outputs[0].text}
-        for ctx, q, completion in zip(ctxs, questions, completions)
+        {
+            "context": ctx,
+            "prompts": q_list,
+            "responses": self_gen_data[ctx]["responses"],
+        }
+        for ctx, q_list in zip(ctxs, questions)
     ]
 
     if args.debug:
         for sample in samples:
             print(f"context={sample['context']}")
-            print(f"prompt={sample['prompt']}")
-            print(f"response={sample['response']}")
+            print(f"prompt={sample['prompts']}")
+            print(f"response={sample['responses']}")
             print("=" * 80)
 
     print(f"Generated {len(samples)} samples")
-    random.shuffle(samples)
+    # random.shuffle(samples)
 
     # Save results
     df = pd.DataFrame(samples)
