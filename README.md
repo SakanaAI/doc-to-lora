@@ -72,11 +72,38 @@ uv run python data/generate_fav_num_big.py
 ```
 
 ### Data Generation (v2)
-Recursively generate more data!
+***Download a subset of generated Fineweb-QA directly***
+```bash
+uv run data/download_generated_fineweb_qa.py
+```
+
+***Generate data from scratch***
+0. download fineweb_edu to `data/raw_datasets/fineweb_edu
+```bash
+# [WIP] there are other datasets where we used openAI to gen QA pairs
+
+# 0. download fineweb_edu to `data/raw_datasets/fineweb_edu
+uv run data/download_fineweb_edu.py
+```
+
+1. Recursively generate more data! (depends on step 0)
 ```bash
 # run from 000 to 0013
 run uv run python data/generate_fw_edu_qa_v2.py --shard_pattern "000_00000" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it --max_length=2000 --max_model_length=2048; run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_0*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it; run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_1*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it; run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_2*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it
 ```
+
+2. Self-generated response QA data (depends on step 0 and 1)
+```bash
+# Example commands using gemma-2-2b-it
+# self-gen data for fw_qa_v2
+# 000_0000[0-1] to 000_0000[8-9] for small split
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/013*'
+
+# self-gen data for other ds listed in qa_no_fw.yaml
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_no_fw.yaml
+```
+
+
 <!-- ### Data Generation
 ```bash
 # [WIP] there are other datasets where we used openAI to gen QA pairs

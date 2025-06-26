@@ -13,9 +13,10 @@ from ctx_to_lora.data.processing import load_and_process_dataset
 from ctx_to_lora.utils import clear_gpu
 
 SYSTEM_TEMPLATE = (
-    "### System Instructions ###\n"
+    "### SYSTEM INSTRUCTIONS ###\n"
     "You are a creative and helpful assistant.\n"
-    "**DO NOT** hallucinate or make up information."
+    "**DO NOT** hallucinate or make up information.\n"
+    "### END OF SYSTEM INSTRUCTIONS ###"
 )
 
 PROMPT_TEMPLATE = "### Context ###\n{context}\n\n\n### Question ###\n{question}"
@@ -81,7 +82,7 @@ def get_dataset_configs(
 
 
 def create_messages(
-    ctxs: list[str], questions: list[str], vllm_model: str, system_template: str
+    ctxs: list[str], questions: list[list[str]], vllm_model: str, system_template: str
 ) -> list[list[dict]]:
     """Create chat messages for the model."""
     if "gemma" in vllm_model:
@@ -93,7 +94,8 @@ def create_messages(
                     "content": system_template + "\n\n\n" + get_prompt(ctx, q),
                 }
             ]
-            for ctx, q in zip(ctxs, questions)
+            for ctx, q_list in zip(ctxs, questions)
+            for q in q_list
         ]
     else:
         return [
@@ -101,7 +103,8 @@ def create_messages(
                 {"role": "system", "content": system_template},
                 {"role": "user", "content": get_prompt(ctx, q)},
             ]
-            for ctx, q in zip(ctxs, questions)
+            for ctx, q_list in zip(ctxs, questions)
+            for q in q_list
         ]
 
 
@@ -139,18 +142,16 @@ def self_generate(
         ds = ds.take(10)
 
     ctxs = [sample["context"] for sample in ds]
-    questions = [sample["prompt"] for sample in ds]
+    questions = [sample["prompts"] for sample in ds]
 
-    messages = create_messages(ctxs, questions, args.vllm_model, system_template)
+    messages = create_messages(ctxs, questions, args.vllm_model, SYSTEM_TEMPLATE)
 
     print(f"Generating from {len(messages)} contexts")
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
             max_tokens=2048,
-            temperature=0.1
-            if args.vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-            else 1.0,
+            temperature=1.0,
         ),
     )
 
@@ -243,24 +244,6 @@ if __name__ == "__main__":
         max_model_len=MODEL_CTX_LEN.get(vllm_model),
     )
 
-    system_template = SYSTEM_TEMPLATE
-    if vllm_model == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
-        mm_kwargs = {"image": 0}
-        llm_kwargs.update(
-            {
-                "tokenizer_mode": "mistral",
-                "config_format": "mistral",
-                "load_format": "mistral",
-                "max_model_len": 2**14,
-                "limit_mm_per_prompt": mm_kwargs,
-            }
-        )
-        system_template = (
-            "You are Mistral Small 3.1, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.\n"
-            "You power an AI assistant called Le Chat.\n"
-            "Your knowledge base was last updated on 2023-10-01.\n\n\n"
-        ) + SYSTEM_TEMPLATE
-
     print(f"{llm_kwargs=}")
     llm = LLM(**llm_kwargs)
 
@@ -276,7 +259,7 @@ if __name__ == "__main__":
         # Process each dataset
         for ds_name, split in dataset_configs:
             print(f"Processing dataset: {ds_name}, split: {split}")
-            self_generate(ds_name, split, args, llm, system_template)
+            self_generate(ds_name, split, args, llm, SYSTEM_TEMPLATE)
     else:
         assert args.glob_pattern, (
             "glob_pattern must be provided if no ds_names or config"
@@ -290,5 +273,5 @@ if __name__ == "__main__":
                 split=args.split,
                 args=args,
                 llm=llm,
-                system_template=system_template,
+                system_template=SYSTEM_TEMPLATE,
             )
