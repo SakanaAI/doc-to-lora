@@ -7,8 +7,8 @@
 #SBATCH --error=slurm_logs/%x-%j.out
 
 uv run accelerate launch --num_processes=4 --gradient_accumulation_steps=2 --gradient_clipping=1.0 \
---gpu_ids all --main_process_port 29564 intx_sft.py configs/fw_qa_v2_level_3.yaml \
---model_name_or_path=google/gemma-3-1b-it \
+--gpu_ids all --main_process_port 29565 intx_sft.py configs/fw_qa_v2_level_3.yaml \
+--model_name_or_path=google/gemma-2-2b-it \
 --num_train_epochs=5 \
 --per_device_train_batch_size=-1 \
 --gradient_accumulation_steps=2 \

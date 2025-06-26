@@ -150,6 +150,34 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "fw_qa_v2_2k_len_level_1": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/fw_qa_v2/min_0_to_2000/*level_1.parquet",
+            split="train",
+        ),
+        # validation=dict(
+        #     path="parquet",
+        #     data_files=glob(
+        #         "data/raw_datasets/fw_qa_v2/min_0_to_2000/*level_1_val.parquet"
+        #     ),
+        #     split="train",
+        # ),
+    ),
+    "fw_qa_v2_2k_len_level_2": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/fw_qa_v2/min_0_to_2000/*level_2.parquet",
+            split="train",
+        ),
+        # validation=dict(
+        #     path="parquet",
+        #     data_files=glob(
+        #         "data/raw_datasets/fw_qa_v2/min_0_to_2000/*level_2_val.parquet"
+        #     ),
+        #     split="train",
+        # ),
+    ),
     "fw_qa_v2_2k_len_level_3_tiny": dict(
         train=dict(
             path="parquet",

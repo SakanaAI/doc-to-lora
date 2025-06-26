@@ -9,10 +9,20 @@ from transformers import (
     AutoModel,
     AutoModelForCausalLM,
     AutoTokenizer,
-    MllamaForConditionalGeneration,
+    Gemma3ForConditionalGeneration,
 )
 
 logger = logging.getLogger()
+
+GEMMA_VISION_MODELS = [
+    "google/gemma-3-4b-it",
+    "google/gemma-3-12b-it",
+    "google/gemma-3-27b-it",
+]
+
+
+def check_is_vision_model(model_name):
+    return model_name in GEMMA_VISION_MODELS
 
 
 def get_model_and_tokenizer(
@@ -96,7 +106,7 @@ def get_model(
         attn_implementation="eager",
         use_cache=False,
     )
-    is_vision_model = "Llama" in model_name_or_path and "Vision" in model_name_or_path
+    is_vision_model = check_is_vision_model(model_name_or_path)
     if model_kwargs is not None:
         model_init_kwargs.update(model_kwargs)
 
@@ -112,7 +122,7 @@ def get_model(
 
     if is_vision_model:
         # always use sdpa for vision models
-        model_init_kwargs["attn_implementation"] = "sdpa"
+        # model_init_kwargs["attn_implementation"] = "sdpa"
         model_init_kwargs.pop("use_cache")
     elif is_bidir_model:
         model_init_kwargs["torch_dtype"] = torch.float32
@@ -125,7 +135,7 @@ def get_model(
         else:
             model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
     else:
-        model = MllamaForConditionalGeneration.from_pretrained(**model_init_kwargs)
+        model = Gemma3ForConditionalGeneration.from_pretrained(**model_init_kwargs)
         model = model.language_model
     if peft_config is not None:
         model = PeftModel(model, peft_config)
