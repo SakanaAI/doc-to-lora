@@ -42,7 +42,7 @@ WANDB_MODE=disabled run uv run intx_sft.py configs/fw_qa_v2_level_0_tiny.yaml --
 ```bash
 WANDB_MODE=disabled uv run intx_sft.py configs/squad.yaml --model_name_or_path=google/gemma-3-1b-it --num_train_epochs=5 --per_device_train_batch_size=64 --gradient_accumulation_steps=8 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=8 --num_latent_factor=1 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --max_packed_inp_len=16000 --max_packed_ctx_len=32000 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --logging_steps=10
 ```
-
+<!-- 
 ### HyperLoRA w/ self-gen 3 mini
 ```bash
 # self-gen sft
@@ -58,7 +58,7 @@ WANDB_MODE=disabled uv run python intx_sft.py configs/self_gen_3_mini.yaml --mod
 ### HyperLoRA w/ fw-qa pretrain only
 ```bash
 WANDB_MODE=disabled run uv run python intx_sft.py configs/fw_qa_pretrain_only.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=1 --per_device_train_batch_size=4 --gradient_accumulation_steps=8 --per_device_eval_batch_size=8 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=4 --num_latent_factor=1 --lora_r=8 --eval_steps=100 --save_steps=100 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1
-```
+``` -->
 
 <!-- ### HyperLoRA w/ context_numbers_128
 ```bash
@@ -97,6 +97,28 @@ ds = load_and_process_dataset(f"self_gen/{base_model_name}/{ds_name}",
     streaming=False,
     num_proc=8
 )
+
+# or load the tokenized version
+base_model_max_len = 2**13
+ctx_model_max_len = 2**13
+
+# load via a custom function because of custom chat_template
+tokenizer = get_tokenizer(base_model_name)
+ctx_tokenizer = get_tokenizer(base_model_name)
+ds = def get_tokenized_dataset(
+    ds_name
+    split="train",
+    base_model_max_len=base_model_max_len,
+    tokenizer=tokenizer,
+    tokenizer_kwargs={},
+    ctx_model_max_len=ctx_model_max_len,
+    ctx_tokenizer=ctx_tokenizer,
+    ctx_tokenizer_kwargs={},
+    add_ctx_to_chat=False,
+    add_repeat_prompt=False,
+    add_negative_prompt=False,
+    use_kl_loss=False, 
+)
 ```
 
 ***Generate data from scratch***
@@ -118,8 +140,10 @@ run uv run python data/generate_fw_edu_qa_v2.py --shard_pattern "000_00000" --n_
 ```bash
 # Example commands using gemma-2-2b-it
 # self-gen data for fw_qa_v2
-# 000_0000[0-1] to 000_0000[8-9] for small split
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/013*'
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/013*_level_3*'
+
+# val split
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/*_level_0_val.parquet'
 
 # self-gen data for other ds listed in qa_no_fw.yaml
 uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/self_gen_qa_short_ctx_no_fw_qa.yaml

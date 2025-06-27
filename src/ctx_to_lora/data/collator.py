@@ -64,7 +64,6 @@ def train_collator(inp_list, tokenizer):
     sample = inp_list[0]
     ctx_ids = None
     if "ctx_ids" in sample:
-        # have to be manual since it has [ctx_len, features] shape
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
 
@@ -74,7 +73,6 @@ def train_collator(inp_list, tokenizer):
             batch_first=True,
             padding_value=0,
         )
-        # exotic keys won't be padded, so we need to pad them as well
         ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
         ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
             ctx_attn_mask,
@@ -110,6 +108,7 @@ def train_collator(inp_list, tokenizer):
 
 
 def eval_collator(inp_list, tokenizer):
+    # only used for teacher-forcing eval
     # input is a list of tokenized sequences
     padding_kwargs = dict(
         padding=True,
@@ -120,7 +119,6 @@ def eval_collator(inp_list, tokenizer):
 
     ctx_ids = None
     if "ctx_ids" in inp_list[0]:
-        # have to be manual since it has [ctx_len, features] shape
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
 
@@ -130,7 +128,6 @@ def eval_collator(inp_list, tokenizer):
             batch_first=True,
             padding_value=0,
         )
-        # exotic keys won't be padded, so we need to pad them as well
         ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
         ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
             ctx_attn_mask,
@@ -200,7 +197,6 @@ def generation_collator(inp_list, tokenizer):
     # since we don't want to compute the loss on the labels
     # during generation
     if "ctx_ids" in inp_list[0]:
-        # have to be manual since it has [ctx_len, features] shape
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
         ctx_ids = [example.pop("ctx_ids") for example in inp_list]
@@ -209,7 +205,6 @@ def generation_collator(inp_list, tokenizer):
             batch_first=True,
             padding_value=0,
         )
-        # exotic keys won't be padded, so we need to pad them as well
         ctx_attn_mask = [example.pop("ctx_attn_mask") for example in inp_list]
         ctx_attn_mask = torch.nn.utils.rnn.pad_sequence(
             ctx_attn_mask,

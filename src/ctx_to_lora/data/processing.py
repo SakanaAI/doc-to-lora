@@ -747,26 +747,23 @@ def construct_and_tokenize_ctx_qa(
         )
 
     # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
+    # TODO (distillation): implement
     if use_kl_loss:
-        raise NotImplementedError("KL loss deprecated")
-        tokenized_ds = tokenized_ds.map(
-            convert_ctx_prompt_response_to_messages,
-            fn_kwargs={"add_ctx_to_chat": True},
-            remove_columns=["messages"],
-        )
-        tokenized_ds = tokenized_ds.map(
-            get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
-            remove_columns=["chat"],
-        )
-        tokenized_ds = tokenized_ds.map(
-            tokenize_chat_messages,
-            fn_kwargs={
-                "tokenizer": tokenizer,
-                "mask_assistant_inputs": True,
-                "tokenizer_kwargs": tokenizer_kwargs,
-                "for_kl_loss": True,
-            },
-        )
+        raise NotImplementedError("KL loss not implemented")
+
+        # old code from before (might not work anymore)
+        # e.g,. the next line likely replace the tokenized text from
+        # earlier `convert_ctx_prompt_response_to_messages` call
+
+        # tokenized_ds = tokenized_ds.map(
+        #     convert_ctx_prompt_response_to_messages,
+        #     fn_kwargs={"add_ctx_to_chat": True},
+        #     remove_columns=["messages"],
+        # )
+        # tokenized_ds = tokenized_ds.map(
+        #     get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
+        #     remove_columns=["chat"],
+        # )
 
     if need_ctx_ids:
         # tokenize the ctx_text to get ctx_ids and ctx_attn_mask

@@ -444,8 +444,6 @@ def decode_test_result(
     """Decode test results into human-readable format."""
     out = []
     for sample, pred_toks in zip(test_dataset, test_result.predictions):
-        # sample and labels are not padded
-        # pred_toks are padded though
         d = dict()
         if "labels" in sample:
             start_idx = np.argmax(sample["labels"] != -100)

@@ -10,6 +10,10 @@ from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 logger = logging.getLogger()
 
 
+# TODO (distillation): implement
+class DistillationTrainer(Trainer): ...
+
+
 class ModulatedModelTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.gen_lora_l1_reg_coef = kwargs.pop("gen_lora_l1_reg_coef", 0.0)
