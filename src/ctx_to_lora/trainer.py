@@ -10,7 +10,7 @@ from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 logger = logging.getLogger()
 
 
-# TODO (distillation): implement
+# TODO (distillation, Shin): implement
 class DistillationTrainer(Trainer): ...
 
 

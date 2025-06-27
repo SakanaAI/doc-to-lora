@@ -592,6 +592,7 @@ def get_tokenized_dataset(
     set_format: str | None = None,
     streaming: bool = False,
 ) -> dict[str, Any]:
+    # TODO (distillation, Tan): make this works with pre-computed logits
     assert not use_kl_loss, "KL loss is deprecated"
     if add_repeat_prompt:
         assert repeat_prob > 0, f"add_repeat_prompt is set but repeat_prob = 0"

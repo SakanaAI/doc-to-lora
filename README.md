@@ -105,8 +105,8 @@ ctx_model_max_len = 2**13
 # load via a custom function because of custom chat_template
 tokenizer = get_tokenizer(base_model_name)
 ctx_tokenizer = get_tokenizer(base_model_name)
-ds = def get_tokenized_dataset(
-    ds_name
+ds = get_tokenized_dataset(
+    ds_name,
     split="train",
     base_model_max_len=base_model_max_len,
     tokenizer=tokenizer,

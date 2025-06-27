@@ -1,6 +1,5 @@
 import argparse
 import os
-import random
 from glob import glob
 
 import pandas as pd
@@ -160,11 +159,12 @@ def self_generate(
     messages = create_messages(ctxs, questions, args.vllm_model, SYSTEM_TEMPLATE)
 
     print(f"Generating from {len(messages)} contexts")
+    # TODO (distillation): make vllm outputs logits here too
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
             max_tokens=2048,
-            temperature=1.0,
+            temperature=1.0,  # TODO: lower the temp
         ),
     )
 
