@@ -135,6 +135,9 @@ def self_generate(
     """Process a single dataset and generate QA pairs."""
 
     shard_name = ""
+    temp = 0.0
+    if "_temp_" in ds_name:
+        temp = float(ds_name.split("_temp_")[-1].split("/")[0])
     kwargs = dict(
         ds_name=ds_name,
         split=split,
@@ -161,9 +164,6 @@ def self_generate(
 
         ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
 
-    temp = 0.0
-    if "_temp_" in ds_name:
-        temp = float(ds_name.split("_temp_")[-1].split("/")[0])
     if args.debug:
         ds = ds.take(10)
 
