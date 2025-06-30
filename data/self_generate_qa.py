@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 from glob import glob
 
 import pandas as pd
@@ -14,6 +15,10 @@ from ctx_to_lora.data.processing import (
     load_and_process_dataset,
 )
 from ctx_to_lora.utils import clear_gpu
+
+STOP_STRINGS = {
+    "google/gemma-2-2b-it": ["<eos>", "<end_of_turn>"],
+}
 
 SYSTEM_TEMPLATE = (
     "### SYSTEM INSTRUCTIONS ###\n"
@@ -40,6 +45,14 @@ def load_config(config_path: str) -> dict:
     with open(config_path) as f:
         config = yaml.safe_load(f)
     return config
+
+
+def check_should_skip(txt: str, vllm_model: str) -> bool:
+    """Check if the response should be skipped based on stop strings."""
+    for stop in STOP_STRINGS[vllm_model]:
+        if stop in txt[-len(stop) :]:
+            return (txt.split(stop)[0], False)  # Found a valid stop string
+    return (txt, True)  # No valid stop string found, skip this response
 
 
 def get_dataset_configs(
@@ -147,6 +160,10 @@ def self_generate(
         print(f"Loading dataset: {ds_name} with split: {split}")
 
         ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
+
+    temp = 0.0
+    if "_temp_" in ds_name:
+        temp = float(ds_name.split("_temp_")[-1].split("/")[0])
     if args.debug:
         ds = ds.take(10)
 
@@ -163,19 +180,38 @@ def self_generate(
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
-            max_tokens=2048,
-            temperature=1.0,  # TODO: lower the temp
+            max_tokens=1024,
+            temperature=temp,
+            # needed for checking if stop tokens are present
+            skip_special_tokens=False,
+            include_stop_str_in_output=True,
         ),
     )
 
     self_gen_data = {ctx: {"prompts": [], "responses": []} for ctx in ctxs}
     c = 0
+    n_skips = 0
     for ctx, q_list in zip(ctxs, questions):
         for i, q in enumerate(q_list):
+            response = completions[c + i].outputs[0].text
+            response, skip = check_should_skip(response, args.vllm_model)
+            # skip = True
+            # for stop in STOP_STRINGS[args.vllm_model]:
+            #     if stop == response[-len(stop) :]:
+            #         # Check if response ends with stop string
+            #         response = response.split(stop)[0]
+            #         skip = False
+            #         break
+            if skip:
+                print(f"Skipping due to missing stop string")
+                n_skips += 1
+                continue
+
             self_gen_data[ctx]["prompts"].append(q)
-            self_gen_data[ctx]["responses"].append(completions[c + i].outputs[0].text)
+            self_gen_data[ctx]["responses"].append(response)
         c += i + 1
 
+    print(f"Skipped {n_skips} responses due to missing stop strings")
     samples = [
         {
             "context": ctx,
@@ -193,20 +229,21 @@ def self_generate(
             print("=" * 80)
 
     print(f"Generated {len(samples)} samples")
-    # random.shuffle(samples)
+    random.shuffle(samples)
 
     # Save results
-    df = pd.DataFrame(samples)
-    ds_out = Dataset.from_pandas(df)
-    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}/{ds_name}/{split}/ds{shard_name}"
-    os.makedirs(os.path.dirname(fpath), exist_ok=True)
-    fpath = f"{fpath}.parquet"
-    ds_out.to_parquet(fpath)
-    print(f"Saved to {fpath}")
+    if not args.debug:
+        df = pd.DataFrame(samples)
+        ds_out = Dataset.from_pandas(df)
+        fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}/{ds_name}/{split}/ds{shard_name}"
+        os.makedirs(os.path.dirname(fpath), exist_ok=True)
+        fpath = f"{fpath}.parquet"
+        ds_out.to_parquet(fpath)
+        print(f"Saved to {fpath}")
 
-    # Cleanup
-    del samples, df, ds_out, completions, messages, ctxs, questions
-    clear_gpu()
+        # Cleanup
+        del samples, df, ds_out, completions, messages, ctxs, questions
+        clear_gpu()
 
 
 def parse_args() -> argparse.Namespace:

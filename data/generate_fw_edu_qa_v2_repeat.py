@@ -7,6 +7,10 @@ from glob import glob
 from datasets import load_dataset
 from vllm import LLM, SamplingParams
 
+STOP_STRINGS = {
+    "google/gemma-2-2b-it": ["<eos>", "<end_of_turn>"],
+}
+
 SYSTEM_TEMPLATE = (
     "You are a creative and helpful assistant.\n"
     "You are tasked with generating questions for reading comprehension tests.\n"
@@ -64,6 +68,14 @@ def get_prompt(context, example_qa_pairs, n_qa_pairs):
     return prompt
 
 
+def check_should_skip(txt: str, vllm_model: str) -> bool:
+    """Check if the response should be skipped based on stop strings."""
+    for stop in STOP_STRINGS[vllm_model]:
+        if stop in txt[-len(stop) :]:
+            return (txt.split(stop)[0], False)  # Found a valid stop string
+    return (txt, True)  # No valid stop string found, skip this response
+
+
 def postprocess_qa_pairs(res_txt: str):
     """
     Postprocesses the QA pairs from the response text.
@@ -90,10 +102,21 @@ def postprocess_qa_pairs(res_txt: str):
 
     out_q = []
     out_a = []
+    n_skips = 0
     if (len(questions) > 0) and (len(answers) > 0):
-        for i in range(min(len(questions), len(answers))):
+        n_gen_pairs = min(len(questions), len(answers))
+        has_left_over = n_gen_pairs < len(questions) or n_gen_pairs < len(answers)
+        for i in range(n_gen_pairs):
+            response = answers[i].strip()
+            if (not has_left_over) and (i == n_gen_pairs - 1):
+                response, skip = check_should_skip(response, vllm_model)
+                if skip:
+                    print(f"Skipping due to missing stop string")
+                    n_skips += 1
+                    continue
             out_q.append(questions[i].strip())
             out_a.append(answers[i].strip())
+    print(f"Skipped {n_skips} responses due to missing stop strings")
 
     return out_q, out_a
 
@@ -217,8 +240,10 @@ if __name__ == "__main__":
         completions = llm.chat(
             messages,
             sampling_params=SamplingParams(
-                max_tokens=2048,
-                temperature=0.7,
+                temperature=0.0,
+                # needed for checking if stop tokens are present
+                skip_special_tokens=False,
+                include_stop_str_in_output=True,
             ),
         )
         samples = []

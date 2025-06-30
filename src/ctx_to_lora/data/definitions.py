@@ -149,8 +149,10 @@ DS_KWARGS = {
     "fw_qa_v2_2k_len_level_0_tiny": dict(
         train=dict(
             path="parquet",
-            data_files="data/raw_datasets/fw_qa_v2/min_0_to_2000/000_00000_level_0.parquet",
-            split="train",
+            data_files=glob(
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_0.parquet"
+            ),
+            split="train[:400000]",
         ),
     ),
     "fw_qa_v2_2k_len_level_0": dict(
@@ -181,6 +183,15 @@ DS_KWARGS = {
         #     split="train",
         # ),
     ),
+    "fw_qa_v2_2k_len_level_1_tiny": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob(
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_1.parquet"
+            ),
+            split="train[:200000]",
+        ),
+    ),
     "fw_qa_v2_2k_len_level_2": dict(
         train=dict(
             path="parquet",
@@ -195,11 +206,13 @@ DS_KWARGS = {
         #     split="train",
         # ),
     ),
-    "fw_qa_v2_2k_len_level_3_tiny": dict(
+    "fw_qa_v2_2k_len_level_2_tiny": dict(
         train=dict(
             path="parquet",
-            data_files="data/raw_datasets/fw_qa_v2/min_0_to_2000/000_00000_level_3.parquet",
-            split="train",
+            data_files=glob(
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_2.parquet"
+            ),
+            split="train[:100000]",
         ),
     ),
     "fw_qa_v2_2k_len_level_3": dict(
@@ -216,13 +229,15 @@ DS_KWARGS = {
         #     split="train",
         # ),
     ),
-    # "fw_qa_3_mini": dict(
-    #     train=dict(
-    #         path="parquet",
-    #         data_files=glob("data/raw_datasets/fw_qa_3/000_00001.parquet"),
-    #         split="train[:100000]",
-    #     ),
-    # ),
+    "fw_qa_v2_2k_len_level_3_tiny": dict(
+        train=dict(
+            path="parquet",
+            data_files=glob(
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_3.parquet"
+            ),
+            split="train[:50000]",
+        ),
+    ),
     # "fw_qa_3_small": dict(
     #     train=dict(
     #         path="parquet",
@@ -491,6 +506,8 @@ CLOSED_QA_DATASETS = {
     "squad",
     "triviaqa_retrieved",
     "negative_nq",
+    "ropes",
+    "drop",
 }
 
 MULTI_ANSWER_DATASETS = {
@@ -543,6 +560,8 @@ CLOSED_QA_INTX_TEMPLATES = [
 
 
 EVAL_INTX_TEMPLATES = {
+    "ropes": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "drop": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     "negative_nq": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     "triviaqa_retrieved": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     "hotpot_qa": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",

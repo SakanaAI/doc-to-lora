@@ -185,6 +185,7 @@ def get_preprocessing_fn(
             situation_txt = sample["situation"]
             ctx = ctx_template.format(background=bg_txt, situation=situation_txt)
             q = sample["question"]
+            q = closed_qa_prompting(q) if not is_eval else q
             return {"context": ctx, "prompt": q, "response": response}
 
     elif ds_name in ["narrativeqa", "quoref"]:  # , "ropes"]:
