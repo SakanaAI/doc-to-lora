@@ -62,16 +62,16 @@ if __name__ == "__main__":
 
     eval_batch_size_gen = cli_args.pop("eval_batch_size_gen")
     eval_batch_size = cli_args.pop("eval_batch_size")
-    run_eval(
-        **cli_args,
-        # cli_args.checkpoint_path,
-        # cli_args.model_name_or_path,
-        # cli_args.eval_batch_size,
-        # args,
-        # split=cli_args.split,
-        eval_batch_size=eval_batch_size,
-        generative=False,
-    )
+    # run_eval(
+    #     **cli_args,
+    #     # cli_args.checkpoint_path,
+    #     # cli_args.model_name_or_path,
+    #     # cli_args.eval_batch_size,
+    #     # args,
+    #     # split=cli_args.split,
+    #     eval_batch_size=eval_batch_size,
+    #     generative=False,
+    # )
     run_eval(
         **cli_args,
         # cli_args.checkpoint_path,

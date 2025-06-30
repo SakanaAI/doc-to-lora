@@ -2,16 +2,16 @@
 #SBATCH --job-name=ctxlora
 #SBATCH --nodes=1
 #SBATCH --partition=sakura-gpu
-#SBATCH --gpus=4
+#SBATCH --gpus=8
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --error=slurm_logs/%x-%j.out
 
-uv run accelerate launch --num_processes=4 --gradient_accumulation_steps=2 --gradient_clipping=1.0 \
+uv run accelerate launch --num_processes=8 --gradient_accumulation_steps=2 --gradient_clipping=1.0 \
 --gpu_ids all --main_process_port 29572 intx_sft.py configs/qa_short_ctx_self_gen.yaml \
 --model_name_or_path=google/gemma-2-2b-it \
---num_train_epochs=5 \
+--num_train_epochs=2 \
 --per_device_train_batch_size=-1 \
---gradient_accumulation_steps=2 \
+--gradient_accumulation_steps=4 \
 --per_device_eval_batch_size=64 \
 --target_modules=down_proj \
 --num_self_attends_per_block=8 \
@@ -26,8 +26,8 @@ uv run accelerate launch --num_processes=4 --gradient_accumulation_steps=2 --gra
 --add_negative_prompt=False \
 --add_repeat_prompt=False \
 --use_sequence_packing=True \
---max_packed_inp_len=16000 \
---max_packed_ctx_len=32000 \
+--max_packed_inp_len=4096 \
+--max_packed_ctx_len=8192 \
 --per_rank_gen=True \
 --per_layer_processing=True \
 --gen_lora_l1_reg_coef=0.1 \
