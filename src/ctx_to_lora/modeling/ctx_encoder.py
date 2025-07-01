@@ -53,7 +53,7 @@ def maybe_add_batch_dim(kwargs):
 class EarlyExit(nn.Module):
     def __init__(self, base_model: PreTrainedModel, config: CtxEncoderArguments):
         super().__init__()
-        base_model = get_base_model(base_model)
+        self.base_model = base_model = get_base_model(base_model)
         self.exit_layer = config.layer_idx
         if "gte" in base_model.config.name_or_path:
             self.base_model.encoder.layer = base_model.encoder.layer[: self.exit_layer]

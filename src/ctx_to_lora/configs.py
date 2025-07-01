@@ -476,10 +476,18 @@ class AggregatorArguments:
     #     default=0.0,
     #     metadata={"help": "Attention dropout probability for Perceiver."},
     # )
-    # num_latent_factor: int = field(
-    #     default=8,
-    #     metadata={"help": "Number of latent factors for Perceiver."},
-    # )
+    concat_latents_context: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to concatenate latents and context for Perceiver. "
+            "If False, only context is used. Used only when `use_self_attn` is False."
+        },
+    )
+    # not used (keep herer for backward compatibility)
+    num_latent_factor: int = field(
+        default=8,
+        metadata={"help": "Number of latent factors for Perceiver."},
+    )
     n_base_queries: int = field(
         default=208,  # 26 * 8
         metadata={"help": "Number of latent queries of Perceiver."},

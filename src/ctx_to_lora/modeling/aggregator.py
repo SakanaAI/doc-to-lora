@@ -41,6 +41,7 @@ class AggregatorConfig:
     pooling_type: POOL_FN
 
     # perceiver
+    concat_latents_context: bool
     num_self_attends_per_block: int  # = 16
     decoder_depth: int  # 1 = only cross-attention
     num_latent_factor: int = 8
@@ -94,6 +95,7 @@ class Perceiver(nn.Module):
         num_latent_factor,  # unused
         layer_to_layer_ctx_encoder,
         n_base_queries,
+        concat_latents_context,
         *args,
         **kwargs,
     ):
@@ -109,6 +111,7 @@ class Perceiver(nn.Module):
         if self.layer_to_layer:
             n_output_queries = num_modules * self.r + num_extra_modules
         self.config = Idefics2PerceiverConfig(
+            concat_latents_context=concat_latents_context,
             input_size=feature_size,
             # the first layer is xattn
             resampler_depth=kwargs["num_self_attends_per_block"] + 1,
@@ -119,6 +122,7 @@ class Perceiver(nn.Module):
             attn_implementation="flash_attention_2",
         )
         self.decoder_config = Idefics2PerceiverConfig(
+            concat_latents_context=concat_latents_context,
             input_size=output_size,
             resampler_depth=kwargs["decoder_depth"],
             resampler_n_latents=n_output_queries,
@@ -175,13 +179,13 @@ class Perceiver(nn.Module):
                 num_layers=self.num_layers,
             )
 
-        print(f"ctx_features shape: {ctx_features.shape}")
-        print(
-            f"ctx_attn_mask shape: {ctx_attn_mask.shape if ctx_attn_mask is not None else None}"
-        )
-        print(
-            f"ctx_position_ids shape: {ctx_position_ids.shape if ctx_position_ids is not None else None}"
-        )
+        # print(f"ctx_features shape: {ctx_features.shape}")
+        # print(
+        #     f"ctx_attn_mask shape: {ctx_attn_mask.shape if ctx_attn_mask is not None else None}"
+        # )
+        # print(
+        #     f"ctx_position_ids shape: {ctx_position_ids.shape if ctx_position_ids is not None else None}"
+        # )
         x = self.perceiver(ctx_features, ctx_attn_mask, ctx_position_ids)
 
         if self.layer_to_layer:
