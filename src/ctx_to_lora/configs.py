@@ -435,7 +435,16 @@ class CtxEncoderArguments:
         default=None,
         metadata={"help": "Context encoder model name or path."},
     )
-    # TODO: allow using activations from multiple layers?
+    ctx_encoder_type: Literal[
+        "embedding_only", "per_layer_activations", "early_exit"
+    ] = field(
+        default="early_exit",
+        metadata={
+            "help": "Context encoder type. "
+            "Options: 'embedding_only', 'per_layer_activations', 'early_exit'."
+        },
+    )
+    # used only with `early_exit` type
     layer_idx: int | None = field(
         default=None,
         metadata={
@@ -467,9 +476,13 @@ class AggregatorArguments:
     #     default=0.0,
     #     metadata={"help": "Attention dropout probability for Perceiver."},
     # )
-    num_latent_factor: int = field(
-        default=8,
-        metadata={"help": "Number of latent factors for Perceiver."},
+    # num_latent_factor: int = field(
+    #     default=8,
+    #     metadata={"help": "Number of latent factors for Perceiver."},
+    # )
+    n_base_queries: int = field(
+        default=208,  # 26 * 8
+        metadata={"help": "Number of latent queries of Perceiver."},
     )
     # num_blocks: int = field(
     #     default=8,
