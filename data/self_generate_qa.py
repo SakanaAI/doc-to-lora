@@ -74,8 +74,13 @@ def get_dataset_configs(
 
         # Process train datasets
         train_ds_names = config.get("train_ds_names", [])
+        # self_gen_train_ds_names = [
+        #     (ds_name.split("/")[-1], "train")
+        #     for ds_name in train_ds_names
+        #     if ds_name.startswith("self_gen/")
+        # ]
         self_gen_train_ds_names = [
-            (ds_name.split("/")[-1], "train")
+            (ds_name, "train")
             for ds_name in train_ds_names
             if ds_name.startswith("self_gen/")
         ]
@@ -140,14 +145,7 @@ def self_generate(
         temp = float(ds_name.split("_temp_")[-1].split("/")[0])
     print(f"Processing dataset: {ds_name}, split: {split}")
     print(f"Using temperature: {temp}")
-    kwargs = dict(
-        ds_name=ds_name,
-        split=split,
-        add_negative_prompt=False,
-        add_repeat_prompt=False,
-        repeat_prob=0,
-        is_pretrain=False,
-    )
+
     if parquet_file:
         print(f"Loading dataset from parquet file: {parquet_file}")
 
@@ -163,6 +161,14 @@ def self_generate(
         ds_name = ds_name.split("/")[-1]  # Extract just the dataset name
 
         print(f"Loading dataset: {ds_name} with split: {split}")
+        kwargs = dict(
+            ds_name=ds_name,
+            split=split,
+            add_negative_prompt=False,
+            add_repeat_prompt=False,
+            repeat_prob=0,
+            is_pretrain=False,
+        )
 
         ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
 
