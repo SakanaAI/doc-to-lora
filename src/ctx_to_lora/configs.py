@@ -496,9 +496,15 @@ class AggregatorArguments:
     #     default=8,
     #     metadata={"help": "Number of blocks for Perceiver."},
     # )
+
+    # misnomer
     num_self_attends_per_block: int = field(
         default=6,
-        metadata={"help": "Number of self-attends per block for Perceiver."},
+        metadata={"help": "Number of attn blocks for Perceiver."},
+    )
+    n_cross_attn_layers: int = field(
+        default=6,
+        metadata={"help": "Number of cross-attention layers for Perceiver. "},
     )
     # self_attention_widening_factor: int = field(
     #     default=4,

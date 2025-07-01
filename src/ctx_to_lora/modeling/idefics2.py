@@ -80,12 +80,14 @@ class Idefics2PerceiverConfig(PretrainedConfig):
         num_key_value_heads=4,
         attention_dropout=0.0,
         is_cross_attn=True,
+        n_cross_attn_layers=1,
         concat_latents_context=False,
         **kwargs,
     ):
         # for mlp
         self.concat_latents_context = concat_latents_context
         self.is_cross_attn = is_cross_attn
+        self.n_cross_attn_layers = n_cross_attn_layers
         self.input_size = input_size
         self.intermediate_size_factor = intermediate_size_factor
         # for perceiver
@@ -650,9 +652,9 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         self.hidden_size = config.hidden_size
         self.hidden_act = config.hidden_act
         self.n_latents = config.resampler_n_latents
-        self.n_x_attn_layers = 1
+        self.n_cross_attn_layers = config.n_cross_attn_layers
         self.depth = config.resampler_depth
-        self.n_self_attn_layers = self.depth - self.n_x_attn_layers
+        self.n_self_attn_layers = self.depth - self.n_cross_attn_layers
         self.rms_norm_eps = config.rms_norm_eps
         self.concat_latents_context = config.concat_latents_context
 
@@ -665,7 +667,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
             x_attn_config.is_cross_attn = True
             self.layers = [
                 Idefics2PerceiverLayer(x_attn_config, idx)
-                for idx in range(self.n_x_attn_layers)
+                for idx in range(self.n_cross_attn_layers)
             ]
 
             config.is_cross_attn = False
@@ -811,7 +813,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
                 )
                 compressed_context = layer_outputs[0]
         else:
-            for encoder in self.layers[: self.n_x_attn_layers]:
+            for encoder in self.layers[: self.n_cross_attn_layers]:
                 # print("Using cross-attention for resampler")
                 # print(f"position_ids: {position_ids}")
                 # print(f"cu_seq_lens_q: {cu_seq_lens_q}")
@@ -838,7 +840,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
                 self.n_latents, device=position_ids.device, dtype=torch.int32
             ).repeat(1, bsz)
 
-            for processor in self.layers[self.n_x_attn_layers :]:
+            for processor in self.layers[self.n_cross_attn_layers :]:
                 cu_seq_lens_k = cu_seq_lens_q
                 max_length_k = max_length_q
                 # print(f"Using self-attention for resampler")

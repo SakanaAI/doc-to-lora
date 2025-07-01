@@ -42,6 +42,7 @@ class AggregatorConfig:
 
     # perceiver
     concat_latents_context: bool
+    n_cross_attn_layers: int  # number of cross-attention layers
     num_self_attends_per_block: int  # = 16
     decoder_depth: int  # 1 = only cross-attention
     num_latent_factor: int = 8
@@ -115,6 +116,7 @@ class Perceiver(nn.Module):
             input_size=feature_size,
             # the first layer is xattn
             resampler_depth=kwargs["num_self_attends_per_block"] + 1,
+            n_cross_attn_layers=kwargs["n_cross_attn_layers"],
             # resampler_n_latents=n_output_queries * num_latent_factor,
             resampler_n_latents=n_base_queries,
             intermediate_size_factor=4,
