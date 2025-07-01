@@ -683,6 +683,19 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
             raise ValueError("either position_ids or attention_mask is required")
 
         for perceiver_layer in self.layers:
+            print(f"compressed_context.shape= {compressed_context.shape}")
+            print(f"context.shape= {context.shape}")
+            print(
+                f"position_ids.shape= {position_ids.shape if position_ids is not None else None}"
+            )
+            print(
+                f"cu_seq_lens_q.shape= {cu_seq_lens_q.shape if cu_seq_lens_q is not None else None}"
+            )
+            print(
+                f"cu_seq_lens_k.shape= {cu_seq_lens_k.shape if cu_seq_lens_k is not None else None}"
+            )
+            print(f"max_length_q= {max_length_q}")
+            print(f"max_length_k= {max_length_k}")
             layer_outputs = perceiver_layer(
                 compressed_context,
                 context,
@@ -775,28 +788,65 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2",
     )
     model = Idefics2Perceiver(config, decoder_config).to("cuda").to(torch.bfloat16)
-    print(model)
+    # print(model)
+    # inp = torch.rand(1, 192 + 37, 1234, dtype=torch.bfloat16, device="cuda")
+    # inp = torch.cat([inp, inp], dim=1)
+    # # mask = torch.ones(1, 128, dtype=torch.bfloat16, device="cuda")
+    # # mask[..., -1] = 0
+    # # print(mask)
+    # out = model(
+    #     inp,
+    #     # attention_mask=mask,
+    #     position_ids=torch.cat(
+    #         [
+    #             torch.arange(128, device="cuda"),
+    #             torch.arange(64, device="cuda"),
+    #             torch.arange(37, device="cuda"),
+    #             torch.arange(128, device="cuda"),
+    #             torch.arange(64, device="cuda"),
+    #             torch.arange(37, device="cuda"),
+    #         ],
+    #         dim=-1,
+    #     ).unsqueeze(0),
+    #     # position_ids=torch.arange(128, device="cuda"),
+    # )
+    # print(out)
+    # print(out.shape)
+    # print(model.encoder.latents.grad)
+    # print(model.decoder.latents.grad)
+    # out.mean().backward()
+    # print(model.encoder.latents.grad)
+    # print(model.decoder.latents.grad)
+    # breakpoint()
+
     inp = torch.rand(1, 192 + 37, 1234, dtype=torch.bfloat16, device="cuda")
     inp = torch.cat([inp, inp], dim=1)
+    inp = inp.unsqueeze(1)
     # mask = torch.ones(1, 128, dtype=torch.bfloat16, device="cuda")
     # mask[..., -1] = 0
     # print(mask)
-    out = model(
-        inp,
-        # attention_mask=mask,
-        position_ids=torch.cat(
-            [
-                torch.arange(128, device="cuda"),
-                torch.arange(64, device="cuda"),
-                torch.arange(37, device="cuda"),
-                torch.arange(128, device="cuda"),
-                torch.arange(64, device="cuda"),
-                torch.arange(37, device="cuda"),
-            ],
-            dim=-1,
-        ).unsqueeze(0),
-        # position_ids=torch.arange(128, device="cuda"),
+    out = torch.stack(
+        [
+            model(
+                inp[:, i],
+                # attention_mask=mask,
+                position_ids=torch.cat(
+                    [
+                        torch.arange(128, device="cuda"),
+                        torch.arange(64, device="cuda"),
+                        torch.arange(37, device="cuda"),
+                        torch.arange(128, device="cuda"),
+                        torch.arange(64, device="cuda"),
+                        torch.arange(37, device="cuda"),
+                    ],
+                    dim=-1,
+                ).unsqueeze(0),
+                # position_ids=torch.arange(128, device="cuda"),
+            )
+            for i in range(inp.shape[1])
+        ]
     )
+
     print(out)
     print(out.shape)
     print(model.encoder.latents.grad)

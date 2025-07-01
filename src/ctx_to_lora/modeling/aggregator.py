@@ -2,10 +2,10 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-import torch
-from einops import rearrange, repeat, unpack
+from einops import rearrange, unpack, repeat
 from jaxtyping import Float, Integer
 from torch import Tensor, nn
+import torch
 from transformers import (
     PretrainedConfig,
     PreTrainedModel,
@@ -104,6 +104,7 @@ class Perceiver(nn.Module):
         self.per_rank_gen = per_rank_gen
         self.r = lora_r if self.per_rank_gen else 1
         n_output_queries = num_layers * (num_modules * self.r + num_extra_modules)
+        self.tot_output_size = n_output_queries
         self.layer_to_layer = layer_to_layer_ctx_encoder
         if self.layer_to_layer:
             n_output_queries = num_modules * self.r + num_extra_modules
@@ -126,13 +127,6 @@ class Perceiver(nn.Module):
             attn_implementation="flash_attention_2",
         )
         self.perceiver = Idefics2Perceiver(self.config, self.decoder_config)
-        if self.layer_to_layer:
-            # doesn't work
-            self.perceiver.forward = torch.vmap(
-                self.perceiver.forward,
-                in_dims=(1, None, None),
-                out_dims=1,
-            )
 
     def forward(
         self,
@@ -172,26 +166,31 @@ class Perceiver(nn.Module):
             if ctx_attn_mask is not None:
                 ctx_attn_mask = repeat(
                     ctx_attn_mask,
-                    "bs seq_len -> bs (num_layers seq_len)",
+                    "bs seq_len -> (bs num_layers) seq_len",
+                    num_layers=self.num_layers,
                 )
             ctx_position_ids = repeat(
                 ctx_position_ids,
                 "bs seq_len -> bs (num_layers seq_len)",
+                num_layers=self.num_layers,
             )
 
+        print(f"ctx_features shape: {ctx_features.shape}")
+        print(
+            f"ctx_attn_mask shape: {ctx_attn_mask.shape if ctx_attn_mask is not None else None}"
+        )
+        print(
+            f"ctx_position_ids shape: {ctx_position_ids.shape if ctx_position_ids is not None else None}"
+        )
         x = self.perceiver(ctx_features, ctx_attn_mask, ctx_position_ids)
 
         if self.layer_to_layer:
+            per_layer_size = self.num_modules * self.r + self.num_extra_modules
             x = rearrange(
                 x,
-                (
-                    "(bs num_layers) (n_modules r) seq_len d -> "
-                    "bs (num_layers n_modules r) d"
-                ),
-                bs=1,
+                ("(bs num_layers) (per_layer_sz) d -> bs (num_layers per_layer_sz) d"),
                 num_layers=self.num_layers,
-                n_modules=self.num_modules,
-                r=self.r,
+                per_layer_sz=per_layer_size,
             )
         lora_x, extra_x = unpack(
             x,
@@ -321,6 +320,9 @@ if __name__ == "__main__":
     lora_r = 8
     batch_size = 2
     seq_len = 100
+    device = "cuda"
+
+    torch.set_default_dtype(torch.bfloat16)
 
     # Create Perceiver instance
     perceiver = Perceiver(
@@ -336,13 +338,13 @@ if __name__ == "__main__":
         n_base_queries=208,
         num_self_attends_per_block=16,
         decoder_depth=1,
-    )
+    ).to(device)
 
     # Test with 3D input (standard case)
     print("Testing with 3D input...")
-    ctx_features = torch.randn(batch_size, seq_len, feature_size)
-    ctx_attn_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
-    ctx_position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
+    ctx_features = torch.randn(1, batch_size * seq_len, feature_size).to(device)
+    ctx_attn_mask = None  # torch.ones(batch_size, seq_len, dtype=torch.long).to(device)
+    ctx_position_ids = torch.arange(seq_len).repeat(batch_size).unsqueeze(0).to(device)
 
     with torch.no_grad():
         lora_x, extra_x = perceiver(ctx_features, ctx_attn_mask, ctx_position_ids)
@@ -371,10 +373,12 @@ if __name__ == "__main__":
         n_base_queries=208,
         num_self_attends_per_block=16,
         decoder_depth=1,
-    )
+    ).to(device)
 
     # Test with 4D input for layer-to-layer
-    ctx_features_4d = torch.randn(batch_size, num_layers, seq_len, feature_size)
+    ctx_features_4d = torch.randn(1, num_layers, batch_size * seq_len, feature_size).to(
+        device
+    )
 
     with torch.no_grad():
         lora_x_l2l, extra_x_l2l = perceiver_l2l(
