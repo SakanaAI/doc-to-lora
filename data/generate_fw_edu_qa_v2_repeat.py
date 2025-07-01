@@ -8,7 +8,7 @@ from datasets import load_dataset
 from vllm import LLM, SamplingParams
 
 STOP_STRINGS = {
-    "google/gemma-2-2b-it": ["<eos>", "<end_of_turn>"],
+    "google/gemma-3-12b-it": ["<eos>", "<end_of_turn>"],
 }
 
 SYSTEM_TEMPLATE = (

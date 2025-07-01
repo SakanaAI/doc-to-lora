@@ -138,6 +138,8 @@ def self_generate(
     temp = 0.0
     if "_temp_" in ds_name:
         temp = float(ds_name.split("_temp_")[-1].split("/")[0])
+    print(f"Processing dataset: {ds_name}, split: {split}")
+    print(f"Using temperature: {temp}")
     kwargs = dict(
         ds_name=ds_name,
         split=split,

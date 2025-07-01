@@ -150,9 +150,9 @@ DS_KWARGS = {
         train=dict(
             path="parquet",
             data_files=glob(
-                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_0.parquet"
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/000*level_0.parquet"
             ),
-            split="train[:400000]",
+            split="train",
         ),
     ),
     "fw_qa_v2_2k_len_level_0": dict(
@@ -187,9 +187,9 @@ DS_KWARGS = {
         train=dict(
             path="parquet",
             data_files=glob(
-                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_1.parquet"
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/000*level_1.parquet"
             ),
-            split="train[:200000]",
+            split="train",
         ),
     ),
     "fw_qa_v2_2k_len_level_2": dict(
@@ -210,9 +210,9 @@ DS_KWARGS = {
         train=dict(
             path="parquet",
             data_files=glob(
-                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_2.parquet"
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/000*level_2.parquet"
             ),
-            split="train[:100000]",
+            split="train",
         ),
     ),
     "fw_qa_v2_2k_len_level_3": dict(
@@ -233,9 +233,9 @@ DS_KWARGS = {
         train=dict(
             path="parquet",
             data_files=glob(
-                "data/raw_datasets/fw_qa_v2/min_0_to_2000/013*level_3.parquet"
+                "data/raw_datasets/fw_qa_v2/min_0_to_2000/000*level_3.parquet"
             ),
-            split="train[:50000]",
+            split="train",
         ),
     ),
     # "fw_qa_3_small": dict(
