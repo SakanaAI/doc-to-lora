@@ -41,15 +41,18 @@ from ctx_to_lora.hooks import (
 from ctx_to_lora.model_loading import (
     get_model,
 )
-from ctx_to_lora.modeling.aggregator import AG, AggregatorConfig, get_aggregator_config
-from ctx_to_lora.modeling.ctx_encoder import EarlyExit
+from ctx_to_lora.modeling.aggregator import (
+    AGGREGATOR_CLS,
+    AggregatorConfig,
+    get_aggregator_config,
+)
+from ctx_to_lora.modeling.ctx_encoder import CTX_ENCODER_CLS, CTX_ENCODER_TYPE
 from ctx_to_lora.modeling.lora_layer import (
     apply_lora_to_layers,
     lora_forward,
     lora_forward_packed,
 )
 from ctx_to_lora.utils import (
-    get_base_model,
     get_layers,
     get_num_layers,
     get_peft_in_out_features,
@@ -84,6 +87,7 @@ def get_hypernet_config(
     ctx_encoder_model_config: PretrainedConfig,
     hypernet_args: HypernetArguments,
     aggregator_args: AggregatorArguments,
+    ctx_encoder_args: CtxEncoderArguments,
 ):
     num_modules = 0
     lora_config = getattr(model, "peft_config", None)
@@ -101,6 +105,7 @@ def get_hypernet_config(
         aggregator_config=get_aggregator_config(
             model,
             ctx_encoder_model_config,
+            ctx_encoder_args.ctx_encoder_type == CTX_ENCODER_TYPE.PER_LAYER_ACTIVATIONS,
             hypernet_args.latent_size,
             num_modules,
             num_extra_modules,
@@ -222,7 +227,9 @@ class HyperLoRA(nn.Module):
 
     def _init_model(self):
         self.agg_config = self.config.aggregator_config
-        self.aggregator = AG[self.agg_config.aggregator_type](**vars(self.agg_config))
+        self.aggregator = AGGREGATOR_CLS[self.agg_config.aggregator_type](
+            **vars(self.agg_config)
+        )
 
         self.lora_config = self.config.lora_config
 
@@ -546,7 +553,7 @@ class HyperLoRA(nn.Module):
         attn_mask: Integer[Tensor, "bs seq_len"] | None = None,
         position_ids: Integer[Tensor, "bs seq_len"] | None = None,
     ):
-        # [bs, n_layers, n_total_modules, feature_dim]
+        # [bs, n_layers x n_total_modules x r, feature_dim]
         lora_emb, extra_emb = self.aggregator(features, attn_mask, position_ids)
         # lora_emb, extra_emb = unpack(
         #     emb,
@@ -673,8 +680,8 @@ class ModulatedPretrainedModel(nn.Module):
             requires_grad=False,
             use_flash_attn=base_model_attn_impl == "flash_attention_2",
         )
-        self.ctx_encoder = EarlyExit(
-            get_base_model(encoder_model), self.ctx_encoder_args.layer_idx
+        self.ctx_encoder = CTX_ENCODER_CLS[self.ctx_encoder_args.ctx_encoder_type](
+            encoder_model, self.ctx_encoder_args
         )
 
     # delegate to base_model
