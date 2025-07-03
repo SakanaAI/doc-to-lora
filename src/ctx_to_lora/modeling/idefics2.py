@@ -779,7 +779,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
                     )
                     new_position_ids[new_cur_idx : new_cur_idx + n_new_ids] = new_ids
                     cur_idx = idx
-                new_cur_idx = cur_idx + self.n_latents * (i + 1)
+                new_cur_idx = cur_idx + self.n_latents * (bsz - 1)
                 new_position_ids[new_cur_idx:] = last_pos_ids
                 position_ids = new_position_ids
 
@@ -836,13 +836,14 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
                 compressed_context = layer_outputs[0]
 
-            position_ids = torch.arange(
-                self.n_latents, device=position_ids.device, dtype=torch.int32
-            ).repeat(1, bsz)
-
-            for processor in self.layers[self.n_cross_attn_layers :]:
+            if self.n_self_attn_layers:
+                position_ids = torch.arange(
+                    self.n_latents, device=position_ids.device, dtype=torch.int32
+                ).repeat(1, bsz)
                 cu_seq_lens_k = cu_seq_lens_q
                 max_length_k = max_length_q
+
+            for processor in self.layers[self.n_cross_attn_layers :]:
                 # print(f"Using self-attention for resampler")
                 # print(f"updated position_ids: {position_ids}")
                 # print(f"updated cu_seq_lens_k: {cu_seq_lens_k}")
