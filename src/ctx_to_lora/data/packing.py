@@ -230,12 +230,12 @@ def pack_batch(
         f"# Packed samples: {len(idx_pairs)}\n"
         f"Avg inp packing efficiency: {avg_inp_packing_efficiency:.3f}\n"
         f"Avg ctx packing efficiency: {avg_ctx_packing_efficiency:.3f}\n\n"
-        f"Input IDs length stats:\n\n"
+        f"Input IDs length stats:\n"
         f"  Avg: {np.mean(packed_inp_lens_arr):.1f}, Std: {np.std(packed_inp_lens_arr):.1f}, "
         f"Min: {np.min(packed_inp_lens_arr)}, Max: {np.max(packed_inp_lens_arr)}\n"
-        f"Context IDs length stats:\n\n"
+        f"Context IDs length stats:\n"
         f"  Avg: {np.mean(packed_ctx_lens_arr):.1f}, Std: {np.std(packed_ctx_lens_arr):.1f}, "
-        f"Min: {np.min(packed_ctx_lens_arr)}, Max: {np.max(packed_ctx_lens_arr)}"
+        f"Min: {np.min(packed_ctx_lens_arr)}, Max: {np.max(packed_ctx_lens_arr)}\n\n"
     )
 
     return packed_batch
@@ -246,8 +246,6 @@ if __name__ == "__main__":
 
     from ctx_to_lora.data.processing import get_tokenized_dataset
     from ctx_to_lora.model_loading import get_model_and_tokenizer
-
-    disable_caching()
 
     setup_logging("tmp/packing_debug.log", debug=True)
     logger.info("Starting packing script...")
@@ -278,6 +276,8 @@ if __name__ == "__main__":
     )
     # ds.set_format("torch")
     print(ds)
+    disable_caching()
+
     packed_ds = ds.map(
         pack_batch,
         fn_kwargs={
@@ -287,7 +287,7 @@ if __name__ == "__main__":
         batched=True,
         batch_size=100_000,
         remove_columns=ds.column_names,
-        num_proc=8,
+        num_proc=4,
     )
     print(packed_ds)
 

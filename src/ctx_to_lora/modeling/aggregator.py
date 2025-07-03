@@ -74,7 +74,6 @@ def get_aggregator_config(
         lora_r=lora_r,
         per_rank_gen=per_rank_gen,
         layer_to_layer_ctx_encoder=layer_to_layer_ctx_encoder,
-        n_ctx_model_layers=ctx_encoder_model_config.num_hidden_layers,
         **vars(aggregator_args),
     )
 
