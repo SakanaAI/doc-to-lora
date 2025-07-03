@@ -579,6 +579,7 @@ def load_and_process_dataset(
 def get_tokenized_dataset(
     ds_name: str,
     split: str,
+    max_qas_len: int,
     base_model_max_len: int,
     tokenizer: PreTrainedTokenizerBase,
     tokenizer_kwargs: dict[str, Any],
@@ -612,6 +613,7 @@ def get_tokenized_dataset(
         streaming=streaming,
     )
     tokenize_kwargs = dict(
+        max_qas_len=max_qas_len,
         base_model_max_len=base_model_max_len,
         tokenizer_kwargs=tokenizer_kwargs,
         ctx_model_max_len=ctx_model_max_len,
@@ -627,9 +629,11 @@ def get_tokenized_dataset(
 
     all_kwargs = {**load_and_process_kwargs, **tokenize_kwargs}
     kwargs_str = json.dumps(all_kwargs)
-    kwargs_str += repr(tokenizer) + repr(ctx_tokenizer)
+    kwargs_str += tokenizer.name_or_path + ctx_tokenizer.name_or_path
     logger.debug(f"Tokenizing dataset with kwargs: {kwargs_str}")
+    kwargs_str += repr(tokenizer) + repr(ctx_tokenizer)
     ds_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()
+    logger.debug(f"Dataset hash: {ds_hash}")
     ds_path = f"{TRANSFORMED_DATA_DIR}/{ds_hash}"
 
     if path.exists(ds_path) and split == "train" and is_caching_enabled():
@@ -651,6 +655,7 @@ def get_tokenized_dataset(
         num_proc=num_proc,
         **tokenize_kwargs,
     )
+    tokenized_ds = tokenized_ds.shuffle()
     if split == "train" and is_caching_enabled():
         tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
         # force reload from disk for fingerprint consistency
@@ -659,6 +664,7 @@ def get_tokenized_dataset(
 
 
 def construct_and_tokenize_ctx_qa(
+    max_qas_len,
     base_model_max_len,
     tokenizer,
     tokenizer_kwargs,
@@ -792,6 +798,14 @@ def construct_and_tokenize_ctx_qa(
                 unpack_data,
                 num_proc=num_proc,
                 remove_columns=["data", "context"],
+            )
+
+            tokenized_ds = tokenized_ds.map(
+                split_too_long_qas,
+                fn_kwargs={"max_qas_len": max_qas_len},
+                batched=True,
+                batch_size=100_000,
+                num_proc=num_proc,
             )
         else:
             cols_to_remove = ["data", "context"]
@@ -970,6 +984,69 @@ def convert_ctx_prompt_response_to_messages(
         )
 
     return dict(data=data)
+
+
+def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
+    # samples keys: "input_ids", "attention_mask", "labels", "ctx_ids", "ctx_attn_mask"
+    # split the qas into multiple samples if they are too long
+    # e.g., if max_qas_len = 512, and qas is 1024 tokens long,
+    # we split it such that each sample has at most 512 tokens
+    # and the ctx_ids and ctx_attn_mask are the same for all samples
+    input_ids = samples["input_ids"]
+    attention_mask = samples["attention_mask"]
+    labels = samples["labels"]
+    ctx_ids = samples["ctx_ids"]
+    ctx_attn_mask = samples["ctx_attn_mask"]
+    out = {k: list() for k in samples}
+    longest_old_qas_len = 0
+    longest_new_qas_len = 0
+    for i in range(len(input_ids)):
+        tot_inp_len = sum([len(x) for x in input_ids[i]])
+        longest_old_qas_len = max(longest_old_qas_len, tot_inp_len)
+        if tot_inp_len <= max_qas_len:
+            # total length of the qas are shorter than max_qas_len
+            # no need to split
+            for k in samples:
+                out[k].append(samples[k][i])
+            continue
+
+        new_qas_len = 0
+        new_input_ids = []
+        new_attn_mask = []
+        new_labels = []
+        for inp_ids, attn_mask, label in zip(
+            input_ids[i], attention_mask[i], labels[i]
+        ):
+            if len(inp_ids) > max_qas_len:
+                # skip
+                continue
+            if new_qas_len + len(inp_ids) <= max_qas_len:
+                new_qas_len += len(inp_ids)
+                new_input_ids.append(inp_ids)
+                new_attn_mask.append(attn_mask)
+                new_labels.append(label)
+            else:
+                out["input_ids"].append(new_input_ids)
+                out["attention_mask"].append(new_attn_mask)
+                out["labels"].append(new_labels)
+                out["ctx_ids"].append(ctx_ids[i])
+                out["ctx_attn_mask"].append(ctx_attn_mask[i])
+                longest_new_qas_len = max(longest_new_qas_len, new_qas_len)
+                new_qas_len = len(inp_ids)
+                new_input_ids = [inp_ids]
+                new_attn_mask = [attn_mask]
+                new_labels = [label]
+        if new_input_ids:
+            longest_new_qas_len = max(longest_new_qas_len, new_qas_len)
+            out["input_ids"].append(new_input_ids)
+            out["attention_mask"].append(new_attn_mask)
+            out["labels"].append(new_labels)
+            out["ctx_ids"].append(ctx_ids[i])
+            out["ctx_attn_mask"].append(ctx_attn_mask[i])
+    logger.debug(f"Longest old qas len: {longest_old_qas_len}")
+    logger.debug(f"Longest new qas len: {longest_new_qas_len}")
+
+    return out
 
 
 def unpack_data(sample):
@@ -1239,8 +1316,7 @@ def pack(
     max_packed_size: int,
     num_proc: int = 0,
 ):
-    # TODO: handle the new data format
-    # this would generate a giant cache file for the already concat'd + packed ds
+    # this would generate another cache file for the already concat'd + packed ds
     kwargs = dict(
         max_packed_inp_len=max_packed_inp_len,
         max_packed_ctx_len=max_packed_ctx_len,

@@ -46,6 +46,9 @@ class AggregatorConfig:
     lora_r: int = 8
     per_rank_gen: bool = False
 
+    layer_to_layer_ctx_encoder: bool = False
+    n_base_queries: int = 208
+
 
 def get_aggregator_config(
     model: PreTrainedModel,

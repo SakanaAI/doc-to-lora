@@ -315,6 +315,13 @@ class CtxTrainingArguments:
         default=False,
         metadata={"help": "Whether to use sequence packing."},
     )
+    max_qas_len: int = field(
+        default=2**11,
+        metadata={
+            "help": "Maximum question-answering token length of each sample for training. "
+            "QA pairs that are longer than this value will be split up into multiple samples."
+        },
+    )
     max_packed_inp_len: int | None = field(
         default=2**14,
         metadata={"help": "Maximum packed input length for training."},
