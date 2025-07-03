@@ -435,14 +435,14 @@ class CtxEncoderArguments:
         default=None,
         metadata={"help": "Context encoder model name or path."},
     )
-    ctx_encoder_type: Literal[
-        "embedding_only", "per_layer_activations", "early_exit"
-    ] = field(
-        default="early_exit",
-        metadata={
-            "help": "Context encoder type. "
-            "Options: 'embedding_only', 'per_layer_activations', 'early_exit'."
-        },
+    ctx_encoder_type: Literal["embed_only", "per_layer_activations", "early_exit"] = (
+        field(
+            default="early_exit",
+            metadata={
+                "help": "Context encoder type. "
+                "Options: 'embed_only', 'per_layer_activations', 'early_exit'."
+            },
+        )
     )
     # used only with `early_exit` type
     layer_idx: int | None = field(
