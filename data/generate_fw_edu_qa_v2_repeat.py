@@ -108,14 +108,18 @@ def postprocess_qa_pairs(res_txt: str):
         has_left_over = n_gen_pairs < len(questions) or n_gen_pairs < len(answers)
         for i in range(n_gen_pairs):
             response = answers[i].strip()
+            question = questions[i].strip()
+            if not response or not question:
+                print(f"Skipping empty question or answer at index {i}")
+                continue
             if (not has_left_over) and (i == n_gen_pairs - 1):
                 response, skip = check_should_skip(response, vllm_model)
                 if skip:
                     print(f"Skipping due to missing stop string")
                     n_skips += 1
                     continue
-            out_q.append(questions[i].strip())
-            out_a.append(answers[i].strip())
+            out_q.append(question.strip())
+            out_a.append(response.strip())
     print(f"Skipped {n_skips} responses due to missing stop strings")
 
     return out_q, out_a

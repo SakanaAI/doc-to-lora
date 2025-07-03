@@ -237,7 +237,7 @@ def self_generate(
             print("=" * 80)
 
     print(f"Generated {len(samples)} samples")
-    random.shuffle(samples)
+    # random.shuffle(samples)
 
     # Save results
     if not args.debug:
