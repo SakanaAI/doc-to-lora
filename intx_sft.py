@@ -199,7 +199,11 @@ def main():
         logger.info("Using HyperLoRA")
         if not ctx_args.from_pretrained_checkpoint:
             hypernet_config = get_hypernet_config(
-                model, ctx_encoder_model_config, hypernet_args, aggregator_args
+                model,
+                ctx_encoder_model_config,
+                hypernet_args,
+                aggregator_args,
+                ctx_encoder_args,
             )
             if ctx_encoder_args.layer_idx is None:
                 ctx_encoder_args.layer_idx = (

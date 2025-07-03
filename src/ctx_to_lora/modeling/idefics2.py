@@ -13,6 +13,7 @@
 # limitations under the License.
 """PyTorch Idefics2 model."""
 
+from copy import deepcopy
 import math
 
 import torch
@@ -78,9 +79,15 @@ class Idefics2PerceiverConfig(PretrainedConfig):
         resampler_head_dim=96,
         num_key_value_heads=4,
         attention_dropout=0.0,
+        is_cross_attn=True,
+        n_cross_attn_layers=1,
+        concat_latents_context=False,
         **kwargs,
     ):
         # for mlp
+        self.concat_latents_context = concat_latents_context
+        self.is_cross_attn = is_cross_attn
+        self.n_cross_attn_layers = n_cross_attn_layers
         self.input_size = input_size
         self.intermediate_size_factor = intermediate_size_factor
         # for perceiver
@@ -157,9 +164,9 @@ class Idefics2PreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module):
         std = (
-            self.config.architecturesinitializer_range
+            self.config.initializer_range
             if hasattr(self.config, "initializer_range")
-            else self.config.initializer_range
+            else 0.02
         )
 
         if hasattr(module, "class_embedding"):
@@ -353,7 +360,9 @@ class Idefics2PerceiverFlashAttention2(Idefics2PerceiverAttention):
     def forward(
         self,
         latents: torch.Tensor,
-        context: torch.Tensor,
+        is_cross_attn: bool,
+        concat_latents_context: bool,
+        context: torch.Tensor | None = None,
         attention_mask: torch.LongTensor | None = None,
         position_ids: torch.LongTensor | None = None,
         past_key_value: Cache | None = None,
@@ -363,25 +372,57 @@ class Idefics2PerceiverFlashAttention2(Idefics2PerceiverAttention):
     ) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
         bsz, q_len, _ = latents.size()
         # kv_seq_len = q_len + context.size()[1]
-        kv_seq_len = context.size()[1]
-
-        # Query, Key, Value Projections --> Note that in Flamingo, latents are *concatenated* with context prior to attn!
-        #   Note: This results in queries w/ `seq = n_latents`, and keys, values with `seq = len(context) + n_latents`
+        # kv_seq_len = context.size()[1]
         query_states = self.q_proj(latents)
-        # key_states = self.k_proj(torch.cat([context, latents], dim=-2))
-        # value_states = self.v_proj(torch.cat([context, latents], dim=-2))
-        key_states = self.k_proj(context)
-        value_states = self.v_proj(context)
+        if is_cross_attn:
+            kv_inp = context
+            if concat_latents_context:
+                # Query, Key, Value Projections --> Note that in Flamingo, latents are *concatenated* with context prior to attn!
+                # Note: This results in queries w/ `seq = n_latents`, and keys, values with `seq = len(context) + n_latents`
+                if context.shape[0] != latents.shape[0]:
+                    # context: [1, tot_len, dim]
+                    # latents: [bs, n_latents, dim]
+                    # slice context sample by sample and concat with latents
+                    old_cu_seq_lens_k = kwargs.pop("old_cu_seq_lens_k")
+                    cu_seq_lens_k = kwargs["cu_seq_lens_k"]
+                    kv_inp = torch.empty(
+                        1,
+                        cu_seq_lens_k[-1],
+                        latents.shape[2],
+                        dtype=context.dtype,
+                        device=context.device,
+                    )
+                    # Compute context lengths and indices
+                    ctx_lens = old_cu_seq_lens_k[1:] - old_cu_seq_lens_k[:-1]
+                    ctx_start = old_cu_seq_lens_k[:-1]
+                    ctx_end = old_cu_seq_lens_k[1:]
+                    kv_start = cu_seq_lens_k[:-1]
+                    kv_end = cu_seq_lens_k[1:]
+                    # Fill context slices
+                    for i in range(bsz):
+                        kv_inp[0, kv_start[i] : kv_start[i] + ctx_lens[i]] = context[
+                            0, ctx_start[i] : ctx_end[i]
+                        ]
+                        kv_inp[0, kv_start[i] + ctx_lens[i] : kv_end[i]] = latents[i]
+                else:
+                    kv_inp = torch.cat([context, latents], dim=-2)
+
+        else:
+            kv_inp = latents
+
+        key_states = self.k_proj(kv_inp)
+        value_states = self.v_proj(kv_inp)
 
         # query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim)
         query_states = query_states.view(
             *latents.shape[:2], self.num_heads, self.head_dim
         )
+
         key_states = key_states.view(
-            *context.shape[:2], self.num_key_value_heads, self.head_dim
+            *kv_inp.shape[:2], self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
         value_states = value_states.view(
-            *context.shape[:2], self.num_key_value_heads, self.head_dim
+            *kv_inp.shape[:2], self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
 
         # kv_seq_len = key_states.shape[-2]
@@ -479,7 +520,7 @@ class Idefics2PerceiverFlashAttention2(Idefics2PerceiverAttention):
 
 
 IDEFICS2_PERCEIVER_ATTENTION_CLASSES = {
-    "eager": Idefics2PerceiverAttention,
+    # "eager": Idefics2PerceiverAttention,
     "flash_attention_2": Idefics2PerceiverFlashAttention2,
 }
 
@@ -491,17 +532,25 @@ class Idefics2PerceiverLayer(nn.Module):
         self.n_latents = config.resampler_n_latents
         self.depth = config.resampler_depth
         self.rms_norm_eps = config.rms_norm_eps
+        self.is_cross_attn = config.is_cross_attn
+        self.concat_latents_context = config.concat_latents_context
 
         self.input_latents_norm = Idefics2RMSNorm(
             self.hidden_size, eps=self.rms_norm_eps
         )
-        self.input_context_norm = Idefics2RMSNorm(
-            self.hidden_size, eps=self.rms_norm_eps
+        self.input_context_norm = (
+            Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
+            if self.is_cross_attn
+            else torch.nn.Identity()
         )
         self.self_attn = IDEFICS2_PERCEIVER_ATTENTION_CLASSES[
             config._attn_implementation
         ](config, layer_idx=layer_idx)
         self.post_attention_layernorm = Idefics2RMSNorm(
+            self.hidden_size, eps=self.rms_norm_eps
+        )
+        self.pre_ff_layernorm = Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
+        self.post_ff_layernorm = Idefics2RMSNorm(
             self.hidden_size, eps=self.rms_norm_eps
         )
         self.mlp = Idefics2MLP(
@@ -514,7 +563,7 @@ class Idefics2PerceiverLayer(nn.Module):
     def forward(
         self,
         latents: torch.Tensor,
-        context: torch.Tensor,
+        context: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.LongTensor | None = None,
         past_key_value: tuple[torch.Tensor] | None = None,
@@ -543,16 +592,21 @@ class Idefics2PerceiverLayer(nn.Module):
 
         latents, self_attn_weights, present_key_value = self.self_attn(
             latents=latents,
+            is_cross_attn=self.is_cross_attn,
+            concat_latents_context=self.concat_latents_context,
             context=context,
             attention_mask=attention_mask,
             position_ids=position_ids,
             **kwargs,
         )
+        latents = self.post_attention_layernorm(latents)
         latents = residual + latents
         residual = latents
 
-        latents = self.post_attention_layernorm(latents)
+        # latents = self.post_attention_layernorm(latents)
+        latents = self.pre_ff_layernorm(latents)
         latents = self.mlp(latents)
+        latents = self.post_ff_layernorm(latents)
         latents = residual + latents
 
         outputs = (latents,)
@@ -595,16 +649,34 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         self.hidden_size = config.hidden_size
         self.hidden_act = config.hidden_act
         self.n_latents = config.resampler_n_latents
+        self.n_cross_attn_layers = config.n_cross_attn_layers
         self.depth = config.resampler_depth
+        self.n_self_attn_layers = self.depth - self.n_cross_attn_layers
         self.rms_norm_eps = config.rms_norm_eps
+        self.concat_latents_context = config.concat_latents_context
 
         # Create Latents for Perceiver
         self.latents = nn.Parameter(torch.randn(self.n_latents, self.hidden_size))
 
         # Create Transformer Blocks
-        self.layers = nn.ModuleList(
-            [Idefics2PerceiverLayer(config, idx) for idx in range(self.depth)]
-        )
+        if not self.concat_latents_context:
+            x_attn_config = deepcopy(config)
+            x_attn_config.is_cross_attn = True
+            self.layers = [
+                Idefics2PerceiverLayer(x_attn_config, idx)
+                for idx in range(self.n_cross_attn_layers)
+            ]
+
+            config.is_cross_attn = False
+            self.layers += [
+                Idefics2PerceiverLayer(config, idx)
+                for idx in range(self.n_self_attn_layers)
+            ]
+            self.layers = nn.ModuleList(self.layers)
+        else:
+            self.layers = nn.ModuleList(
+                [Idefics2PerceiverLayer(config, idx) for idx in range(self.depth)]
+            )
         self.norm = Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
 
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
@@ -679,25 +751,117 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
             )
 
             max_length_k = position_ids.max() + 1
+            if self.concat_latents_context:
+                last_pos_ids = torch.arange(
+                    position_ids[-1] + 1 + self.n_latents,
+                    device=position_ids.device,
+                    dtype=position_ids.dtype,
+                )
+                new_position_ids = torch.empty(
+                    cu_seq_lens_k[-1] + self.n_latents * bsz,
+                    dtype=position_ids.dtype,
+                    device=position_ids.device,
+                )
+
+                cur_idx = 0
+                for i, idx in enumerate(indices[position_ids == 0][1:]):
+                    l = idx - cur_idx
+
+                    new_cur_idx = cur_idx + self.n_latents * i
+                    n_new_ids = l + self.n_latents
+                    new_ids = torch.arange(
+                        n_new_ids,
+                        device=position_ids.device,
+                        dtype=position_ids.dtype,
+                    )
+                    new_position_ids[new_cur_idx : new_cur_idx + n_new_ids] = new_ids
+                    cur_idx = idx
+                new_cur_idx = cur_idx + self.n_latents * (bsz - 1)
+                new_position_ids[new_cur_idx:] = last_pos_ids
+                position_ids = new_position_ids
+
         else:
             raise ValueError("either position_ids or attention_mask is required")
 
-        for perceiver_layer in self.layers:
-            layer_outputs = perceiver_layer(
-                compressed_context,
-                context,
-                attention_mask=None,
-                position_ids=position_ids,
-                past_key_value=None,
-                output_attentions=False,
-                use_cache=False,
-                cu_seq_lens_q=cu_seq_lens_q,
-                cu_seq_lens_k=cu_seq_lens_k,
-                max_length_q=max_length_q,
-                max_length_k=max_length_k,
-            )
+        if self.concat_latents_context:
+            old_cu_seq_lens_k = cu_seq_lens_k
+            cu_seq_lens_k = cu_seq_lens_k + cu_seq_lens_q
+            max_length_k = max_length_q + max_length_k
+            # print("Using concat latents + context for resampler")
+            # print(f"updated position_ids: {position_ids}")
+            # print(f"updated cu_seq_lens_k: {cu_seq_lens_k}")
+            # print(f"updated max_length_k: {max_length_k}")
+            # print(f"cu_seq_lens_q: {cu_seq_lens_q}")
+            # print(f"max_length_q: {max_length_q}")
+            for layer in self.layers:
+                layer_outputs = layer(
+                    compressed_context,
+                    context,
+                    attention_mask=None,
+                    position_ids=position_ids,
+                    past_key_value=None,
+                    output_attentions=False,
+                    use_cache=False,
+                    cu_seq_lens_q=cu_seq_lens_q,
+                    cu_seq_lens_k=cu_seq_lens_k,
+                    max_length_q=max_length_q,
+                    max_length_k=max_length_k,
+                    old_cu_seq_lens_k=old_cu_seq_lens_k,
+                )
+                compressed_context = layer_outputs[0]
+        else:
+            for encoder in self.layers[: self.n_cross_attn_layers]:
+                # print("Using cross-attention for resampler")
+                # print(f"position_ids: {position_ids}")
+                # print(f"cu_seq_lens_q: {cu_seq_lens_q}")
+                # print(f"max_length_q: {max_length_q}")
+                # print(f"cu_seq_lens_k: {cu_seq_lens_k}")
+                # print(f"max_length_k: {max_length_k}")
+                layer_outputs = encoder(
+                    compressed_context,
+                    context,
+                    attention_mask=None,
+                    position_ids=position_ids,
+                    past_key_value=None,
+                    output_attentions=False,
+                    use_cache=False,
+                    cu_seq_lens_q=cu_seq_lens_q,
+                    cu_seq_lens_k=cu_seq_lens_k,
+                    max_length_q=max_length_q,
+                    max_length_k=max_length_k,
+                )
 
-            compressed_context = layer_outputs[0]
+                compressed_context = layer_outputs[0]
+
+            if self.n_self_attn_layers:
+                position_ids = torch.arange(
+                    self.n_latents, device=position_ids.device, dtype=torch.int32
+                ).repeat(1, bsz)
+                cu_seq_lens_k = cu_seq_lens_q
+                max_length_k = max_length_q
+
+            for processor in self.layers[self.n_cross_attn_layers :]:
+                # print(f"Using self-attention for resampler")
+                # print(f"updated position_ids: {position_ids}")
+                # print(f"updated cu_seq_lens_k: {cu_seq_lens_k}")
+                # print(f"updated max_length_k: {max_length_k}")
+                # print(f"cu_seq_lens_q: {cu_seq_lens_q}")
+                # print(f"max_length_q: {max_length_q}")
+                layer_outputs = processor(
+                    compressed_context,
+                    context=None,
+                    attention_mask=None,
+                    position_ids=position_ids,
+                    past_key_value=None,
+                    output_attentions=False,
+                    use_cache=False,
+                    cu_seq_lens_q=cu_seq_lens_q,
+                    cu_seq_lens_k=cu_seq_lens_k,
+                    max_length_q=max_length_q,
+                    max_length_k=max_length_k,
+                )
+
+                compressed_context = layer_outputs[0]
 
         compressed_context = self.norm(compressed_context)
 
@@ -706,16 +870,19 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
 class Idefics2Perceiver(Idefics2PreTrainedModel):
     def __init__(
-        self, config: Idefics2PerceiverConfig, decoder_config: Idefics2PerceiverConfig
+        self,
+        encoder_config: Idefics2PerceiverConfig,
+        decoder_config: Idefics2PerceiverConfig,
     ):
-        super().__init__(config)
+        super().__init__(encoder_config)
         self.modality_projection = Idefics2MLP(
-            hidden_size=config.input_size,
-            intermediate_size=config.intermediate_size_factor * config.input_size,
-            output_size=config.hidden_size,
-            hidden_act=config.hidden_act,
+            hidden_size=encoder_config.input_size,
+            intermediate_size=encoder_config.intermediate_size_factor
+            * encoder_config.input_size,
+            output_size=encoder_config.hidden_size,
+            hidden_act=encoder_config.hidden_act,
         )
-        self.encoder = Idefics2PerceiverResampler._from_config(config)
+        self.encoder = Idefics2PerceiverResampler._from_config(encoder_config)
         self.decoder = Idefics2PerceiverResampler._from_config(decoder_config)
 
     def forward(
@@ -762,20 +929,24 @@ __all__ = [
 ]
 
 if __name__ == "__main__":
-    config = Idefics2PerceiverConfig(
+    encoder_config = Idefics2PerceiverConfig(
+        concat_latents_context=True,
         input_size=1234,
         resampler_n_latents=64,
-        resampler_depth=8,
+        resampler_depth=1 + 8,
         attn_implementation="flash_attention_2",
     )
     decoder_config = Idefics2PerceiverConfig(
-        input_size=config.hidden_size,
+        concat_latents_context=True,
+        input_size=encoder_config.hidden_size,
         resampler_n_latents=16,
         resampler_depth=1,
         attn_implementation="flash_attention_2",
     )
-    model = Idefics2Perceiver(config, decoder_config).to("cuda").to(torch.bfloat16)
-    print(model)
+    model = (
+        Idefics2Perceiver(encoder_config, decoder_config).to("cuda").to(torch.bfloat16)
+    )
+    # print(model)
     inp = torch.rand(1, 192 + 37, 1234, dtype=torch.bfloat16, device="cuda")
     inp = torch.cat([inp, inp], dim=1)
     # mask = torch.ones(1, 128, dtype=torch.bfloat16, device="cuda")
@@ -805,3 +976,40 @@ if __name__ == "__main__":
     print(model.encoder.latents.grad)
     print(model.decoder.latents.grad)
     breakpoint()
+
+    # inp = torch.rand(1, 192 + 37, 1234, dtype=torch.bfloat16, device="cuda")
+    # inp = torch.cat([inp, inp], dim=1)
+    # inp = inp.unsqueeze(1)
+    # # mask = torch.ones(1, 128, dtype=torch.bfloat16, device="cuda")
+    # # mask[..., -1] = 0
+    # # print(mask)
+    # out = torch.stack(
+    #     [
+    #         model(
+    #             inp[:, i],
+    #             # attention_mask=mask,
+    #             position_ids=torch.cat(
+    #                 [
+    #                     torch.arange(128, device="cuda"),
+    #                     torch.arange(64, device="cuda"),
+    #                     torch.arange(37, device="cuda"),
+    #                     torch.arange(128, device="cuda"),
+    #                     torch.arange(64, device="cuda"),
+    #                     torch.arange(37, device="cuda"),
+    #                 ],
+    #                 dim=-1,
+    #             ).unsqueeze(0),
+    #             # position_ids=torch.arange(128, device="cuda"),
+    #         )
+    #         for i in range(inp.shape[1])
+    #     ]
+    # )
+
+    # print(out)
+    # print(out.shape)
+    # print(model.encoder.latents.grad)
+    # print(model.decoder.latents.grad)
+    # out.mean().backward()
+    # print(model.encoder.latents.grad)
+    # print(model.decoder.latents.grad)
+    # breakpoint()

@@ -442,7 +442,16 @@ class CtxEncoderArguments:
         default=None,
         metadata={"help": "Context encoder model name or path."},
     )
-    # TODO: allow using activations from multiple layers?
+    ctx_encoder_type: Literal["embed_only", "per_layer_activations", "early_exit"] = (
+        field(
+            default="early_exit",
+            metadata={
+                "help": "Context encoder type. "
+                "Options: 'embed_only', 'per_layer_activations', 'early_exit'."
+            },
+        )
+    )
+    # used only with `early_exit` type
     layer_idx: int | None = field(
         default=None,
         metadata={
@@ -474,17 +483,35 @@ class AggregatorArguments:
     #     default=0.0,
     #     metadata={"help": "Attention dropout probability for Perceiver."},
     # )
+    concat_latents_context: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to concatenate latents and context for Perceiver. "
+            "If False, only context is used. Used only when `use_self_attn` is False."
+        },
+    )
+    # not used (keep herer for backward compatibility)
     num_latent_factor: int = field(
         default=8,
         metadata={"help": "Number of latent factors for Perceiver."},
+    )
+    n_base_queries: int = field(
+        default=208,  # 26 * 8
+        metadata={"help": "Number of latent queries of Perceiver."},
     )
     # num_blocks: int = field(
     #     default=8,
     #     metadata={"help": "Number of blocks for Perceiver."},
     # )
+
+    # misnomer
     num_self_attends_per_block: int = field(
         default=6,
-        metadata={"help": "Number of self-attends per block for Perceiver."},
+        metadata={"help": "Number of attn blocks for Perceiver."},
+    )
+    n_cross_attn_layers: int = field(
+        default=6,
+        metadata={"help": "Number of cross-attention layers for Perceiver. "},
     )
     # self_attention_widening_factor: int = field(
     #     default=4,
