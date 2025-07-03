@@ -39,14 +39,11 @@ target_modules:
 
 # data
 train_ds_names:
-  - self_gen/google/gemma-2-2b-it_temp_0.5/fw_qa_v2_2k_len_level_3_tiny
-  - self_gen/google/gemma-2-2b-it_temp_0.5/squad_compact
-  - self_gen/google/gemma-2-2b-it_temp_0.5/pwc_compact
-  - self_gen/google/gemma-2-2b-it_temp_0.5/ropes_compact
-  - self_gen/google/gemma-2-2b-it_temp_0.5/drop_compact
+  - fw_qa_v2_2k_len_level_1_tiny
 
 val_ds_names:
+  - fw_qa_v2_2k_len_level_0
   - squad
-  - pwc
   - drop
   - ropes
+  - pwc

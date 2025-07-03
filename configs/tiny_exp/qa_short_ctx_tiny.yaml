@@ -37,10 +37,23 @@ lora_dropout: 0.0
 target_modules:
   - down_proj
 
-# data
+# short ctx data
 train_ds_names:
-  - fw_qa_v2_2k_len_level_0_tiny
+  - fw_qa_v2_2k_len_level_3_tiny
+  - squad_compact
+  - pwc_compact
+  - drop_compact
+  - ropes_compact
+
+# the contexts are kinda long-ish
+# - narrativeqa
+# - quoref
+# - synthetic_convqa 
 
 val_ds_names:
   - fw_qa_v2_2k_len_level_0
   - squad
+  - drop
+  - ropes
+  - pwc
+

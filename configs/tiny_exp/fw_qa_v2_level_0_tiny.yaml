@@ -39,8 +39,11 @@ target_modules:
 
 # data
 train_ds_names:
-  - fw_qa_v2_2k_len_level_3_tiny
+  - fw_qa_v2_2k_len_level_0_tiny
 
 val_ds_names:
   - fw_qa_v2_2k_len_level_0
   - squad
+  - drop
+  - ropes
+  - pwc
