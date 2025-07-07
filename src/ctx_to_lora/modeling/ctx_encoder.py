@@ -117,3 +117,50 @@ CTX_ENCODER_CLS = {
     CTX_ENCODER_TYPE.EMBED_ONLY: EmbeddingOnly,
     CTX_ENCODER_TYPE.PER_LAYER_ACTIVATIONS: PerLayerActivations,
 }
+
+if __name__ == "__main__":
+    from transformers import AutoModel, AutoTokenizer
+
+    from ctx_to_lora.configs import CtxEncoderArguments
+
+    # Test configuration
+    model_name = "google/gemma-2-2b-it"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.set_default_device(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    base_model = AutoModel.from_pretrained(model_name, device_map=device)
+
+    # Test input
+    test_text = ["Hello world", "this is a test.", "qwewq" * 50]
+    inputs = tokenizer(test_text)
+    position_ids = torch.cat(
+        [torch.arange(len(x)) for x in inputs["input_ids"]]
+    ).unsqueeze(0)
+    input_ids = torch.cat([torch.tensor(x) for x in inputs["input_ids"]]).unsqueeze(0)
+    inputs = {"input_ids": input_ids, "position_ids": position_ids}
+    print(inputs)
+
+    print(f"Testing all encoder classes with model: {model_name}")
+    print(f"Input shape: {inputs['input_ids'].shape}")
+    print("-" * 50)
+
+    # Test EarlyExit
+    # print("Testing EarlyExit...")
+    config = CtxEncoderArguments(layer_idx=2)
+    # early_exit_encoder = EarlyExit(base_model, config)
+    # early_exit_output = early_exit_encoder(**inputs)
+    # print(f"EarlyExit output shape: {early_exit_output.shape}")
+
+    # # Test EmbeddingOnly
+    # print("\nTesting EmbeddingOnly...")
+    # embed_only_encoder = EmbeddingOnly(base_model, config)
+    # embed_only_output = embed_only_encoder(**inputs)
+    # print(f"EmbeddingOnly output shape: {embed_only_output.shape}")
+
+    # Test PerLayerActivations
+    print("\nTesting PerLayerActivations...")
+    per_layer_encoder = PerLayerActivations(base_model, config)
+    per_layer_output = per_layer_encoder(**inputs)
+    print(f"PerLayerActivations output shape: {per_layer_output.shape}")
+
+    print("\nAll tests completed successfully!")

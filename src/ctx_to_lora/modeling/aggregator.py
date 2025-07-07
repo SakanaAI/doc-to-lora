@@ -2,10 +2,10 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-from einops import rearrange, unpack, repeat
+import torch
+from einops import rearrange, repeat, unpack
 from jaxtyping import Float, Integer
 from torch import Tensor, nn
-import torch
 from transformers import (
     PretrainedConfig,
     PreTrainedModel,
@@ -41,17 +41,18 @@ class AggregatorConfig:
     pooling_type: POOL_FN
 
     # perceiver
-    concat_latents_context: bool
-    n_cross_attn_layers: int  # number of cross-attention layers
-    num_self_attends_per_block: int  # = 16
-    decoder_depth: int  # 1 = only cross-attention
-    num_latent_factor: int = 8
-    n_base_queries: int = 208
-    lora_r: int = 8
-    per_rank_gen: bool = False
+    # n_cross_attn_layers: int  # number of cross-attention layers
+    # num_self_attends_per_block: int  # = 16
+    # decoder_depth: int  # 1 = only cross-attention
+    num_latent_factor: int
+    lora_r: int
+    per_rank_gen: bool
 
-    layer_to_layer_ctx_encoder: bool = False
-    n_base_queries: int = 208
+    layer_to_layer_ctx_encoder: bool  #  = False
+    n_latent_queries: int  # = 208
+    num_blocks: int
+    num_self_attn_per_block: int
+    shared_weights: bool
 
 
 def get_aggregator_config(
@@ -92,8 +93,7 @@ class Perceiver(nn.Module):
         lora_r,
         num_latent_factor,  # unused
         layer_to_layer_ctx_encoder,
-        n_base_queries,
-        concat_latents_context,
+        n_latent_queries,
         *args,
         **kwargs,
     ):
@@ -109,22 +109,26 @@ class Perceiver(nn.Module):
         if self.layer_to_layer:
             n_output_queries = num_modules * self.r + num_extra_modules
         self.config = Idefics2PerceiverConfig(
-            concat_latents_context=concat_latents_context,
             input_size=feature_size,
             # the first layer is xattn
-            resampler_depth=kwargs["num_self_attends_per_block"] + 1,
-            n_cross_attn_layers=kwargs["n_cross_attn_layers"],
+            # resampler_depth=kwargs["num_self_attends_per_block"] + 1,
+            # n_cross_attn_layers=kwargs["n_cross_attn_layers"],
             # resampler_n_latents=n_output_queries * num_latent_factor,
-            resampler_n_latents=n_base_queries,
+            num_blocks=kwargs["num_blocks"],
+            num_self_attn_per_block=kwargs["num_self_attn_per_block"],
+            shared_weights=kwargs["shared_weights"],
+            n_latents=n_latent_queries,
             intermediate_size_factor=4,
             hidden_size=output_size,
             attn_implementation="flash_attention_2",
         )
         self.decoder_config = Idefics2PerceiverConfig(
-            concat_latents_context=concat_latents_context,
             input_size=output_size,
-            resampler_depth=kwargs["decoder_depth"],
-            resampler_n_latents=n_output_queries,
+            # resampler_depth=kwargs["decoder_depth"],
+            num_blocks=1,
+            num_self_attn_per_block=0,
+            shared_weights=False,
+            n_latents=n_output_queries,
             intermediate_size_factor=4,
             hidden_size=output_size,
             attn_implementation="flash_attention_2",
@@ -164,17 +168,17 @@ class Perceiver(nn.Module):
         if self.layer_to_layer:
             ctx_features = rearrange(
                 ctx_features,
-                "bs num_layers seq_len feature_dim -> bs (num_layers seq_len) feature_dim",
+                "1 num_layers seq_len feature_dim -> 1 (num_layers seq_len) feature_dim",
             )
             if ctx_attn_mask is not None:
                 ctx_attn_mask = repeat(
                     ctx_attn_mask,
-                    "bs seq_len -> (bs num_layers) seq_len",
+                    "bs seq_len -> (num_layers bs) seq_len",
                     num_layers=self.num_layers,
                 )
             ctx_position_ids = repeat(
                 ctx_position_ids,
-                "bs seq_len -> bs (num_layers seq_len)",
+                "1 seq_len -> 1 (num_layers seq_len)",
                 num_layers=self.num_layers,
             )
 
@@ -191,7 +195,7 @@ class Perceiver(nn.Module):
             per_layer_size = self.num_modules * self.r + self.num_extra_modules
             x = rearrange(
                 x,
-                ("(bs num_layers) (per_layer_sz) d -> bs (num_layers per_layer_sz) d"),
+                ("(num_layers bs) (per_layer_sz) d -> bs (num_layers per_layer_sz) d"),
                 num_layers=self.num_layers,
                 per_layer_sz=per_layer_size,
             )
@@ -338,7 +342,7 @@ if __name__ == "__main__":
         lora_r=lora_r,
         num_latent_factor=8,
         layer_to_layer_ctx_encoder=False,
-        n_base_queries=208,
+        n_latent_queries=208,
         num_self_attends_per_block=16,
         decoder_depth=1,
     ).to(device)
@@ -373,7 +377,7 @@ if __name__ == "__main__":
         lora_r=lora_r,
         num_latent_factor=8,
         layer_to_layer_ctx_encoder=True,
-        n_base_queries=208,
+        n_latent_queries=208,
         num_self_attends_per_block=16,
         decoder_depth=1,
     ).to(device)

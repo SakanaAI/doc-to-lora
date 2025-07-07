@@ -736,6 +736,7 @@ def evaluate(
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
+        max_qas_len=-1,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,

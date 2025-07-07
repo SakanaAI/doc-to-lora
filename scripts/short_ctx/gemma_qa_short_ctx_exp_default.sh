@@ -31,6 +31,7 @@ uv run accelerate launch --main_process_port $port \
 --add_negative_prompt=False \
 --add_repeat_prompt=False \
 --use_sequence_packing=True \
+--max_qas_len=2048 \
 --max_packed_inp_len=8192 \
 --max_packed_ctx_len=16384 \
 --per_rank_gen=True \

@@ -665,9 +665,10 @@ def get_tokenized_dataset(
         num_proc=num_proc,
         **tokenize_kwargs,
     )
-    tokenized_ds = tokenized_ds.shuffle()
+
     if ("train" in split) and is_caching_enabled():
         tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
+        tokenized_ds = tokenized_ds.shuffle()
         # force reload from disk for fingerprint consistency
         tokenized_ds = datasets.load_from_disk(ds_path)
     return tokenized_ds
@@ -1006,6 +1007,8 @@ def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
     # e.g., if max_qas_len = 512, and qas is 1024 tokens long,
     # we split it such that each sample has at most 512 tokens
     # and the ctx_ids and ctx_attn_mask are the same for all samples
+    if max_qas_len < 0:
+        return samples
     input_ids = samples["input_ids"]
     attention_mask = samples["attention_mask"]
     labels = samples["labels"]

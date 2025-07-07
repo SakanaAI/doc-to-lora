@@ -483,19 +483,12 @@ class AggregatorArguments:
     #     default=0.0,
     #     metadata={"help": "Attention dropout probability for Perceiver."},
     # )
-    concat_latents_context: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to concatenate latents and context for Perceiver. "
-            "If False, only context is used. Used only when `use_self_attn` is False."
-        },
-    )
     # not used (keep herer for backward compatibility)
     num_latent_factor: int = field(
         default=8,
         metadata={"help": "Number of latent factors for Perceiver."},
     )
-    n_base_queries: int = field(
+    n_latent_queries: int = field(
         default=208,  # 26 * 8
         metadata={"help": "Number of latent queries of Perceiver."},
     )
@@ -504,27 +497,23 @@ class AggregatorArguments:
     #     metadata={"help": "Number of blocks for Perceiver."},
     # )
 
-    # misnomer
-    num_self_attends_per_block: int = field(
+    num_blocks: int = field(
+        default=8,
+        metadata={"help": "Number of blocks for Perceiver."},
+    )
+    num_self_attn_per_block: int = field(
         default=6,
-        metadata={"help": "Number of attn blocks for Perceiver."},
+        metadata={"help": "Number of self-attention layers per block for Perceiver."},
     )
-    n_cross_attn_layers: int = field(
-        default=6,
-        metadata={"help": "Number of cross-attention layers for Perceiver. "},
+    shared_weights: bool = field(
+        default=False,
+        metadata={"help": "Whether to share weights across blocks for Perceiver."},
     )
-    # self_attention_widening_factor: int = field(
-    #     default=4,
-    #     metadata={"help": "Self-attention widening factor for Perceiver."},
+
+    # decoder_depth: int = field(
+    #     default=1,
+    #     metadata={"help": "Decoder depth for Perceiver."},
     # )
-    # cross_attention_widening_factor: int = field(
-    #     default=4,
-    #     metadata={"help": "Cross-attention widening factor for Perceiver."},
-    # )
-    decoder_depth: int = field(
-        default=1,
-        metadata={"help": "Decoder depth for Perceiver."},
-    )
 
 
 # needed for loading model from checkpoint
