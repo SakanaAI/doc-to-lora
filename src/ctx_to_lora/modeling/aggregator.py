@@ -48,11 +48,11 @@ class AggregatorConfig:
     lora_r: int
     per_rank_gen: bool
 
-    layer_to_layer_ctx_encoder: bool  #  = False
     n_latent_queries: int  # = 208
     num_blocks: int
     num_self_attn_per_block: int
     shared_weights: bool
+    layer_to_layer_ctx_encoder: bool  #  = False  # default value for backward compat
 
 
 def get_aggregator_config(
@@ -166,21 +166,26 @@ class Perceiver(nn.Module):
         #     )
 
         if self.layer_to_layer:
-            ctx_features = rearrange(
-                ctx_features,
-                "1 num_layers seq_len feature_dim -> 1 (num_layers seq_len) feature_dim",
-            )
             if ctx_attn_mask is not None:
                 ctx_attn_mask = repeat(
                     ctx_attn_mask,
                     "bs seq_len -> (num_layers bs) seq_len",
                     num_layers=self.num_layers,
                 )
-            ctx_position_ids = repeat(
-                ctx_position_ids,
-                "1 seq_len -> 1 (num_layers seq_len)",
-                num_layers=self.num_layers,
-            )
+                ctx_features = rearrange(
+                    ctx_features,
+                    "bs num_layers seq_len feature_dim -> (num_layers bs) seq_len feature_dim",
+                )
+            if ctx_position_ids is not None:
+                ctx_position_ids = repeat(
+                    ctx_position_ids,
+                    "1 seq_len -> 1 (num_layers seq_len)",
+                    num_layers=self.num_layers,
+                )
+                ctx_features = rearrange(
+                    ctx_features,
+                    "1 num_layers seq_len feature_dim -> 1 (num_layers seq_len) feature_dim",
+                )
 
         # print(f"ctx_features shape: {ctx_features.shape}")
         # print(
