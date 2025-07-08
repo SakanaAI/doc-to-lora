@@ -628,10 +628,12 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         ]
 
         self.layers = nn.ModuleList(first_x_attn + first_self_attn_block)
-        for _ in range(1, config.num_blocks):
+        for layer_idx in range(1, config.num_blocks):
             # cross-attention at the beginning of each block
             if self.shared_weights:
-                x_attn = first_x_attn[0]
+                if layer_idx == 1:
+                    second_x_attn = Idefics2PerceiverLayer(config, is_cross_attn=True)
+                x_attn = second_x_attn
             else:
                 x_attn = Idefics2PerceiverLayer(config, is_cross_attn=True)
             self.layers.append(x_attn)
