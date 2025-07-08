@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import re
 from glob import glob
 
 import pandas as pd
@@ -8,7 +9,11 @@ import yaml
 from datasets import Dataset, load_dataset
 from vllm import LLM, SamplingParams
 
-from ctx_to_lora.data.definitions import RAW_DATA_DIR, SELF_GEN_DATA_DIR
+from ctx_to_lora.data.definitions import (
+    CLOSED_QA_INTX_TEMPLATES,
+    RAW_DATA_DIR,
+    SELF_GEN_DATA_DIR,
+)
 from ctx_to_lora.data.processing import (
     filter_none,
     get_preprocessing_fn,
@@ -20,11 +25,17 @@ STOP_STRINGS = {
     "google/gemma-2-2b-it": ["<eos>", "<end_of_turn>"],
 }
 
+# TODO: !!!!
+# see https://huggingface.co/datasets/YuxinJiang/LTE_train_data/viewer/default/train?row=97&views%5B%5D=train&sql_row=2
+# based on https://arxiv.org/pdf/2402.11905
 SYSTEM_TEMPLATE = (
-    "### SYSTEM INSTRUCTIONS ###\n"
-    "You are a creative and helpful assistant.\n"
+    "### SYSTEM INSTRUCTION ###\n"
+    "You are an honest and helpful assistant.\n"
+    "You must use the information provided in the context for responding to the question.\n"
+    "If the context does not contain enough information to answer the question, you must say so.\n"
+    "If that is the case, you can answer based on your knowledge, but you must clearly state that you are doing so.\n"
     "**DO NOT** hallucinate or make up information.\n"
-    "### END OF SYSTEM INSTRUCTIONS ###"
+    "### END OF SYSTEM INSTRUCTION ###"
 )
 
 PROMPT_TEMPLATE = "### Context ###\n{context}\n\n\n### Question ###\n{question}"
@@ -38,6 +49,12 @@ MODEL_CTX_LEN = {
 
 def get_prompt(context: str, q: str) -> str:
     return PROMPT_TEMPLATE.format(context=context, question=q)
+
+
+def add_closed_qa_prompt(q: str, closed_qa_prob: float = 0.1) -> str:
+    if random.random() <= closed_qa_prob:
+        q = random.choice(CLOSED_QA_INTX_TEMPLATES).format(input=q)
+    return q
 
 
 def load_config(config_path: str) -> dict:
@@ -141,17 +158,25 @@ def self_generate(
 
     shard_name = ""
     temp = 0.0
-    if "_temp_" in ds_name:
-        temp = float(ds_name.split("_temp_")[-1].split("/")[0])
+    closed_qa_prob = 0.0
+    if ds_name is not None and "_temp_" in ds_name:
+        temp_match = re.search(r"_temp_([\d.]+)", ds_name)
+        if temp_match:
+            temp = float(temp_match.group(1))
+    if ds_name is not None and "_closed_qa_prob_" in ds_name:
+        prob_match = re.search(r"_closed_qa_prob_([\d.]+)", ds_name)
+        if prob_match:
+            closed_qa_prob = float(prob_match.group(1))
     print(f"Processing dataset: {ds_name}, split: {split}")
     print(f"Using temperature: {temp}")
+    print(f"Using closed QA prompt probability: {closed_qa_prob}")
 
     if parquet_file:
         print(f"Loading dataset from parquet file: {parquet_file}")
 
         split = "train"
         ds_name = "/".join(parquet_file.split(RAW_DATA_DIR)[-1].split("/")[:-1])
-        print(ds_name)
+
         shard_name = "_" + os.path.basename(parquet_file).replace(".parquet", "")
         ds = load_dataset(path="parquet", data_files=[parquet_file], split="train")
         processing_fn = get_preprocessing_fn(ds_name, is_eval=False, is_pretrain=False)
@@ -171,6 +196,7 @@ def self_generate(
         )
 
         ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
+    print(f"Loaded dataset: {ds_name} with split: {split}")
 
     if args.debug:
         ds = ds.take(10)
@@ -178,7 +204,10 @@ def self_generate(
     ds = ds.filter(filter_none, batched=False, num_proc=8)
 
     ctxs = [sample["context"] for sample in ds]
-    questions = [sample["prompts"] for sample in ds]
+    questions = [
+        [add_closed_qa_prompt(q, closed_qa_prob) for q in sample["prompts"] if q]
+        for sample in ds
+    ]
     print(f"Loaded {len(ctxs)} contexts and {len(questions)} questions")
 
     messages = create_messages(ctxs, questions, args.vllm_model, SYSTEM_TEMPLATE)
@@ -243,7 +272,7 @@ def self_generate(
     if not args.debug:
         df = pd.DataFrame(samples)
         ds_out = Dataset.from_pandas(df)
-        fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}/{ds_name}/{split}/ds{shard_name}"
+        fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
         fpath = f"{fpath}.parquet"
         ds_out.to_parquet(fpath)

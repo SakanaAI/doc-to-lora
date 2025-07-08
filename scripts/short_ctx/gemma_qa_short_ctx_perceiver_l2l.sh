@@ -19,7 +19,7 @@ uv run accelerate launch --main_process_port $port \
 --per_device_eval_batch_size=32 \
 --target_modules=down_proj \
 --num_blocks=8 \
---num_self_attn_per_block=6 \
+--num_self_attn_per_block=3 \
 --ctx_encoder_type=per_layer_activations \
 --n_latent_queries=8 \
 --num_pre_head_layers=1 \
