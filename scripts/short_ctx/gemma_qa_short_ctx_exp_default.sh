@@ -18,9 +18,9 @@ uv run accelerate launch --main_process_port $port \
 --gradient_accumulation_steps=2 \
 --per_device_eval_batch_size=64 \
 --target_modules=down_proj \
---num_self_attends_per_block=8 \
---n_cross_attn_layers=8 \
---num_latent_factor=1 \
+--num_blocks=8 \
+--num_self_attn_per_block=0 \
+--n_latent_queries=208 \
 --num_pre_head_layers=1 \
 --lora_r=8 \
 --eval_steps=1000 \
