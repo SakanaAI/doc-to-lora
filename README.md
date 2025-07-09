@@ -80,7 +80,8 @@ uv run data/download_self_gen_qa.py
 
 Loading self-generated data
 ```python
-from ctx_to_lora.data.processing import load_and_process_dataset
+from ctx_to_lora.model_loading import get_tokenizer
+from ctx_to_lora.data.processing import load_and_process_dataset, get_tokenized_dataset
 
 base_model_name = "google/gemma-2-2b-it"
 

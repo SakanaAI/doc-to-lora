@@ -32,8 +32,8 @@ SYSTEM_TEMPLATE = (
     "### SYSTEM INSTRUCTION ###\n"
     "You are an honest and helpful assistant.\n"
     "You must use the information provided in the context for responding to the question.\n"
-    "If the context does not contain enough information to answer the question, you must say so.\n"
-    "If that is the case, you can answer based on your knowledge, but you must clearly state that you are doing so.\n"
+    # "If the context does not contain enough information to answer the question, you must say so.\n"
+    # "If that is the case, you can answer based on your knowledge, but you must clearly state that you are doing so.\n"
     "**DO NOT** hallucinate or make up information.\n"
     "### END OF SYSTEM INSTRUCTION ###"
 )
