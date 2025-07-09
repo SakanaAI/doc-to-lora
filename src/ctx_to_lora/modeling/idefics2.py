@@ -498,10 +498,10 @@ class Idefics2PerceiverLayer(nn.Module):
         self.rms_norm_eps = config.rms_norm_eps
         self.is_cross_attn = is_cross_attn
 
-        self.input_latents_norm = Idefics2RMSNorm(
+        self.input_latents_layernorm = Idefics2RMSNorm(
             self.hidden_size, eps=self.rms_norm_eps
         )
-        self.input_context_norm = (
+        self.input_context_layernorm = (
             Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
             if self.is_cross_attn
             else torch.nn.Identity()
@@ -550,8 +550,8 @@ class Idefics2PerceiverLayer(nn.Module):
         """
         residual = latents
 
-        latents = self.input_latents_norm(latents)
-        context = self.input_context_norm(context)
+        latents = self.input_latents_layernorm(latents)
+        context = self.input_context_layernorm(context)
 
         latents, self_attn_weights, present_key_value = self.self_attn(
             latents=latents,
@@ -617,7 +617,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         self.rms_norm_eps = config.rms_norm_eps
 
         # Create Latents for Perceiver
-        self.latents = nn.Parameter(torch.randn(self.n_latents, self.hidden_size))
+        self.latents_q = nn.Parameter(torch.randn(self.n_latents, self.hidden_size))
 
         # First block
         assert config.num_blocks > 0
@@ -662,7 +662,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         # ]
         # self.layers = nn.ModuleList(self.layers)
 
-        self.norm = Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
+        self.layernorm = Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
 
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
         assert self._use_flash_attention_2
@@ -680,7 +680,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
             # flattened packed sequence
             bsz = torch.where(position_ids == 0, 1, 0).sum()
 
-        latents = self.latents.unsqueeze(0).expand((bsz, *self.latents.size()))
+        latents = self.latents_q.unsqueeze(0).expand((bsz, *self.latents_q.size()))
 
         # latent_attention_mask = torch.ones(
         #     (attention_mask.size(0), latents.size(1)),
@@ -826,7 +826,7 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
         #     compressed_context = layer_outputs[0]
 
-        compressed_context = self.norm(compressed_context)
+        compressed_context = self.layernorm(compressed_context)
 
         return compressed_context
 

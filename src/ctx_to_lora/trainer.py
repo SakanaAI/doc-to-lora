@@ -1,8 +1,10 @@
 import logging
 
+from torch import nn
 from transformers import Trainer
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 from transformers.trainer import _is_peft_model
+from transformers.trainer_pt_utils import get_parameter_names
 from transformers.trainer_utils import IntervalStrategy
 
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
@@ -90,6 +92,23 @@ class ModulatedModelTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+def get_decay_parameter_names(model) -> list[str]:
+    """
+    Get all parameter names that weight decay will be applied to.
+
+    This function filters out parameters in two ways:
+    1. By layer type (nn.Embedding)
+    2. By parameter name patterns (containing 'bias', 'layernorm', 'rmsnorm'
+       or 'latents_q' [perceiver's latent queries]).
+    """
+    decay_parameters = get_parameter_names(
+        model,
+        [nn.Embedding, nn.LayerNorm],
+        ["bias", "layernorm", "rmsnorm", "latents_q"],
+    )
+    return decay_parameters
+
+
 def train_model(
     model,
     training_args,
@@ -123,6 +142,8 @@ def train_model(
         training_args.per_device_train_batch_size = 128
 
     trainer = trainer_cls(**trainer_kwargs)
+    # MONKEY PATCH: remove embedding layers from weight decay
+    trainer.get_decay_parameter_names = get_decay_parameter_names
 
     # Trainer loads the best model after training
     # is done when load_best_model_at_end=True

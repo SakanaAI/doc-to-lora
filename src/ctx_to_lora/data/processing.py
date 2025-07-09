@@ -994,7 +994,7 @@ def convert_ctx_prompt_response_to_messages(
             [
                 {"role": "system", "content": system_msg.strip()},
                 {"role": "user", "content": user_msg.strip()},
-                {"role": "assistant", "content": response},
+                {"role": "assistant", "content": response.strip()},
             ]
         )
 
