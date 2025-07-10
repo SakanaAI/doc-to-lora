@@ -17,6 +17,7 @@ from ctx_to_lora.data.definitions import (
     DS_KWARGS,
     EVAL_INTX_TEMPLATES,
     IGNORE_INDEX,
+    RAW_DATA_DIR,
     REPEAT_PROMPTS,
     SELF_GEN_DATA_DIR,
     TRANSFORMED_DATA_DIR,
@@ -323,10 +324,10 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
     if ds_name.startswith("self_gen/"):
         if ds_name.endswith(".parquet"):
             # ds_name is a glob pattern
-            files = glob(ds_name)
+            files = glob(f"{RAW_DATA_DIR}/{ds_name}")
             if not files:
                 raise FileNotFoundError(
-                    f"The provided pattern does not match any files: {ds_name}"
+                    f"The provided pattern does not match any files: {RAW_DATA_DIR}/{ds_name}"
                 )
         else:
             # e.g., "self_gen/google/gemma-2-2b-it/pwc"
