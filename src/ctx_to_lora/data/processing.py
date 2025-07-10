@@ -321,26 +321,34 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
         take = slice.split(":")[1]
 
     if ds_name.startswith("self_gen/"):
-        # e.g., "self_gen/google/gemma-2-2b-it/pwc"
-        base_model_name = "/".join(ds_name.split("/")[1:-1])
-        base_ds = ds_name.split("/")[-1]
-        if ("[" in split) and split.endswith("]"):
-            kwargs["split"], slice = split.split("[")
-            slice = slice.strip("]")
-            skip = slice.split(":")[0]
-            if skip:
-                kwargs["skip"] = int(skip)
-            take = slice.split(":")[1]
-            if take:
-                kwargs["take"] = int(take)
-        files = glob(
-            f"{SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/{split}/*.parquet"
-        )
-        if not files:
-            raise FileNotFoundError(
-                f"No self-gen files found for base model {base_model_name} "
-                f"in {SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/"
+        if ds_name.endswith(".parquet"):
+            # ds_name is a glob pattern
+            files = glob(ds_name)
+            if not files:
+                raise FileNotFoundError(
+                    f"The provided pattern does not match any files: {ds_name}"
+                )
+        else:
+            # e.g., "self_gen/google/gemma-2-2b-it/pwc"
+            base_model_name = "/".join(ds_name.split("/")[1:3])
+            base_ds = "/".join(ds_name.split("/")[3:])
+            if ("[" in split) and split.endswith("]"):
+                kwargs["split"], slice = split.split("[")
+                slice = slice.strip("]")
+                skip = slice.split(":")[0]
+                if skip:
+                    kwargs["skip"] = int(skip)
+                take = slice.split(":")[1]
+                if take:
+                    kwargs["take"] = int(take)
+            files = glob(
+                f"{SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/{split}/*.parquet"
             )
+            if not files:
+                raise FileNotFoundError(
+                    f"No self-gen files found for base model {base_model_name} "
+                    f"in {SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/"
+                )
         kwargs = dict(path="parquet", data_files=files, split="train")
     elif (ds_name not in DS_KWARGS) or (split not in DS_KWARGS[ds_name]):
         kwargs = dict(path=ds_name, split=split)

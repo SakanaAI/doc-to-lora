@@ -39,7 +39,7 @@ target_modules:
 
 # data
 train_ds_names:
-  - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/fw_qa_v2_2k_len_level_1_small
+  - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/fw_qa_v2/min_0_to_2000/*level_0.parquet
   - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/pwc_compact
   # these provide exact tokens needed, no need to use self-gen data
   - squad_compact
