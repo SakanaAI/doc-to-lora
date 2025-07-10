@@ -157,8 +157,24 @@ def self_generate(
     """Process a single dataset and generate QA pairs."""
 
     shard_name = ""
-    temp = 0.0
-    closed_qa_prob = 0.0
+
+    # Check for conflicts between CLI args and dataset name
+    if ds_name is not None:
+        if "_temp_" in ds_name and args.temp != 0.0:
+            raise ValueError(
+                f"Multiple sources of truth for temperature: CLI arg --temp={args.temp} "
+                f"and dataset name contains temp specification. Please use only one."
+            )
+        if "_closed_qa_prob_" in ds_name and args.closed_qa_prob != 0.0:
+            raise ValueError(
+                f"Multiple sources of truth for closed_qa_prob: CLI arg --closed_qa_prob={args.closed_qa_prob} "
+                f"and dataset name contains closed_qa_prob specification. Please use only one."
+            )
+
+    # Use CLI args as default, override with dataset name if present
+    temp = args.temp
+    closed_qa_prob = args.closed_qa_prob
+
     if ds_name is not None and "_temp_" in ds_name:
         temp_match = re.search(r"_temp_([\d.]+)", ds_name)
         if temp_match:
@@ -320,6 +336,18 @@ def parse_args() -> argparse.Namespace:
         "--split",
         type=str,
         help="Dataset split to use when using --ds_names (required with --ds_names)",
+    )
+    parser.add_argument(
+        "--temp",
+        type=float,
+        default=0.0,
+        help="Temperature for sampling (default: 0.0)",
+    )
+    parser.add_argument(
+        "--closed_qa_prob",
+        type=float,
+        default=0.0,
+        help="Probability of using closed QA prompt template (default: 0.0)",
     )
     return parser.parse_args()
 
