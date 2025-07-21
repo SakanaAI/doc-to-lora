@@ -40,10 +40,10 @@ target_modules:
 # short ctx data
 train_ds_names:
   - fw_qa_v2_2k_len_level_3
-  - squad_compact
-  - pwc_compact
-  - drop_compact
-  - ropes_compact
+  - squad
+  - pwc
+  - drop
+  - ropes
 
 # the contexts are kinda long-ish
 # - narrativeqa
