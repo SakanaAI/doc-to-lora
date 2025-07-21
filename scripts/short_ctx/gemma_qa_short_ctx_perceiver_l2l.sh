@@ -13,7 +13,7 @@ echo "Using port: $port"
 uv run accelerate launch --main_process_port $port \
 --num_processes=4 --gpu_ids all intx_sft.py $1 \
 --model_name_or_path=google/gemma-2-2b-it \
---max_steps=12_000 \
+--max_steps=10_000 \
 --per_device_train_batch_size=-1 \
 --gradient_accumulation_steps=4 \
 --per_device_eval_batch_size=32 \
@@ -37,5 +37,5 @@ uv run accelerate launch --main_process_port $port \
 --max_packed_ctx_len=8192 \
 --per_rank_gen=True \
 --per_layer_processing=True \
---gen_lora_l1_reg_coef=0.1 \
+--gen_lora_l1_reg_coef=0.0 \
 --logging_steps=50

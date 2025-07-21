@@ -15,7 +15,7 @@ uv run accelerate launch --main_process_port $port \
 --model_name_or_path=google/gemma-2-2b-it \
 --max_steps=12_000 \
 --per_device_train_batch_size=-1 \
---gradient_accumulation_steps=2 \
+--gradient_accumulation_steps=5 \
 --per_device_eval_batch_size=64 \
 --target_modules=down_proj \
 --num_blocks=8 \
@@ -23,6 +23,7 @@ uv run accelerate launch --main_process_port $port \
 --n_latent_queries=208 \
 --num_pre_head_layers=1 \
 --lora_r=8 \
+--eval_strategy=no \
 --eval_steps=1000 \
 --save_steps=1000 \
 --learning_rate=4e-5 \
