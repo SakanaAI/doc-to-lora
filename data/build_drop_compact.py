@@ -17,7 +17,7 @@ if __name__ == "__main__":
             if ctx not in ctx_qa_dict:
                 ctx_qa_dict[ctx] = {"prompts": [], "responses": []}
             question = closed_qa_prompting(sample["question"])
-            answer = ", ".join(set(sample["answers_spans"]["spans"]))
+            answer = sample["answers_spans"]["spans"][0]
             ctx_qa_dict[ctx]["prompts"].append(question)
             ctx_qa_dict[ctx]["responses"].append(answer)
 
