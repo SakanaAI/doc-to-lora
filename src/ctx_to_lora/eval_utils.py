@@ -98,7 +98,8 @@ def normalize_answer(s: str) -> str:
 
     def remove_punc(text: str) -> str:
         exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
+        # return "".join(ch for ch in text if ch not in exclude)
+        return " ".join(re.split(f"[{string.punctuation}]", text))
 
     def lower(text: str) -> str:
         return text.lower()
@@ -737,6 +738,7 @@ def evaluate(
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         max_qas_len=-1,
+        max_qas_per_sample=1,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,

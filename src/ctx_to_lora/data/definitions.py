@@ -84,6 +84,20 @@ LONGBENCH_E_TASKS = [
 ]
 
 DS_KWARGS = {
+    "context_numbers_2_10": dict(
+        train=dict(
+            path="json",
+            data_files=glob("data/raw_datasets/context_numbers_[2-9]/train.jsonl")
+            + ["data/raw_datasets/context_numbers_10/train.jsonl"],
+            split="train",
+        ),
+        validation=dict(
+            path="json",
+            data_files=glob("data/raw_datasets/context_numbers_[2-9]/val.jsonl")
+            + ["data/raw_datasets/context_numbers_10/val.jsonl"],
+            split="train",
+        ),
+    ),
     "hotpot_qa": dict(
         train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:]"),
         validation=dict(
@@ -631,6 +645,6 @@ EVAL_INTX_TEMPLATES = {
 for ds_name in LONGBENCH_E_TASKS:
     EVAL_INTX_TEMPLATES[ds_name] = EVAL_INTX_TEMPLATES[ds_name[:-2]]
 
-for ds_name in DS_KWARGS:
-    if ds_name not in EVAL_INTX_TEMPLATES:
-        EVAL_INTX_TEMPLATES[ds_name] = "{input}"
+# for ds_name in DS_KWARGS:
+#     if ds_name not in EVAL_INTX_TEMPLATES:
+#         EVAL_INTX_TEMPLATES[ds_name] = "{input}"

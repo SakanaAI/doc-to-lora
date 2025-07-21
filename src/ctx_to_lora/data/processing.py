@@ -42,7 +42,7 @@ def load_answers(ds_name, split):
     elif ds_name == "drop":
 
         def extract_ans(sample):
-            return {"answers": sample["answer_spans"]["spans"]}
+            return {"answers": sample["answers_spans"]["spans"]}
 
     ds_kwargs = get_ds_kwargs(ds_name, split)
     ds = load_dataset(**ds_kwargs, trust_remote_code=True)
@@ -174,7 +174,7 @@ def get_preprocessing_fn(
             return {
                 "context": sample["passage"],
                 "prompt": prompt,
-                "response": ", ".join(set(sample["answers_spans"]["spans"])),
+                "response": sample["answers_spans"]["spans"][0],
             }
 
     elif ds_name == "ropes":
@@ -284,10 +284,10 @@ def get_preprocessing_fn(
         def eval_intx_decorator(f):
             def g(sample):
                 sample = f(sample)
-                prompt_field = "prompt" if "prompt" in sample else "prompts"
-                sample[prompt_field] = prompt_template.format(
-                    input=sample[prompt_field]
+                assert "prompt" in sample, (
+                    f"Expected 'prompt' in sample, got {sample.keys()}"
                 )
+                sample["prompt"] = prompt_template.format(input=sample["prompt"])
                 return sample
 
             return g
@@ -599,6 +599,7 @@ def get_tokenized_dataset(
     ds_name: str,
     split: str,
     max_qas_len: int,
+    max_qas_per_sample: int,
     base_model_max_len: int,
     tokenizer: PreTrainedTokenizerBase,
     tokenizer_kwargs: dict[str, Any],
@@ -633,6 +634,7 @@ def get_tokenized_dataset(
     )
     tokenize_kwargs = dict(
         max_qas_len=max_qas_len,
+        max_qas_per_sample=max_qas_per_sample,
         base_model_max_len=base_model_max_len,
         tokenizer_kwargs=tokenizer_kwargs,
         ctx_model_max_len=ctx_model_max_len,
@@ -661,7 +663,7 @@ def get_tokenized_dataset(
         tokenized_ds = datasets.load_from_disk(ds_path)
         return tokenized_ds
 
-    num_proc = None if streaming and ("train" in split) else 8
+    num_proc = None if streaming and ("train" in split) else 4
     ds = load_and_process_dataset(
         **load_and_process_kwargs,
         num_proc=num_proc,
@@ -676,8 +678,8 @@ def get_tokenized_dataset(
     )
 
     if ("train" in split) and is_caching_enabled():
-        tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
         tokenized_ds = tokenized_ds.shuffle()
+        tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
         # force reload from disk for fingerprint consistency
         tokenized_ds = datasets.load_from_disk(ds_path)
     return tokenized_ds
@@ -685,6 +687,7 @@ def get_tokenized_dataset(
 
 def construct_and_tokenize_ctx_qa(
     max_qas_len,
+    max_qas_per_sample,
     base_model_max_len,
     tokenizer,
     tokenizer_kwargs,
@@ -826,7 +829,10 @@ def construct_and_tokenize_ctx_qa(
             logging.debug(f"Split too long QAs with max length {max_qas_len}")
             tokenized_ds = tokenized_ds.map(
                 split_too_long_qas,
-                fn_kwargs={"max_qas_len": max_qas_len},
+                fn_kwargs={
+                    "max_qas_len": max_qas_len,
+                    "max_qas_per_sample": max_qas_per_sample,
+                },
                 batched=True,
                 batch_size=100_000,
                 num_proc=4,
@@ -1010,13 +1016,15 @@ def convert_ctx_prompt_response_to_messages(
     return dict(data=data)
 
 
-def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
+def split_too_long_qas(
+    samples: dict[str, any], max_qas_len: int, max_qas_per_sample: int
+):
     # samples keys: "input_ids", "attention_mask", "labels", "ctx_ids", "ctx_attn_mask"
     # split the qas into multiple samples if they are too long
     # e.g., if max_qas_len = 512, and qas is 1024 tokens long,
     # we split it such that each sample has at most 512 tokens
     # and the ctx_ids and ctx_attn_mask are the same for all samples
-    if max_qas_len < 0:
+    if max_qas_len < 0 and max_qas_per_sample < 0:
         return samples
     input_ids = samples["input_ids"]
     attention_mask = samples["attention_mask"]
@@ -1029,7 +1037,10 @@ def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
     longest_old_qas_len = max(total_lengths) if total_lengths else 0
 
     # Early exit if no splitting needed
-    if all(length <= max_qas_len for length in total_lengths):
+    if (max_qas_len < 0 or all(length <= max_qas_len for length in total_lengths)) and (
+        max_qas_per_sample < 0
+        or all(len(seq) <= max_qas_per_sample for seq in input_ids)
+    ):
         logger.debug(f"Longest old qas len: {longest_old_qas_len}")
         logger.debug(f"Longest new qas len: {longest_old_qas_len}")
         return samples
@@ -1047,8 +1058,11 @@ def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
         out["ctx_attn_mask"].append(ctx_attn)
 
     for i, tot_inp_len in enumerate(total_lengths):
-        if tot_inp_len <= max_qas_len:
+        if (max_qas_len < 0 or tot_inp_len <= max_qas_len) and (
+            max_qas_per_sample < 0 or len(input_ids[i]) <= max_qas_per_sample
+        ):
             # No need to split - add entire sample
+            # logger.debug(f"Sample {i} is within limits, adding as is.")
             for k in samples:
                 out[k].append(samples[k][i])
             continue
@@ -1070,7 +1084,12 @@ def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
                 n_skip += 1
                 continue
 
-            if new_qas_len + inp_len <= max_qas_len:
+            # Check if we can add to current batch (both length and sample count limits)
+            can_add_to_current = (
+                max_qas_len < 0 or new_qas_len + inp_len <= max_qas_len
+            ) and (max_qas_per_sample < 0 or len(new_input_ids) < max_qas_per_sample)
+
+            if can_add_to_current:
                 # Add to current batch
                 new_qas_len += inp_len
                 new_input_ids.append(inp_ids)
@@ -1078,6 +1097,9 @@ def split_too_long_qas(samples: dict[str, any], max_qas_len: int):
                 new_labels.append(label)
             else:
                 # Current batch is full, save it and start new batch
+                # logger.debug(
+                #     f"sample {i}: adding batch with {len(new_input_ids)} sequences"
+                # )
                 if new_input_ids:  # Only add non-empty batches
                     add_batch(
                         new_input_ids,

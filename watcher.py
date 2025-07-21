@@ -93,7 +93,8 @@ if __name__ == "__main__":
                 generative=True,
             )
             metrics.update(gen_metrics)
-            wandb.log(metrics, step=curstep)
+            for k in metrics:
+                wandb.log(metrics[k], step=curstep)
             wandb.finish()
             print(f"Logged metrics: {metrics}")
             print("=" * 80)

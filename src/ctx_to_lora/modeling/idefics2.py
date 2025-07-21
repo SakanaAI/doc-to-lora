@@ -32,6 +32,7 @@ from transformers.utils import (
 )
 
 if is_flash_attn_2_available():
+    from flash_attn.bert_padding import unpad_input
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 logger = logging.get_logger(__name__)
@@ -706,10 +707,11 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         # max_length_k = None
         if attention_mask is not None:
             logger.warning_once("Using attention mask for resampler")
-            seq_lens_k = attention_mask.sum(dim=-1, dtype=torch.int32)
-            cu_seq_lens_k = torch.cumsum(seq_lens_k, dim=0, dtype=torch.int32)
-            max_length_k = seq_lens_k.max().item()
-            cu_seq_lens_k = nn.functional.pad(cu_seq_lens_k, (1, 0))
+            context, _, cu_seq_lens_k, max_length_k, _ = unpad_input(
+                context, attention_mask
+            )
+            context = context.unsqueeze(0)
+            position_ids = True  # goes down flash attn path that uses cu_seq_lens
 
         elif position_ids is not None:
             logger.warning_once("Using position ids for resampler")
@@ -739,31 +741,26 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
         else:
             raise ValueError("either position_ids or attention_mask is required")
-
         x_attn_kwargs = dict(
-            attention_mask=attention_mask,
+            # attention_mask=attention_mask,
             position_ids=position_ids,
             cu_seq_lens_q=cu_seq_lens_q,
             cu_seq_lens_k=cu_seq_lens_k,
             max_length_q=max_length_q,
             max_length_k=max_length_k,
         )
-        self_attn_mask = (
-            torch.ones(
-                (bsz, self.n_latents), device=context.device, dtype=torch.float32
-            )
-            if attention_mask is not None
-            else None
-        )
-        self_attn_position_ids = (
-            torch.arange(
-                self.n_latents, device=position_ids.device, dtype=torch.int32
-            ).repeat(1, bsz)
-            if position_ids is not None
-            else None
-        )
+        # self_attn_mask = (
+        #     torch.ones(
+        #         (bsz, self.n_latents), device=context.device, dtype=torch.float32
+        #     )
+        #     if attention_mask is not None
+        #     else None
+        # )
+        self_attn_position_ids = torch.arange(
+            self.n_latents, device=context.device, dtype=torch.int32
+        ).repeat(1, bsz)
         self_attn_kwargs = dict(
-            attention_mask=self_attn_mask,
+            # attention_mask=self_attn_mask,
             position_ids=self_attn_position_ids,
             cu_seq_lens_q=cu_seq_lens_q,
             cu_seq_lens_k=cu_seq_lens_q,

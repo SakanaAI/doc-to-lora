@@ -79,6 +79,7 @@ def get_ds_prob(train_ds_len: list[int], total_len: int):
     for i, ds_len in enumerate(train_ds_len):
         if (ds_len / total_len) > 0.01:
             probs[i] = ds_len / res_total_len * res_probs
+    logger.debug(f"Dataset probabilities: {probs}")
     assert isclose(sum(probs), 1.0), (
         f"Probs sum to {sum(probs)} ({probs}), expected 1.0"
     )
@@ -270,6 +271,7 @@ def main():
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         max_qas_len=ctx_args.max_qas_len,
+        max_qas_per_sample=ctx_args.max_qas_per_sample,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         tokenizer_kwargs=tokenizer_kwargs,

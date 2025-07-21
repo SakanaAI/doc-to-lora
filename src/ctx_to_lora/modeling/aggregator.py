@@ -104,7 +104,6 @@ class Perceiver(nn.Module):
         self.per_rank_gen = per_rank_gen
         self.r = lora_r if self.per_rank_gen else 1
         n_output_queries = num_layers * (num_modules * self.r + num_extra_modules)
-        self.tot_output_size = n_output_queries
         self.layer_to_layer = layer_to_layer_ctx_encoder
         if self.layer_to_layer:
             n_output_queries = num_modules * self.r + num_extra_modules

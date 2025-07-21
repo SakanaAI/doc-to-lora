@@ -1,7 +1,6 @@
 import logging
 from collections.abc import Iterable
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -23,7 +22,6 @@ from torch import Tensor, nn
 from transformers import (
     PretrainedConfig,
     PreTrainedModel,
-    PreTrainedTokenizerBase,
 )
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.modernbert.modeling_modernbert import ModernBertModel
@@ -1035,91 +1033,91 @@ class ModulatedPretrainedModel(nn.Module):
         return model_outputs
 
 
-class ModulatedModelWithSharedInput(nn.Module):
-    def __init__(
-        self,
-        modulated_model: ModulatedPretrainedModel,
-        base_tokenizer: PreTrainedTokenizerBase,
-        ctx_tokenizer: PreTrainedTokenizerBase,
-        ctx_end_predicate: str | None = None,
-        remove_ctx_from_base_input: bool = False,
-    ):
-        super().__init__()
-        self.modulated_model = modulated_model
-        self.base_tokenizer = base_tokenizer
-        self.ctx_tokenizer = ctx_tokenizer
-        self.register_module("modulated_model", self.modulated_model)
-        self.ctx_end_predicate = ctx_end_predicate
-        self.remove_ctx_from_base_input = remove_ctx_from_base_input
+# class ModulatedModelWithSharedInput(nn.Module):
+#     def __init__(
+#         self,
+#         modulated_model: ModulatedPretrainedModel,
+#         base_tokenizer: PreTrainedTokenizerBase,
+#         ctx_tokenizer: PreTrainedTokenizerBase,
+#         ctx_end_predicate: str | None = None,
+#         remove_ctx_from_base_input: bool = False,
+#     ):
+#         super().__init__()
+#         self.modulated_model = modulated_model
+#         self.base_tokenizer = base_tokenizer
+#         self.ctx_tokenizer = ctx_tokenizer
+#         self.register_module("modulated_model", self.modulated_model)
+#         self.ctx_end_predicate = ctx_end_predicate
+#         self.remove_ctx_from_base_input = remove_ctx_from_base_input
 
-    # delegate to self.modulated_model
-    @property
-    def config(self):
-        return self.modulated_model.config
+#     # delegate to self.modulated_model
+#     @property
+#     def config(self):
+#         return self.modulated_model.config
 
-    @property
-    def device(self):
-        return self.modulated_model.device
+#     @property
+#     def device(self):
+#         return self.modulated_model.device
 
-    def tie_weights(self):
-        self.modulated_model.base_model.tie_weights()
+#     def tie_weights(self):
+#         self.modulated_model.base_model.tie_weights()
 
-    def state_dict(self, *args, **kwargs):
-        return self.modulated_model.state_dict(*args, **kwargs)
+#     def state_dict(self, *args, **kwargs):
+#         return self.modulated_model.state_dict(*args, **kwargs)
 
-    def forward(self, *args, **kwargs):
-        input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
-        input_txts = self.base_tokenizer.batch_decode(
-            input_ids,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=True,
-        )
-        ctx_txts = deepcopy(input_txts)
-        if self.ctx_end_predicate:
-            ctx_txts = [
-                txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
-            ]
-        ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
-            self.device
-        )
-        ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
-        if self.remove_ctx_from_base_input:
-            raise NotImplementedError("Not implemented")
-            # input_txts = [
-            #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
-            # ]
-            # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
-            # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
-            # kwargs["input_ids"] = input_ids
-            # kwargs["attention_mask"] = attention_mask
-        return self.modulated_model(ctx_ids, ctx_attn_mask, *args, **kwargs)
+#     def forward(self, *args, **kwargs):
+#         input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
+#         input_txts = self.base_tokenizer.batch_decode(
+#             input_ids,
+#             skip_special_tokens=True,
+#             clean_up_tokenization_spaces=True,
+#         )
+#         ctx_txts = deepcopy(input_txts)
+#         if self.ctx_end_predicate:
+#             ctx_txts = [
+#                 txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
+#             ]
+#         ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
+#             self.device
+#         )
+#         ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
+#         if self.remove_ctx_from_base_input:
+#             raise NotImplementedError("Not implemented")
+#             # input_txts = [
+#             #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
+#             # ]
+#             # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
+#             # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
+#             # kwargs["input_ids"] = input_ids
+#             # kwargs["attention_mask"] = attention_mask
+#         return self.modulated_model(ctx_ids, ctx_attn_mask, *args, **kwargs)
 
-    def generate(self, *args, **kwargs):
-        input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
-        input_txts = self.base_tokenizer.batch_decode(
-            input_ids,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=True,
-        )
-        ctx_txts = deepcopy(input_txts)
-        if self.ctx_end_predicate:
-            ctx_txts = [
-                txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
-            ]
-        ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
-            self.device
-        )
-        ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
-        if self.remove_ctx_from_base_input:
-            raise NotImplementedError("Not implemented")
-            # input_txts = [
-            #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
-            # ]
-            # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
-            # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
-            # kwargs["input_ids"] = input_ids
-            # kwargs["attention_mask"] = attention_mask
-        return self.modulated_model.generate(ctx_ids, ctx_attn_mask, *args, **kwargs)
+#     def generate(self, *args, **kwargs):
+#         input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
+#         input_txts = self.base_tokenizer.batch_decode(
+#             input_ids,
+#             skip_special_tokens=True,
+#             clean_up_tokenization_spaces=True,
+#         )
+#         ctx_txts = deepcopy(input_txts)
+#         if self.ctx_end_predicate:
+#             ctx_txts = [
+#                 txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
+#             ]
+#         ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
+#             self.device
+#         )
+#         ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
+#         if self.remove_ctx_from_base_input:
+#             raise NotImplementedError("Not implemented")
+#             # input_txts = [
+#             #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
+#             # ]
+#             # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
+#             # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
+#             # kwargs["input_ids"] = input_ids
+#             # kwargs["attention_mask"] = attention_mask
+#         return self.modulated_model.generate(ctx_ids, ctx_attn_mask, *args, **kwargs)
 
 
 @contextmanager

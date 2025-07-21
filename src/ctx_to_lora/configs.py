@@ -322,6 +322,13 @@ class CtxTrainingArguments:
             "QA pairs that are longer than this value will be split up into multiple samples."
         },
     )
+    max_qas_per_sample: int = field(
+        default=-1,
+        metadata={
+            "help": "Max QA pair per context. If a context has more QA pairs than this value, "
+            "they will be split up into multiple samples."
+        },
+    )
     max_packed_inp_len: int | None = field(
         default=2**14,
         metadata={"help": "Maximum packed input length for training."},
