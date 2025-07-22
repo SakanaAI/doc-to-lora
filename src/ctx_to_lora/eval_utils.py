@@ -673,7 +673,10 @@ def evaluate(
     model_kwargs = dict(attn_implementation="flash_attention_2")
 
     if model_name_or_path is None:
-        state_dict = torch.load(checkpoint_path, weights_only=False)
+        try:
+            state_dict = torch.load(checkpoint_path, weights_only=False)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Checkpoint {checkpoint_path} not found. ")
         ctx_name = state_dict["ctx_encoder_args"].ctx_encoder_model_name_or_path
         model = ModulatedPretrainedModel.from_state_dict(
             state_dict,
@@ -889,7 +892,10 @@ def run_eval(
         checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
         run_dir = "/".join(checkpoint_path.split("/")[:-2])
         cur_it = int(checkpoint_path.split("checkpoint-")[1].split("/")[0])
-        args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
+        try:
+            args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Could not find args.yaml in {run_dir}. ")
         print(f"checkpoint_path: {checkpoint_path}")
         print(f"run_dir: {run_dir}")
 

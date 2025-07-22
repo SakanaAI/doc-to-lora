@@ -80,18 +80,26 @@ if __name__ == "__main__":
             # TODO: have to change this for bigger models
             eval_batch_size = 8
             eval_batch_size_gen = 32
-            metrics = run_eval(
-                checkpoint_path=file,
-                eval_batch_size=eval_batch_size,
-                split="validation",
-                generative=False,
-            )
-            gen_metrics = run_eval(
-                checkpoint_path=file,
-                eval_batch_size=eval_batch_size_gen,
-                split="validation",
-                generative=True,
-            )
+            try:
+                metrics = run_eval(
+                    checkpoint_path=file,
+                    eval_batch_size=eval_batch_size,
+                    split="validation",
+                    generative=False,
+                )
+            except FileNotFoundError as e:
+                print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
+                continue
+            try:
+                gen_metrics = run_eval(
+                    checkpoint_path=file,
+                    eval_batch_size=eval_batch_size_gen,
+                    split="validation",
+                    generative=True,
+                )
+            except FileNotFoundError as e:
+                print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
+                gen_metrics = {}
             metrics.update(gen_metrics)
             for k in metrics:
                 wandb.log(metrics[k], step=curstep)
