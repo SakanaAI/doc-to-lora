@@ -144,6 +144,10 @@ class TrainingArguments(TrainingArguments):
             "Options: 'inputs', 'loss'."
         },
     )
+    average_tokens_across_devices: bool = field(
+        default=False,
+        metadata={"help": "compute num_items_in_batch across devices."},
+    )
     # mem leak if use persistent workers
     # https://github.com/pytorch/pytorch/issues/62066
     # https://github.com/huggingface/transformers/issues/30943

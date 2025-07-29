@@ -798,9 +798,11 @@ def evaluate(
     eval_trainer_args["include_for_metrics"] = ["inputs"]
     eval_trainer_args["batch_eval_metrics"] = True
     eval_trainer_args["remove_unused_columns"] = False
-    eval_trainer_args["bf16"] = True
-    eval_trainer_args["tf32"] = True
-    eval_trainer_args["use_liger_kernel"] = True
+    eval_trainer_args["bf16"] = False
+    eval_trainer_args["tf32"] = False
+    eval_trainer_args["use_liger_kernel"] = False
+    eval_trainer_args["dataloader_num_workers"] = 0
+    eval_trainer_args["dataloader_prefetch_factor"] = None
 
     eval_trainer_args = Seq2SeqTrainingArguments(
         **eval_trainer_args,
@@ -877,6 +879,7 @@ def run_eval(
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "23"
 
     # torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
