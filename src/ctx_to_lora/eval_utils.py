@@ -14,15 +14,12 @@ import pandas as pd
 import torch
 import yaml
 from datasets import disable_caching
-from peft import PeftModel
 from transformers import (
-    PreTrainedModel,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     Trainer,
     set_seed,
 )
-from transformers.utils import is_liger_kernel_available
 
 from ctx_to_lora.data.collator import eval_collator, generation_collator
 from ctx_to_lora.data.definitions import (
@@ -693,24 +690,24 @@ def evaluate(
             use_flash_attn=True,
         )
 
-    if is_liger_kernel_available():
-        from liger_kernel.transformers import _apply_liger_kernel_to_instance
+    # if is_liger_kernel_available():
+    #     from liger_kernel.transformers import _apply_liger_kernel_to_instance
 
-        if isinstance(model, ModulatedPretrainedModel):
-            print("Applying liger-kernel to ModulatedPretrainedModel")
-            if isinstance(model.base_model, PeftModel):
-                _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
-            else:
-                _apply_liger_kernel_to_instance(model=model.base_model.model)
-            if ctx_name is not None:
-                print("Applying liger-kernel to ctx_encoder_model")
-                _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)
-        elif isinstance(model, PeftModel):
-            print("Applying liger-kernel to PeftModel")
-            _apply_liger_kernel_to_instance(model=model.base_model.model)
-        elif isinstance(model, PreTrainedModel):
-            print("Applying liger-kernel to PretrainedModel")
-            _apply_liger_kernel_to_instance(model=model.model)
+    #     if isinstance(model, ModulatedPretrainedModel):
+    #         print("Applying liger-kernel to ModulatedPretrainedModel")
+    #         if isinstance(model.base_model, PeftModel):
+    #             _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
+    #         else:
+    #             _apply_liger_kernel_to_instance(model=model.base_model.model)
+    #         if ctx_name is not None:
+    #             print("Applying liger-kernel to ctx_encoder_model")
+    #             _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)
+    #     elif isinstance(model, PeftModel):
+    #         print("Applying liger-kernel to PeftModel")
+    #         _apply_liger_kernel_to_instance(model=model.base_model.model)
+    #     elif isinstance(model, PreTrainedModel):
+    #         print("Applying liger-kernel to PretrainedModel")
+    #         _apply_liger_kernel_to_instance(model=model.model)
 
     tokenizer = get_tokenizer(args.model_name_or_path, train=False)
     if tokenizer.pad_token_id is None:

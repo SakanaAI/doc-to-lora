@@ -103,6 +103,14 @@ def train_collator(inp_list, tokenizer):
     if ctx_ids is not None:
         out["ctx_ids"] = ctx_ids
         out["ctx_attn_mask"] = ctx_attn_mask
+    if "logprobs_vals" in sample:
+        # for training with logits
+        logprobs_vals = [x.pop("logprobs_vals") for x in inp_list]
+        # logprobs_vals = tokenizer.pad(
+        #     {"input_ids": logprobs_vals}, **padding_kwargs
+        # )["input_ids"]
+        out["logprobs_vals"] = logprobs_vals
+        out["logprobs_indices"] = [x.pop("logprobs_indices") for x in inp_list]
 
     return out
 

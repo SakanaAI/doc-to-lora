@@ -10,6 +10,16 @@ TRANSFORMED_DATA_DIR = "data/processed_datasets"
 RAW_DATA_DIR = "data/raw_datasets/"
 SELF_GEN_DATA_DIR = f"{RAW_DATA_DIR}/self_gen/"
 
+# see https://huggingface.co/datasets/YuxinJiang/LTE_train_data/viewer/default/train?row=97&views%5B%5D=train&sql_row=2
+# based on https://arxiv.org/pdf/2402.11905
+SELF_GEN_SYSTEM_MSG = (
+    "### SYSTEM INSTRUCTION ###\n"
+    "You are an honest and helpful assistant.\n"
+    "You must use the information provided in the context for responding to the question.\n"
+    "**DO NOT** hallucinate or make up information.\n"
+    "### END OF SYSTEM INSTRUCTION ###"
+)
+
 
 REPEAT_PROMPTS = [
     "Repeat the text.",
@@ -124,23 +134,22 @@ DS_KWARGS = {
             split="train[60:]",
         ),
     ),
-    # "pwc_tiny": dict(
-    #     train=dict(path="sggetao/PwC", split="train[900:2000]"),
-    #     validation=dict(path="sggetao/PwC", split="train[:900]"),
-    # ),
-    "squad": dict(
+    "pwc_compact_tiny": dict(
         train=dict(
-            path="/home/rujikorn_sakana_ai/.cache/huggingface/hub/datasets--rajpurkar--squad",
-            split="train[900:]",
+            path="parquet",
+            data_files="data/raw_datasets/pwc_compact/train/ds.parquet",
+            # correspond to skipping to first 900 samples in the original dataset
+            split="train[60:200]",
         ),
-        validation=dict(
-            path="/home/rujikorn_sakana_ai/.cache/huggingface/hub/datasets--rajpurkar--squad",
-            split="train[:900]",
-        ),
-        test=dict(
-            path="/home/rujikorn_sakana_ai/.cache/huggingface/hub/datasets--rajpurkar--squad",
-            split="validation",
-        ),
+    ),
+    "pwc_tiny": dict(
+        train=dict(path="sggetao/PwC", split="train[900:2000]"),
+        validation=dict(path="sggetao/PwC", split="train[:900]"),
+    ),
+    "squad": dict(
+        train=dict(path="data/raw_datasets/squad", split="train[900:]"),
+        validation=dict(path="data/raw_datasets/squad", split="train[:900]"),
+        test=dict(path="data/raw_datasets/squad", split="validation"),
         # train=dict(path="rajpurkar/squad", split="train[900:]"),
         # validation=dict(path="rajpurkar/squad", split="train[:900]"),
         # test=dict(path="rajpurkar/squad", split="validation"),

@@ -4,7 +4,7 @@ import random
 import re
 from glob import glob
 
-import pandas as pd
+import numpy as np
 import yaml
 from datasets import Dataset, load_dataset
 from vllm import LLM, SamplingParams
@@ -13,12 +13,15 @@ from ctx_to_lora.data.definitions import (
     CLOSED_QA_INTX_TEMPLATES,
     RAW_DATA_DIR,
     SELF_GEN_DATA_DIR,
+    SELF_GEN_SYSTEM_MSG,
 )
 from ctx_to_lora.data.processing import (
     filter_none,
     get_preprocessing_fn,
     load_and_process_dataset,
+    tokenize_ctx_text,
 )
+from ctx_to_lora.model_loading import get_tokenizer
 from ctx_to_lora.utils import clear_gpu
 
 STOP_STRINGS = {
@@ -31,14 +34,55 @@ STOP_STRINGS = {
 SYSTEM_TEMPLATE = (
     "### SYSTEM INSTRUCTION ###\n"
     "You are an honest and helpful assistant.\n"
-    "You must use the information provided in the context for responding to the question.\n"
+    # "You must use the information provided in the context for responding to the question.\n"
     # "If the context does not contain enough information to answer the question, you must say so.\n"
     # "If that is the case, you can answer based on your knowledge, but you must clearly state that you are doing so.\n"
     "**DO NOT** hallucinate or make up information.\n"
     "### END OF SYSTEM INSTRUCTION ###"
 )
 
-PROMPT_TEMPLATE = "### Context ###\n{context}\n\n\n### Question ###\n{question}"
+SELF_QA_INTX = (
+    "---\n\n"
+    "# System Instruction\n"
+    "- The information provided is up-to-date information.\n"
+    "- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.\n"
+    "- If the provided information is related to the question, incorporate it in your response.\n"
+    "\n---\n\n"
+    "# User\n"
+)
+
+PRE_CTX = "# Information\n"
+
+PROMPT_TEMPLATE = (
+    PRE_CTX
+    + "{context}\n\n---\n\n"
+    +
+    # "# System Instruction\n"
+    # "- The information provided is up-to-date information.\n"
+    # "- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.\n"
+    # "- If the provided information is related to the question, incorporate it in your response.\n"
+    # "\n---\n\n"
+    # "# User\n{question}"
+    SELF_QA_INTX
+    + "{question}"
+)
+
+
+"""
+
+---
+
+# System Instruction
+- The information provided is up-to-date information.
+- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.
+- If the provided information is related to the question, incorporate it in your response.
+
+---
+# User
+
+What team is Mbappe playing for?
+
+"""
 
 MODEL_CTX_LEN = {
     "google/gemma-2-27b-it": 8192,
@@ -64,12 +108,12 @@ def load_config(config_path: str) -> dict:
     return config
 
 
-def check_should_skip(txt: str, vllm_model: str) -> bool:
-    """Check if the response should be skipped based on stop strings."""
-    for stop in STOP_STRINGS[vllm_model]:
-        if stop in txt[-len(stop) :]:
-            return (txt.split(stop)[0], False)  # Found a valid stop string
-    return (txt, True)  # No valid stop string found, skip this response
+# def check_should_skip(txt: str, vllm_model: str) -> bool:
+#     """Check if the response should be skipped based on stop strings."""
+#     for stop in STOP_STRINGS[vllm_model]:
+#         if stop in txt[-len(stop) :]:
+#             return (txt.split(stop)[0], False)  # Found a valid stop string
+#     return (txt, True)  # No valid stop string found, skip this response
 
 
 def get_dataset_configs(
@@ -123,27 +167,27 @@ def create_messages(
     ctxs: list[str], questions: list[list[str]], vllm_model: str, system_template: str
 ) -> list[list[dict]]:
     """Create chat messages for the model."""
-    if "gemma" in vllm_model:
-        # gemma models do not support system messages
-        return [
-            [
-                {
-                    "role": "user",
-                    "content": system_template + "\n\n\n" + get_prompt(ctx, q),
-                }
-            ]
-            for ctx, q_list in zip(ctxs, questions)
-            for q in q_list
+    # if "gemma" in vllm_model:
+    # gemma models do not support system messages
+    return [
+        [
+            {
+                "role": "user",
+                "content": system_template + "\n\n\n" + get_prompt(ctx, q),
+            }
         ]
-    else:
-        return [
-            [
-                {"role": "system", "content": system_template},
-                {"role": "user", "content": get_prompt(ctx, q)},
-            ]
-            for ctx, q_list in zip(ctxs, questions)
-            for q in q_list
-        ]
+        for ctx, q_list in zip(ctxs, questions)
+        for q in q_list
+    ]
+    # else:
+    #     return [
+    #         [
+    #             {"role": "system", "content": system_template},
+    #             {"role": "user", "content": get_prompt(ctx, q)},
+    #         ]
+    #         for ctx, q_list in zip(ctxs, questions)
+    #         for q in q_list
+    #     ]
 
 
 def self_generate(
@@ -219,6 +263,25 @@ def self_generate(
 
     ds = ds.filter(filter_none, batched=False, num_proc=8)
 
+    tk = get_tokenizer(args.vllm_model, train=True)
+
+    self_qa_intx_tokens = tk(SELF_QA_INTX, add_special_tokens=False)["input_ids"]
+    n_self_qa_intx_tokens = len(self_qa_intx_tokens)
+    pre_ctx_tokens = tk(PRE_CTX, add_special_tokens=False)["input_ids"]
+    n_pre_ctx_tokens = len(pre_ctx_tokens)
+    sys_tokens = tk(system_template.split("\n")[0], add_special_tokens=False)[
+        "input_ids"
+    ]
+    n_sys_tokens = len(sys_tokens)
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    ds = ds.map(
+        tokenize_ctx_text,
+        fn_kwargs={"tokenizer": tk},
+        batched=True,
+        batch_size=50_000,
+        keep_in_memory=True,
+    )
+
     ctxs = [sample["context"] for sample in ds]
     questions = [
         [add_closed_qa_prompt(q, closed_qa_prob) for q in sample["prompts"] if q]
@@ -226,59 +289,212 @@ def self_generate(
     ]
     print(f"Loaded {len(ctxs)} contexts and {len(questions)} questions")
 
-    messages = create_messages(ctxs, questions, args.vllm_model, SYSTEM_TEMPLATE)
+    k = 16
+    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
 
-    print(f"Generating from {len(messages)} contexts")
-    # TODO (distillation): make vllm outputs logits here too
+    chunk_size = 1_000
+    for chunk_idx, start in enumerate(range(0, len(ctxs), chunk_size)):
+        print(f"Processing chunk {chunk_idx}")
+
+        chunk_ctxs = ctxs[start : start + chunk_size]
+        chunk_questions = questions[start : start + chunk_size]
+        chunk_messages = create_messages(
+            chunk_ctxs, chunk_questions, args.vllm_model, SELF_GEN_SYSTEM_MSG
+        )
+        print(f"Generating from {len(chunk_messages)} contexts")
+
+        # Clear GPU memory before processing the next chunk
+        clear_gpu()
+        execute_qa_generation(
+            fpath + f"_{chunk_idx:04d}",
+            args,
+            llm,
+            temp,
+            tk,
+            self_qa_intx_tokens,
+            n_self_qa_intx_tokens,
+            sys_tokens,
+            n_sys_tokens,
+            chunk_ctxs,
+            ds["ctx_ids"][start : start + chunk_size],
+            chunk_questions,
+            chunk_messages,
+            k,
+        )
+
+
+def execute_qa_generation(
+    fpath,
+    args,
+    llm,
+    temp,
+    tk,
+    self_qa_intx_tokens,
+    n_self_qa_intx_tokens,
+    sys_tokens,
+    n_sys_tokens,
+    ctxs,
+    ctx_ids,
+    questions,
+    messages,
+    k,
+):
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
             max_tokens=1024,
+            logprobs=k,
             temperature=temp,
-            # needed for checking if stop tokens are present
+            seed=42,
+            spaces_between_special_tokens=False,
             skip_special_tokens=False,
             include_stop_str_in_output=True,
         ),
     )
 
-    self_gen_data = {ctx: {"prompts": [], "responses": []} for ctx in ctxs}
+    self_gen_data = {
+        ctx: {
+            "ctx_ids": ctx_ids,
+            "input_ids": [],
+            "response_start_end": [],
+            "logprobs_vals": [],
+            "logprobs_indices": [],
+        }
+        for ctx, ctx_ids in zip(ctxs, ctx_ids)
+    }
     c = 0
     n_skips = 0
+    sys_start = None
     for ctx, q_list in zip(ctxs, questions):
-        for i, q in enumerate(q_list):
-            response = completions[c + i].outputs[0].text
-            response, skip = check_should_skip(response, args.vllm_model)
-            # skip = True
-            # for stop in STOP_STRINGS[args.vllm_model]:
-            #     if stop == response[-len(stop) :]:
-            #         # Check if response ends with stop string
-            #         response = response.split(stop)[0]
-            #         skip = False
-            #         break
-            if skip:
-                print(f"Skipping due to missing stop string")
+        # self_gen_data[ctx]["ctx_ids"] = ctx_ids
+        for i, _ in enumerate(q_list):
+            # response = completions[c + i].outputs[0].text
+            reason = completions[c + i].outputs[0].finish_reason
+            if reason != "stop":
+                # print(f"idx: {c + i}")
+                print(f"finish_reason: {completions[c + i].outputs[0].finish_reason}")
+                print(f"Skipping due to finish_reason={reason} != 'stop'")
                 n_skips += 1
                 continue
 
-            self_gen_data[ctx]["prompts"].append(q)
-            self_gen_data[ctx]["responses"].append(response)
+            # includes the logprob before the first response token
+            # but excludes the logprob from eos token
+            logp = completions[c + i].outputs[0].logprobs
+
+            # len = num response tokens
+            n_response_tokens = len(completions[c + i].outputs[0].token_ids)
+
+            logp_indices = np.empty((n_response_tokens, k), dtype=np.int32)
+            # float-16 is better for this range
+            logp_vals = np.empty((n_response_tokens, k), dtype=np.float16)
+            assert len(logp) == n_response_tokens, (
+                f"Expected {n_response_tokens} logp entries, got {len(logp)}"
+            )
+
+            for li, info_d in enumerate(logp):
+                for j, (idx, tok_info) in enumerate(info_d.items()):
+                    logp_indices[li, j] = idx
+                    logp_vals[li, j] = tok_info.logprob
+
+            prompt_ids = completions[c + i].prompt_token_ids  # 1d list
+            # token_ids only includes generated tokens, not the prompt
+            response_token_ids = completions[c + i].outputs[0].token_ids  # 1d list
+            all_ids = prompt_ids + response_token_ids
+            res_start = len(prompt_ids)
+            res_end = res_start + n_response_tokens
+
+            if sys_start is None:
+                for ii in range(len(prompt_ids) - n_sys_tokens):
+                    if prompt_ids[ii : ii + n_sys_tokens] == sys_tokens:
+                        # found the start of the system message
+                        sys_start = ii
+                        break
+
+            q_start = None
+            for ii in range(
+                len(prompt_ids) - n_self_qa_intx_tokens,
+                -1,
+                -1,
+            ):
+                if prompt_ids[ii : ii + n_self_qa_intx_tokens] == self_qa_intx_tokens:
+                    # found the start of the user input
+                    q_start = ii + n_self_qa_intx_tokens
+                    break
+
+            # bos + question + eos + start model turn + response + eos
+            input_ids = all_ids[:sys_start] + all_ids[q_start:res_end]
+
+            # TODO: save prompt logprobs with qa_start
+            # TODO: also save the prompt tokens for output alignment during training
+            # prompt_logp = completions[c + i].prompt_logprobs
+            # q_len = res_start - q_start
+            # prompt_logp_indices = np.empty((q_len, k), dtype=np.int32)
+            # # float-16 is better for this range
+            # prompt_logp_vals = np.empty((q_len, k), dtype=np.float16)
+            # for li, info_d in enumerate(prompt_logp[q_start:res_start]):
+            #     for j, (idx, tok_info) in enumerate(info_d.items()):
+            #         # vllm returns logprob for gt token first,
+            #         # which means that we might have k + 1 logprobs
+            #         if j >= k:
+            #             continue
+            #         prompt_logp_indices[li, j] = idx
+            #         prompt_logp_vals[li, j] = tok_info.logprob
+
+            # relative to the input_ids
+            res_start = res_start - q_start + sys_start
+            res_end = res_start + n_response_tokens
+
+            # arrays will be saved as nested lists of numbers
+
+            self_gen_data[ctx]["input_ids"].append(input_ids)
+            # assume single-turn chat
+            self_gen_data[ctx]["response_start_end"].append((res_start, res_end))
+            self_gen_data[ctx]["logprobs_vals"].append(logp_vals)
+            self_gen_data[ctx]["logprobs_indices"].append(logp_indices)
+            # NOTE: also have to shift back 1 for training
+            # self_gen_data[ctx]["prompt_start_end"].append((sys_start, res_start))
+            # self_gen_data[ctx]["prompt_logprobs_vals"].append(prompt_logp_vals)
+            # self_gen_data[ctx]["prompt_logprobs_indices"].append(prompt_logp_indices)
+
         c += i + 1
 
     print(f"Skipped {n_skips} responses due to missing stop strings")
     samples = [
         {
-            "context": ctx,
-            "prompts": q_list,
-            "responses": self_gen_data[ctx]["responses"],
+            # "context": ctx,
+            # "prompts": q_list,
+            # "responses": self_gen_data[ctx]["responses"],
+            "ctx_ids": self_gen_data[ctx]["ctx_ids"],
+            "input_ids": self_gen_data[ctx]["input_ids"],
+            "response_start_end": self_gen_data[ctx]["response_start_end"],
+            # "prompt_start_end": self_gen_data[ctx]["prompt_start_end"],
+            "logprobs_vals": self_gen_data[ctx]["logprobs_vals"],
+            "logprobs_indices": self_gen_data[ctx]["logprobs_indices"],
         }
         for ctx, q_list in zip(ctxs, questions)
     ]
 
     if args.debug:
         for sample in samples:
-            print(f"context={sample['context']}")
-            print(f"prompt={sample['prompts']}")
-            print(f"response={sample['responses']}")
+            print(f"context={tk.decode(sample['ctx_ids'])}")
+            print(f"QA={[tk.decode(ids) for ids in sample['input_ids']]}")
+
+            for input_ids, (start, end) in zip(
+                sample["input_ids"], sample["response_start_end"]
+            ):
+                print(f"start={start}, end={end}")
+                print(f"response={tk.decode(input_ids[start:end])}")
+
+            for input_ids, (start, end) in zip(
+                sample["input_ids"], sample["prompt_start_end"]
+            ):
+                print(f"start={start}, end={end}")
+                print(f"prompt={tk.decode(input_ids[start:end])}")
+
+            print(f"logprobs_vals={[x.shape for x in sample['logprobs_vals']]}")
+            print(f"logprobs_indices={[x.shape for x in sample['logprobs_indices']]}")
+            for indices in sample["logprobs_indices"]:
+                print(f"logprobs_indices={indices[-1]}")
             print("=" * 80)
 
     print(f"Generated {len(samples)} samples")
@@ -286,16 +502,18 @@ def self_generate(
 
     # Save results
     if not args.debug:
-        df = pd.DataFrame(samples)
-        ds_out = Dataset.from_pandas(df)
-        fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
+        # df = pd.DataFrame(samples)
+        # ds_out = Dataset.from_pandas(df)
+        ds_out = Dataset.from_list(samples)
+        # fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
+
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
         fpath = f"{fpath}.parquet"
         ds_out.to_parquet(fpath)
         print(f"Saved to {fpath}")
 
         # Cleanup
-        del samples, df, ds_out, completions, messages, ctxs, questions
+        del samples, ds_out, completions, messages, ctxs, questions
         clear_gpu()
 
 
@@ -369,6 +587,8 @@ if __name__ == "__main__":
         enable_prefix_caching=True,
         enable_chunked_prefill=True,
         max_model_len=MODEL_CTX_LEN.get(vllm_model),
+        max_num_batched_tokens=16384,
+        max_num_seqs=32,  # avoid oom when getting logprobs
     )
 
     print(f"{llm_kwargs=}")

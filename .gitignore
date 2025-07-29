@@ -6,7 +6,10 @@ models/
 results/
 datasets/
 llm-comparator/
-/data/
+# Ignore data files but not scripts
+/data/processed_datasets/
+/data/raw_datasets/
+/data/distil/
 __pycache__/
 *egg-info/
 .vscode/
@@ -22,7 +25,6 @@ plots/
 *.safetensors
 *tfevents*
 watcher_state.yaml
-ds_config.json
 eval_results/
 .github/
 *.code-workspace

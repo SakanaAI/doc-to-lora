@@ -9,8 +9,10 @@ from os import path
 from typing import Any
 
 import datasets
+import numpy as np
+import torch
 from datasets import Dataset, is_caching_enabled, load_dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from ctx_to_lora.data.definitions import (
     CLOSED_QA_INTX_TEMPLATES,
@@ -20,6 +22,7 @@ from ctx_to_lora.data.definitions import (
     RAW_DATA_DIR,
     REPEAT_PROMPTS,
     SELF_GEN_DATA_DIR,
+    SELF_GEN_SYSTEM_MSG,
     TRANSFORMED_DATA_DIR,
 )
 from ctx_to_lora.data.packing import pack_batch
@@ -130,7 +133,7 @@ def get_preprocessing_fn(
                 "response": sample["answer"],
             }
 
-    elif ds_name == "pwc":
+    elif ds_name == "pwc" or ds_name == "pwc_tiny":
         # original pwc
         def f(sample):
             return {
@@ -308,6 +311,22 @@ def get_preprocessing_fn(
             return g
 
         f = maybe_convert_to_list(f)
+
+    if "self_gen" not in ds_name:
+
+        def strip_response(f):
+            def g(sample):
+                sample = f(sample)
+                if "responses" in sample and bool(sample["responses"]):
+                    sample["responses"] = [
+                        r.strip() if isinstance(r, str) else r
+                        for r in sample["responses"]
+                    ]
+                return sample
+
+            return g
+
+        f = strip_response(f)
 
     return f
 
@@ -551,7 +570,19 @@ def load_and_process_dataset(
     cols_to_remove = [
         col
         for col in ds.column_names
-        if col not in ["context", "prompts", "responses", "qas", "variation"]
+        if col
+        not in [
+            "context",
+            "prompts",
+            "responses",
+            "qas",
+            "variation",
+            "logprobs_vals",
+            "logprobs_indices",
+            "input_ids",
+            "ctx_ids",
+            "response_start_end",
+        ]
     ]
     is_eval = split != "train"
     ds = ds.map(
@@ -613,9 +644,9 @@ def get_tokenized_dataset(
     repeat_prob: float = 0.0,  # only used when add_repeat_prompt is True
     set_format: str | None = None,
     streaming: bool = False,
+    base_model: PreTrainedModel | None = None,
 ) -> dict[str, Any]:
-    # TODO (distillation, Tan): make this works with pre-computed logits
-    assert not use_kl_loss, "KL loss is deprecated"
+    # assert not use_kl_loss, "KL loss is deprecated"  # TO BE REMOVED
     if add_repeat_prompt:
         assert repeat_prob > 0, f"add_repeat_prompt is set but repeat_prob = 0"
     logger.info(f"Loading dataset {ds_name} with split {split}...")
@@ -673,6 +704,7 @@ def get_tokenized_dataset(
         ds=ds,
         tokenizer=tokenizer,
         ctx_tokenizer=ctx_tokenizer,
+        model=base_model,
         num_proc=num_proc,
         **tokenize_kwargs,
     )
@@ -696,6 +728,7 @@ def construct_and_tokenize_ctx_qa(
     ctx_tokenizer_kwargs,
     add_ctx_to_chat,
     use_kl_loss,
+    model,
     need_ctx_ids,
     is_pretrain,
     is_paraphrased,
@@ -740,74 +773,104 @@ def construct_and_tokenize_ctx_qa(
 
         # for sft + chat_model, we need to convert the dataset to chat format
         # add "data" field
-        ds = ds.map(
-            convert_ctx_prompt_response_to_messages,
-            fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-            num_proc=num_proc,
-            remove_columns=[col for col in ds.column_names if col != "context"],
-        )
-        # add input_ids, attention_mask, labels to "data"
-        os.environ["TOKENIZERS_PARALLELISM"] = "true"
-        logging.debug("Tokenizing inputs")
-        tokenized_ds = ds.map(
-            get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
-            batched=True,
-            batch_size=100_000,
-            # # num_proc=num_proc,
-        )
+        if "input_ids" in ds.column_names and "response_start_end" in ds.column_names:
+            # already tokenized dataset (e.g., self-gen qa data)
+            tokenized_ds = ds.map(
+                get_labels_from_input_ids,
+                num_proc=num_proc,
+            )
+        else:
+            ds = ds.map(
+                convert_ctx_prompt_response_to_messages,
+                fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+                num_proc=num_proc,
+                # remove_columns=[col for col in ds.column_names if col != "context"],
+            )
+            # add input_ids, attention_mask, labels to "data"
+            os.environ["TOKENIZERS_PARALLELISM"] = "true"
+            logging.debug("Tokenizing inputs")
+            tokenized_ds = ds.map(
+                get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
+                batched=True,
+                batch_size=100_000,
+                # # num_proc=num_proc,
+            )
 
-    if "train" in split:
-        # base model cant handle these samples naturally
-        # should skip
-        # tokenized_ds = tokenized_ds.filter(
-        #     len_filter,
-        #     fn_kwargs={
-        #         "max_length": base_model_max_len,
-        #         "keys": ["input_ids", "labels"],
-        #     },
-        #     # batched=False,
-        #     # batch_size=0,
-        #     num_proc=num_proc,
-        # )
-        tokenized_ds = tokenized_ds.map(
-            len_filter_data,
-            fn_kwargs={
-                "max_length": base_model_max_len,
-                "keys": ["input_ids"],
-            },
-            num_proc=num_proc,
-        )
+    # if "train" in split:
+    #     # base model cant handle these samples naturally
+    #     # should skip
+    #     # tokenized_ds = tokenized_ds.filter(
+    #     #     len_filter,
+    #     #     fn_kwargs={
+    #     #         "max_length": base_model_max_len,
+    #     #         "keys": ["input_ids", "labels"],
+    #     #     },
+    #     #     # batched=False,
+    #     #     # batch_size=0,
+    #     #     num_proc=num_proc,
+    #     # )
+    #     tokenized_ds = tokenized_ds.map(
+    #         len_filter_data,
+    #         fn_kwargs={
+    #             "max_length": base_model_max_len,
+    #             "keys": ["input_ids"],
+    #         },
+    #         num_proc=num_proc,
+    #     )
 
-    # for use_kl_loss, we need "chat_ids" and "chat_attn_mask"
-    # TODO (distillation): implement
+    logger.info(tokenized_ds)
+
+    if use_kl_loss and ("train" in split):
+        if "logprobs_vals" not in ds.column_names:
+            assert model is not None, (
+                f"Base model is required for computing the "
+                "logits when `use_kl_loss` is True and logprobs are not included."
+            )
+            # add "data_logp"
+            tokenized_ds = tokenized_ds.map(
+                convert_ctx_prompt_response_to_messages,
+                fn_kwargs={"add_ctx_to_chat": True, "for_logp": True},
+                num_proc=num_proc,
+            )
+            # add logits info to "data_logp" field
+            logger.info("computing logprobs")
+            tokenized_ds = tokenized_ds.map(
+                get_sft_prompt_formatting_fn(
+                    TRAINING_TASK.COMPLETION, tokenizer, use_kl_loss, model
+                ),
+                batched=True,
+                batch_size=100_000,
+            )
+        else:
+            tokenized_ds = tokenized_ds.map(add_ctx_attn_mask, num_proc=num_proc)
+
+    keep_cols = [
+        "input_ids",
+        "attention_mask",
+        "labels",
+        "ctx_ids",
+        "ctx_attn_mask",
+        "context",
+        "data",
+        "data_logp",
+    ]
     if use_kl_loss:
-        raise NotImplementedError("KL loss not implemented")
-
-        # old code from before (might not work anymore)
-        # e.g,. the next line likely replace the tokenized text from
-        # earlier `convert_ctx_prompt_response_to_messages` call
-
-        # tokenized_ds = tokenized_ds.map(
-        #     convert_ctx_prompt_response_to_messages,
-        #     fn_kwargs={"add_ctx_to_chat": True},
-        #     remove_columns=["messages"],
-        # )
-        # tokenized_ds = tokenized_ds.map(
-        #     get_sft_prompt_formatting_fn(TRAINING_TASK.COMPLETION, tokenizer),
-        #     remove_columns=["chat"],
-        # )
+        keep_cols += ["logprobs_vals", "logprobs_indices"]
+    tokenized_ds = tokenized_ds.remove_columns(
+        [col for col in tokenized_ds.column_names if col not in keep_cols],
+    )
 
     if need_ctx_ids:
-        # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
-        os.environ["TOKENIZERS_PARALLELISM"] = "true"
-        logging.debug("Tokenizing context")
-        tokenized_ds = tokenized_ds.map(
-            tokenize_ctx_text,
-            fn_kwargs={"tokenizer": ctx_tokenizer},
-            batched=True,
-            batch_size=100_000,
-            # # num_proc=num_proc,
-        )
+        if "ctx_ids" not in tokenized_ds.column_names:
+            # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
+            os.environ["TOKENIZERS_PARALLELISM"] = "true"
+            logging.debug("Tokenizing context")
+            tokenized_ds = tokenized_ds.map(
+                tokenize_ctx_text,
+                fn_kwargs={"tokenizer": ctx_tokenizer},
+                batched=True,
+                batch_size=100_000,
+            )
         if "train" in split:
             # TODO: do something if ctx length is longer than the ctx model length
             # e.g., drop or split for multi-lora training
@@ -823,8 +886,13 @@ def construct_and_tokenize_ctx_qa(
             tokenized_ds = tokenized_ds.map(
                 unpack_data,
                 num_proc=num_proc,
-                remove_columns=["data", "context"],
+                remove_columns=[
+                    col
+                    for col in tokenized_ds.column_names
+                    if col in ["data", "data_logp", "context"]
+                ],
             )
+            print(tokenized_ds)
 
             logging.debug(f"Split too long QAs with max length {max_qas_len}")
             tokenized_ds = tokenized_ds.map(
@@ -900,9 +968,57 @@ def build_intx_pretrain(sample: dict[str, str]):
     return {"text": sample["context"] + sample["qas"]}
 
 
+def add_ctx_attn_mask(sample: dict[str, Any]) -> dict[str, Any]:
+    """
+    Add context attention mask to the sample.
+
+    Args:
+        sample: A dictionary containing 'ctx_ids'
+
+    Returns:
+        The sample with 'ctx_attn_mask' added
+    """
+    if "ctx_ids" in sample:
+        sample["ctx_attn_mask"] = [1] * len(sample["ctx_ids"])
+    return sample
+
+
+def get_labels_from_input_ids(sample: dict[str, Any]) -> dict[str, Any]:
+    """
+    Extract labels from input_ids and response_start.
+
+    Args:
+        sample: A dictionary containing 'input_ids' and 'response_start'
+
+    Returns:
+        A dictionary with 'labels' field added
+    """
+    labels = []
+    attention_mask = []
+    for input_ids_i, (start_i, end_i) in zip(
+        sample["input_ids"], sample["response_start_end"]
+    ):
+        len_input_ids = len(input_ids_i)
+        # pad labels with -100
+        pad_len_left = start_i
+        pad_len_right = len_input_ids - end_i
+        labels.append(
+            [IGNORE_INDEX] * pad_len_left
+            + input_ids_i[start_i:]
+            + [IGNORE_INDEX] * pad_len_right
+        )
+        attention_mask.append([1] * len(input_ids_i))
+
+    sample["labels"] = labels
+    sample["attention_mask"] = attention_mask
+    return sample
+
+
 def get_sft_prompt_formatting_fn(
     sft_mode: TRAINING_TASK,
     tokenizer: PreTrainedTokenizerBase,
+    for_logp: bool = False,
+    model: PreTrainedModel | None = None,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """
     Get a function that formats examples for supervised fine-tuning.
@@ -929,10 +1045,13 @@ def get_sft_prompt_formatting_fn(
             "Training with pre-training data is not supported yet."
         )
 
+    data_field = "data_logp" if for_logp else "data"
+
+    @torch.inference_mode()
     def f_intx(samples):
         # flatten all the messages into a list
         # tokenize, the pack back correctly
-        messages_list = [x for x in samples["data"]]
+        messages_list = [x for x in samples[data_field]]
 
         n_queries = [len(x) for x in messages_list]
         messages = concat_list(messages_list)
@@ -940,31 +1059,76 @@ def get_sft_prompt_formatting_fn(
         tokens = tokenizer.apply_chat_template(
             messages,
             tokenize=True,
-            add_special_token=False,
+            add_special_tokens=False,
+            padding=False,
             truncation=False,
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
         )
         labels = []
+        logprobs_vals = []
+        logprobs_indices = []
         for tok_ids, masks in zip(tokens["input_ids"], tokens["assistant_masks"]):
             o = [id_ if mask else IGNORE_INDEX for id_, mask in zip(tok_ids, masks)]
             labels.append(o)
+            if for_logp:
+                # TODO: batch compute?
+                # save only the logits for the assistant tokens
+                assert sum(masks) > 0, "No assistant tokens found in the masks"
+
+                # + 1 to also get the logits of the token before the first label token
+                num_logits_to_keep = int(len(masks) - np.argmax(masks) + 1)
+
+                # [n_labels + 1]
+                logits = model(
+                    torch.tensor([tok_ids], device=model.device),
+                    logits_to_keep=num_logits_to_keep,
+                ).logits.squeeze(0)
+
+                # include the logits of the token before the first label token
+                pre_label_idx = np.argmax(masks) - 1
+                masks[pre_label_idx] = True
+                logits = logits[
+                    torch.tensor(
+                        masks[pre_label_idx:],
+                        device=logits.device,
+                        dtype=torch.bool,
+                    )
+                ]
+
+                logits = logits[..., :-1, :]  # remove the last token (eos)
+                logprobs = torch.nn.functional.log_softmax(logits.float(), dim=-1)
+                # ignore eos
+                vals, idx = torch.topk(logprobs, k=16, dim=-1)
+                logprobs_vals.append(vals.to(torch.float16))
+                logprobs_indices.append(idx.to(torch.int32))
+
         del tokens["assistant_masks"]
         tokens["labels"] = labels
         per_ctx_tokens = []
         i = 0
         for n in n_queries:
-            per_ctx_tokens.append(
-                {
+            if for_logp:
+                per_ctx_data = {
+                    "logprobs_vals": logprobs_vals[i : i + n],
+                    "logprobs_indices": logprobs_indices[i : i + n],
+                }
+                # per_ctx_data = {
+                #     "logprobs_vals": logprobs_vals[i : i + n],
+                #     "logprobs_indices": logprobs_indices[i : i + n],
+                # }
+            else:
+                per_ctx_data = {
                     "input_ids": tokens["input_ids"][i : i + n],
                     "attention_mask": tokens["attention_mask"][i : i + n],
                     "labels": tokens["labels"][i : i + n],
                 }
-            )
+
+            per_ctx_tokens.append(per_ctx_data)
             i += n
 
-        return dict(data=per_ctx_tokens)
+        return {data_field: per_ctx_tokens}
 
     # return f if not apply_chat_template_fn is not None else f_intx
     return f_intx
@@ -973,6 +1137,7 @@ def get_sft_prompt_formatting_fn(
 def convert_ctx_prompt_response_to_messages(
     example: dict[str, Any],
     add_ctx_to_chat: bool,
+    for_logp: bool = False,
 ) -> dict[str, Any]:
     """
     Convert context/prompt/response format to chat messages format.
@@ -998,6 +1163,8 @@ def convert_ctx_prompt_response_to_messages(
     system_msg = ""
     if "system_message" in example:
         system_msg = example["system_message"].strip()
+        if for_logp and not system_msg:
+            system_msg = SELF_GEN_SYSTEM_MSG
 
     data = []
     for prompt, response in zip(example[prompt_field], example[res_field]):
@@ -1009,11 +1176,12 @@ def convert_ctx_prompt_response_to_messages(
             [
                 {"role": "system", "content": system_msg.strip()},
                 {"role": "user", "content": user_msg.strip()},
-                {"role": "assistant", "content": response.strip()},
+                {"role": "assistant", "content": response},
             ]
         )
+    out_field = "data_logp" if for_logp else "data"
 
-    return dict(data=data)
+    return {out_field: data}
 
 
 def split_too_long_qas(
@@ -1031,6 +1199,8 @@ def split_too_long_qas(
     labels = samples["labels"]
     ctx_ids = samples["ctx_ids"]
     ctx_attn_mask = samples["ctx_attn_mask"]
+    target_logprobs_vals = samples.get("logprobs_vals", None)
+    target_logprobs_indices = samples.get("logprobs_indices", None)
 
     # Pre-calculate total lengths to check if any splitting is needed
     total_lengths = [sum(len(x) for x in seq) for seq in input_ids]
@@ -1048,14 +1218,28 @@ def split_too_long_qas(
     out = {k: list() for k in samples}
     longest_new_qas_len = 0
     n_skip = 0
+    has_target_logprobs = (
+        target_logprobs_vals is not None and target_logprobs_indices is not None
+    )
 
     # Helper function to add a batch efficiently
-    def add_batch(inp_ids_batch, attn_batch, labels_batch, ctx_id, ctx_attn):
+    def add_batch(
+        inp_ids_batch,
+        attn_batch,
+        labels_batch,
+        ctx_id,
+        ctx_attn,
+        target_vals_batch=None,
+        target_indices_batch=None,
+    ):
         out["input_ids"].append(inp_ids_batch)
         out["attention_mask"].append(attn_batch)
         out["labels"].append(labels_batch)
         out["ctx_ids"].append(ctx_id)
         out["ctx_attn_mask"].append(ctx_attn)
+        if has_target_logprobs:
+            out["logprobs_vals"].append(target_vals_batch)
+            out["logprobs_indices"].append(target_indices_batch)
 
     for i, tot_inp_len in enumerate(total_lengths):
         if (max_qas_len < 0 or tot_inp_len <= max_qas_len) and (
@@ -1074,10 +1258,26 @@ def split_too_long_qas(
         new_input_ids = []
         new_attn_mask = []
         new_labels = []
+        new_target_vals = [] if has_target_logprobs else None
+        new_target_indices = [] if has_target_logprobs else None
 
-        for inp_ids, attn_mask, label in zip(
-            input_ids[i], attention_mask[i], labels[i]
-        ):
+        sequences = zip(input_ids[i], attention_mask[i], labels[i])
+        if has_target_logprobs:
+            sequences = zip(
+                input_ids[i],
+                attention_mask[i],
+                labels[i],
+                target_logprobs_vals[i],
+                target_logprobs_indices[i],
+            )
+
+        for seq_data in sequences:
+            if has_target_logprobs:
+                inp_ids, attn_mask, label, target_vals, target_indices = seq_data
+            else:
+                inp_ids, attn_mask, label = seq_data
+                target_vals, target_indices = None, None
+
             inp_len = len(inp_ids)
             if inp_len > max_qas_len:
                 # Skip individual sequences that are too long
@@ -1095,6 +1295,9 @@ def split_too_long_qas(
                 new_input_ids.append(inp_ids)
                 new_attn_mask.append(attn_mask)
                 new_labels.append(label)
+                if has_target_logprobs:
+                    new_target_vals.append(target_vals)
+                    new_target_indices.append(target_indices)
             else:
                 # Current batch is full, save it and start new batch
                 # logger.debug(
@@ -1107,6 +1310,8 @@ def split_too_long_qas(
                         new_labels,
                         current_ctx_id,
                         current_ctx_attn,
+                        new_target_vals,
+                        new_target_indices,
                     )
                     longest_new_qas_len = max(longest_new_qas_len, new_qas_len)
 
@@ -1115,6 +1320,9 @@ def split_too_long_qas(
                 new_input_ids = [inp_ids]
                 new_attn_mask = [attn_mask]
                 new_labels = [label]
+                if has_target_logprobs:
+                    new_target_vals = [target_vals]
+                    new_target_indices = [target_indices]
 
         # Add final batch if not empty
         if new_input_ids:
@@ -1124,6 +1332,8 @@ def split_too_long_qas(
                 new_labels,
                 current_ctx_id,
                 current_ctx_attn,
+                new_target_vals,
+                new_target_indices,
             )
             longest_new_qas_len = max(longest_new_qas_len, new_qas_len)
 
@@ -1138,7 +1348,12 @@ def split_too_long_qas(
 
 
 def unpack_data(sample):
-    return {k: sample["data"][k] for k in sample["data"]}
+    if "data" not in sample:
+        return sample
+    data_keys = ["data"]
+    if "data_logp" in sample:
+        data_keys.append("data_logp")
+    return {k: sample[dk][k] for dk in data_keys for k in sample[dk]}
 
 
 def unpack_data_eval(samples):
@@ -1317,6 +1532,7 @@ def tokenize_pretrain(
     tokens = tokenizer(
         samples["text"],
         add_special_tokens=True,
+        padding=False,
         truncation=False,
         **(tokenizer_kwargs or {}),
     )
@@ -1436,6 +1652,72 @@ def pack(
 
         ds.save_to_disk(ds_path, num_proc=num_proc)
     return ds
+
+
+# def add_logits(model, ds):
+#     # compute logits for prepared tokenized ds
+#     # must handle packed and flattened dataset
+#     # also cache!
+#     # let's do this row by row
+#     # slower for non-packed ds
+#     input = torch.tensor([ds['input_ids']], device=model.device)
+#     labels = torch.tensor([ds['labels']], device=model.device)
+#     with torch.no_grad():
+#         logits = model(input).logits
+
+#     top_logits, top_logits_positions = torch.topk(logits, args.max_logits_to_store, dim=-1)
+
+#     # Convert logits to specified precision
+#     dtype_map = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}
+#     target_dtype = dtype_map[args.logit_precision]
+#     top_logits = top_logits.to(target_dtype)
+
+#     tokens_to_mask = tok.apply_chat_template(
+#         [messages[0]],  # Just the user message
+#         tokenize=True,
+#         add_special_tokens=False,
+#         truncation=False,
+#         padding=False,
+#         add_generation_prompt=True,
+#         return_dict=True,
+#     )
+#     number_of_tokens_to_mask = len(tokens_to_mask['input_ids'])
+
+#     # Create mask: False for prompt tokens, True for response tokens
+#     responses_mask = torch.zeros(len(all_tokens['input_ids']), dtype=torch.bool)
+#     responses_mask[number_of_tokens_to_mask:] = True
+
+#     responses_masks.append(responses_mask)
+#     all_logits_values.append(top_logits.cpu())
+#     all_logits_positions.append(top_logits_positions.cpu())
+
+#     logits = model(input).logits
+
+#     top_logits, top_logits_positions = torch.topk(logits, args.max_logits_to_store, dim=-1)
+
+#     # Convert logits to specified precision
+#     dtype_map = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}
+#     target_dtype = dtype_map[args.logit_precision]
+#     top_logits = top_logits.to(target_dtype)
+
+#     tokens_to_mask = tok.apply_chat_template(
+#         [messages[0]],  # Just the user message
+#         tokenize=True,
+#         add_special_tokens=False,
+#         truncation=False,
+#         padding=False,
+#         add_generation_prompt=True,
+#         return_dict=True,
+#     )
+#     number_of_tokens_to_mask = len(tokens_to_mask['input_ids'])
+
+#     # Create mask: False for prompt tokens, True for response tokens
+#     responses_mask = torch.zeros(len(all_tokens['input_ids']), dtype=torch.bool)
+#     responses_mask[number_of_tokens_to_mask:] = True
+
+#     responses_masks.append(responses_mask)
+#     all_logits_values.append(top_logits.cpu())
+#     all_logits_positions.append(top_logits_positions.cpu())
 
 
 if __name__ == "__main__":

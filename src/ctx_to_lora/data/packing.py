@@ -95,8 +95,26 @@ def pack_data_points_FA(
     position_ids = np.empty(total_inp_len, dtype=np.long)
     labels = np.empty(total_inp_len, dtype=np.long)
 
+    has_logits = "logprobs_vals" in batch
+
+    if has_logits:
+        sequences = zip(
+            batch["input_ids"],
+            batch["labels"],
+            batch["logprobs_vals"],
+            batch["logprobs_indices"],
+        )
+        n_labels = sum(len(y) for x in batch["logprobs_vals"] for y in x)
+        k = len(batch["logprobs_vals"][0][0][0])  # assuming all have same k
+        logprobs_vals = np.empty((n_labels, k), dtype=np.float32)
+        logprobs_indices = np.empty((n_labels, k), dtype=np.int32)
+        logits_offset = 0
+    else:
+        sequences = zip(batch["input_ids"], batch["labels"])
+
     offset = ctx_offset = 0
-    for input_ids_b, labels_b in zip(batch["input_ids"], batch["labels"]):
+    for sample in sequences:
+        input_ids_b, labels_b = sample[:2]
         inp_start = offset
         if need_flatten:
             # compute position_ids for each sub-list in input_ids_b
@@ -120,6 +138,17 @@ def pack_data_points_FA(
         labels[inp_start:inp_end] = labels_b
         offset += inp_len
 
+        if has_logits:
+            logprobs_vals_b, logprobs_indices_b = sample[2:]
+            logprobs_vals_b = concat_list(logprobs_vals_b)
+            logprobs_indices_b = concat_list(logprobs_indices_b)
+            logits_len = len(logprobs_vals_b)
+            logprobs_vals[logits_offset : logits_offset + logits_len] = logprobs_vals_b
+            logprobs_indices[logits_offset : logits_offset + logits_len] = (
+                logprobs_indices_b
+            )
+            logits_offset += logits_len
+
     for ctx_ids_b in batch["ctx_ids"]:
         ctx_len = len(ctx_ids_b)
         ctx_start, ctx_end = ctx_offset, ctx_offset + ctx_len
@@ -127,13 +156,17 @@ def pack_data_points_FA(
         ctx_position_ids[ctx_start:ctx_end] = np.arange(ctx_len, dtype=np.long)
         ctx_offset += ctx_len
 
-    return {
+    out = {
         "ctx_ids": ctx_ids,
         "ctx_position_ids": ctx_position_ids,
         "input_ids": input_ids,
         "position_ids": position_ids,
         "labels": labels,
     }
+    if has_logits:
+        out["logprobs_vals"] = logprobs_vals
+        out["logprobs_indices"] = logprobs_indices
+    return out
 
 
 def pack_batch(
@@ -143,6 +176,8 @@ def pack_batch(
     max_packed_size: int = -1,
 ) -> dict[str, any]:
     need_flatten = check_is_iterable(batch["input_ids"][0][0])
+    assert need_flatten
+
     if need_flatten:
         n_queries = [len(x) for x in batch["input_ids"]]
         inp_lens = [[len(y) for y in x] for x in batch["input_ids"]]
@@ -179,6 +214,10 @@ def pack_batch(
         "labels": [],
         "n_queries": [],
     }
+    has_logits = "logprobs_vals" in batch
+    if has_logits:
+        packed_batch["logprobs_vals"] = []
+        packed_batch["logprobs_indices"] = []
 
     packing_efficiency_ratios = []
     ctx_packing_efficiency_ratios = []
@@ -192,6 +231,11 @@ def pack_batch(
             "input_ids": batch["input_ids"][start_idx:end_idx],
             "labels": batch["labels"][start_idx:end_idx],
         }
+        if has_logits:
+            group_items["logprobs_vals"] = batch["logprobs_vals"][start_idx:end_idx]
+            group_items["logprobs_indices"] = batch["logprobs_indices"][
+                start_idx:end_idx
+            ]
         packed_item = pack_data_points_FA(group_items, need_flatten)
         packed_batch["ctx_ids"].append(packed_item["ctx_ids"])
         packed_batch["ctx_position_ids"].append(packed_item["ctx_position_ids"])
@@ -199,6 +243,9 @@ def pack_batch(
         packed_batch["position_ids"].append(packed_item["position_ids"])
         packed_batch["labels"].append(packed_item["labels"])
         packed_batch["n_queries"].append(n_queries[start_idx:end_idx])
+        if has_logits:
+            packed_batch["logprobs_vals"].append(packed_item["logprobs_vals"])
+            packed_batch["logprobs_indices"].append(packed_item["logprobs_indices"])
 
         if max_packed_inp_len > 0:
             inp_efficiency = len(packed_item["input_ids"]) / max_packed_inp_len

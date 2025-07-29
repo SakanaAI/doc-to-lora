@@ -14,7 +14,7 @@
     {%- if message['role'] == 'user' and loop.first and system_message is defined %}
         {{ '<start_of_turn>' + role + '\n' + system_message + '\n\n' + message['content'] | trim + '<end_of_turn>\n' }}
     {%- elif message['role'] == 'assistant' %}
-        {{ '<start_of_turn>' + role + '\n' }}{% generation %}{{ message['content'] | trim + '<end_of_turn>\n' }}{% endgeneration %}
+        {{ '<start_of_turn>' + role + '\n' }}{% generation %}{{ message['content'] + '<end_of_turn>' }}{% endgeneration %}{{ '\n' }}
     {%- else %}
         {{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}
     {%- endif %}

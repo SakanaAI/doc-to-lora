@@ -29,11 +29,12 @@ def lora_forward(
     B = B.repeat_interleave(n_qs, dim=0, output_size=tot_q)
 
     base_out = torch.nn.Linear.forward(self, x, *args, **kwargs)
+    x = x.to(A.dtype)
     delta_x = F.dropout(x, p=lora_dropout_p, training=self.training)
     delta_x = einsum(A, delta_x, "tot_q r d_in, tot_q s_len d_in -> tot_q s_len r")
     delta_x = einsum(B, delta_x, "tot_q d_out r, tot_q s_len r -> tot_q s_len d_out")
     delta_x = delta_x * scaling
-    return base_out + delta_x
+    return (base_out + delta_x).to(base_out.dtype)
 
 
 def lora_forward_packed(
@@ -52,7 +53,7 @@ def lora_forward_packed(
 ) -> Float[Tensor, "1 tot_len d_out"]:
     # bs of x should be 1 in this case
     base_out = torch.nn.Linear.forward(self, x, *args, **kwargs)
-
+    x = x.to(A.dtype)
     delta_x = F.dropout(x, p=lora_dropout_p, training=self.training)
     # # [tot_seq_len, r, d_in]
     # repeated_A = A.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
@@ -73,7 +74,7 @@ def lora_forward_packed(
     )
     delta_x = delta_x * scaling
 
-    return base_out + delta_x
+    return (base_out + delta_x).to(base_out.dtype)
 
 
 def apply_lora_to_layers(

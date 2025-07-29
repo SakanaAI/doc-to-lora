@@ -6,7 +6,7 @@ from tqdm import tqdm
 from ctx_to_lora.data.processing import closed_qa_prompting
 
 if __name__ == "__main__":
-    ds_name = "rajpurkar/squad"
+    ds_name = "data/raw_datasets/squad"
 
     for split in ["train", "validation"]:
         ctx_qa_dict = dict()

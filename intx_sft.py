@@ -17,7 +17,6 @@ from transformers import (
     AutoConfig,
     set_seed,
 )
-from transformers.utils import is_liger_kernel_available
 
 from ctx_to_lora.configs import (
     AggregatorArguments,
@@ -45,6 +44,7 @@ from ctx_to_lora.metrics import (
 )
 from ctx_to_lora.model_loading import (
     get_lora_config,
+    get_model,
     get_model_and_tokenizer,
     get_tokenizer,
 )
@@ -176,7 +176,7 @@ def main():
     ############ Model setup
     if not ctx_args.from_pretrained_checkpoint:
         model_name = model_args.model_name_or_path
-        model, tokenizer = get_model_and_tokenizer(
+        base_model, tokenizer = get_model_and_tokenizer(
             **vars(model_args),
             train=True,
             requires_grad=False,  # ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
@@ -191,8 +191,8 @@ def main():
                 ctx_encoder_model_config = ctx_encoder_model_config.text_config
             ctx_tokenizer = get_tokenizer(ctx_name, train=True)
         else:
-            ctx_name = model.base_model.config.name_or_path
-            ctx_encoder_model_config = model.config
+            ctx_name = base_model.base_model.config.name_or_path
+            ctx_encoder_model_config = base_model.config
             ctx_tokenizer = tokenizer
 
     if ctx_args.exp_setup == ExperimentSetup.HYPERLORA:
@@ -200,7 +200,7 @@ def main():
         logger.info("Using HyperLoRA")
         if not ctx_args.from_pretrained_checkpoint:
             hypernet_config = get_hypernet_config(
-                model,
+                base_model,
                 ctx_encoder_model_config,
                 hypernet_args,
                 aggregator_args,
@@ -215,13 +215,13 @@ def main():
                     " as the context encoder"
                 )
             model = ModulatedPretrainedModel(
-                model,
+                base_model,
                 hypernet_config,
                 ctx_encoder_args,
                 ctx_args.use_kl_loss,
                 ctx_args.use_sequence_packing,
             )
-            training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
+
         else:
             logger.info(
                 f"Loading from checkpoint: {ctx_args.from_pretrained_checkpoint}"
@@ -237,7 +237,9 @@ def main():
             if ctx_name is None:
                 ctx_name = model.base_model.config.name_or_path
             ctx_tokenizer = get_tokenizer(ctx_name, train=True)
-            training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
+
+        training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
+        training_args.use_kl_loss = ctx_args.use_kl_loss
 
         if len([p for p in model.ctx_encoder.parameters() if p.requires_grad]):
             raise ValueError("ctx_encoder contains trainable parameters")
@@ -268,6 +270,10 @@ def main():
     tokenizer_kwargs = {"max_length": ctx_args.max_base_len}  # not used
     ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
 
+    base_model = get_model(
+        **vars(model_args), train=False, requires_grad=False, peft_config=None
+    )
+
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         max_qas_len=ctx_args.max_qas_len,
@@ -284,6 +290,7 @@ def main():
         add_negative_prompt=ctx_args.add_negative_prompt,
         use_kl_loss=ctx_args.use_kl_loss,
         set_format=None if ctx_args.use_sequence_packing else "pt",
+        base_model=base_model,
         # streaming=data_args.streaming,
     )
     tokenized_ds = {"train": dict(), "validation": dict()}
@@ -409,33 +416,24 @@ def main():
     # HACK: [local path]: make liger kernel works with gemma3
     # see .venv/lib/python3.10/site-packages/liger_kernel/transformers/monkey_patch.py
     # L810:814 + L781
-    if training_args.use_liger_kernel and is_liger_kernel_available():
-        from liger_kernel.transformers import _apply_liger_kernel_to_instance
 
-        if isinstance(model, ModulatedPretrainedModel):
-            logger.info("Applying liger-kernel to ModulatedPretrainedModel")
-            if isinstance(model.base_model, PeftModel):
-                base_model = model.base_model.base_model
-            else:
-                base_model = model.base_model
-
-            if ctx_name is not None:
-                logger.info("Applying liger-kernel to ctx_encoder_model")
-                ctx_base_model = model.ctx_encoder.base_model
-                _apply_liger_kernel_to_instance(model=ctx_base_model)
-                compile_linear(ctx_base_model)
-                # model.ctx_encoder.compile(fullgraph=True)
-
-        elif isinstance(model, PeftModel):
-            logger.info("Applying liger-kernel to PeftModel")
+    if isinstance(model, ModulatedPretrainedModel):
+        if isinstance(model.base_model, PeftModel):
+            base_model = model.base_model.base_model
+        else:
             base_model = model.base_model
 
-        _apply_liger_kernel_to_instance(model=base_model.model)
-        # compile_linear(base_model)
-        base_model.compile(fullgraph=True, mode="max-autotune")
-        base_model.loss_function = torch.compile(
-            base_model.loss_function, fullgraph=True, mode="max-autotune"
-        )
+        if ctx_name is not None:
+            logger.info("Compiling ctx_encoder_model")
+            ctx_base_model = model.ctx_encoder.base_model
+            compile_linear(ctx_base_model)
+            # model.ctx_encoder.compile(fullgraph=True, mode="max-autotune")
+
+    elif isinstance(model, PeftModel):
+        base_model = model.base_model
+
+    logger.info("Compiling base_model")
+    base_model.compile(fullgraph=True, mode="max-autotune")
 
     if LOCAL_RANK == 0:
         wandb.init(

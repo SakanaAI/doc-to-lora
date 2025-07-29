@@ -233,7 +233,7 @@ class TrainingArguments(TrainingArguments):
         default=100,
     )
     use_liger_kernel: bool = field(
-        default=True,
+        default=False,
     )
     remove_unused_columns: bool = field(
         default=False,
