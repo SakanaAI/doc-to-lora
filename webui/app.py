@@ -502,6 +502,7 @@ def load_checkpoint():
             state_dict,
             train=False,
             use_flash_attn=True,
+            use_sequence_packing=False,  # for generation
         )
         modulated_model = modulated_model.to(device).to(torch.bfloat16)
         modulated_model.eval()
@@ -547,7 +548,7 @@ def process_multiple_contexts(contexts, ctx_tokenizer):
     ctx_ids = [
         torch.tensor(ctx_id, dtype=torch.long, device=device) for ctx_id in ctx_ids
     ]
-    ctx_attn_mask = tokenized_contexts["ctx_attn_mask"]
+    ctx_attn_mask = [torch.ones_like(ids) for ids in ctx_ids]
     ctx_attn_mask = [
         torch.tensor(ctx_attn_mask, dtype=torch.long, device=device)
         for ctx_attn_mask in ctx_attn_mask

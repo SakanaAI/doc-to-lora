@@ -31,12 +31,12 @@ print(model.decode(outputs))
 ## 🏋️ Training
 ### 🔢 HyperLoRA w/ context_numbers_10
 ```bash
-WANDB_MODE=disabled run uv run intx_sft.py configs/context_numbers_10.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=3 --per_device_train_batch_size=128 --gradient_accumulation_steps=1 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --load_best_model_at_end=False --add_negative_prompt=False --add_repeat_prompt=False --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --use_sequence_packing=True --max_packed_inp_len=4096 --max_packed_ctx_len=4096 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=early_exit --n_latent_queries=208
+WANDB_MODE=disabled run uv run intx_sft.py configs/context_numbers_10.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=3 --per_device_train_batch_size=128 --gradient_accumulation_steps=1 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --use_sequence_packing=True --max_packed_inp_len=4096 --max_packed_ctx_len=4096 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=early_exit --n_latent_queries=208
 ```
 
 KL loss
 ```bash
- WANDB_MODE=disabled run uv run intx_sft.py configs/context_numbers_10.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=3 --per_device_train_batch_size=128 --gradient_accumulation_steps=1 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --load_best_model_at_end=False --add_negative_prompt=False --add_repeat_prompt=False --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.0 --use_sequence_packing=True --max_packed_inp_len=4096 --max_packed_ctx_len=4096 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=early_exit --n_latent_queries=208 --use_kl_loss=True --eval_steps=99999999 --use_liger_kernel=False
+WANDB_MODE=disabled run uv run intx_sft.py configs/context_numbers_10_self_gen.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=3 --per_device_train_batch_size=128 --gradient_accumulation_steps=2 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=100 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --use_sequence_packing=True --max_packed_inp_len=2048 --max_packed_ctx_len=2048 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=early_exit --n_latent_queries=208 --use_kl_loss=True
  ```
 ### FWQA-v2 Level-0 Tiny
 ```bash
@@ -74,6 +74,11 @@ WANDB_MODE=disabled run python hyperlora/intx_sft.py configs/context_numbers_128
 uv run python data/generate_fav_num.py
 # or
 uv run python data/generate_fav_num_big.py
+```
+
+Self-gen for the number toy dataset
+```bash
+run uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --ds_names context_numbers_2_10 --split train
 ```
 
 ### SQuAD
@@ -145,7 +150,10 @@ uv run data/download_fineweb_edu.py
 1. Recursively generate more data! (depends on step 0)
 ```bash
 # run from 000 to 0013
-run uv run python data/generate_fw_edu_qa_v2.py --shard_pattern "000_00000" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it --max_length=2000 --max_model_length=2048; run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_0*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it; run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_1*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it; run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_2*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it
+run uv run python data/generate_fw_edu_qa_v2.py --shard_pattern "000_00000" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it --max_length=2000 --max_model_length=2048;
+run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_0*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it;
+run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_1*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it;
+run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_2*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it
 ```
 
 2. Self-generated response QA data (depends on step 0 and 1)
@@ -157,46 +165,10 @@ uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_
 # val split
 uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/*_level_0_val.parquet'
 
-# self-gen data for other ds listed in qa_no_fw.yaml
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/self_gen_qa_short_ctx_no_fw_qa.yaml
+# self-gen data for other ds listed in qa_short_ctx_self_gen_no_fw_qa.yaml
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_short_ctx_self_gen_no_fw_qa.yaml
 ```
 
-
-<!-- ### Data Generation
-```bash
-# [WIP] there are other datasets where we used openAI to gen QA pairs
-
-# 0. download fineweb_edu to `data/raw_datasets/fineweb_edu
-uv run data/download_fineweb_edu.py
-
-# ===
-# 1 and 2 can be run in parallel (depends on step 0)
-
-# 1. generate QA data (3 QAs for each context)
-# 000_0000[0-1] to 000_0000[8-9] for small split
-vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python generate_fw_edu_qa_vllm.py "00*_*" 3
-
-# 2. Augmenting pre-training data w/ paraphrasing
-# (000_00000 to 000_00009 for small split)
-vllm_model=mistralai/Mistral-Small-3.1-24B-Instruct-2503 uv run python data/generate_fw_edu_augment_vllm.py 000_00000 
-
-# ===
-# 3 and 4 can be run in parallel (depends on step 0 and 1)
-
-# 3. Pre-training data (no GPU needed) 
-# augment each context by concat'ing QAs generated in step 1 at the end
-uv run python data/generate_pretrain_from_fw_qa.py
-
-# 4. self-generate SFT data
-# each context has 3 chat instances as training data
-# the responses are not the same as the ones in the pretraining though
-# Example commands using gemma-2-2b-it
-# self-gen data for fw_qa
-# 000_0000[0-1] to 000_0000[8-9] for small split
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_3/00*_*'
-# self-gen data for other ds listed in qa_no_fw.yaml
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_no_fw.yaml
-``` -->
 
 <!-- 
 ### GSM8k LoRA

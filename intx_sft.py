@@ -32,7 +32,6 @@ from ctx_to_lora.configs import (
 )
 from ctx_to_lora.data.collator import (  # train_packed_collator,; DefaultDataCollator,
     flatten_if_not_packed,
-    train_collator,
 )
 from ctx_to_lora.data.processing import get_tokenized_dataset, pack
 from ctx_to_lora.metrics import (
@@ -44,7 +43,6 @@ from ctx_to_lora.metrics import (
 )
 from ctx_to_lora.model_loading import (
     get_lora_config,
-    get_model,
     get_model_and_tokenizer,
     get_tokenizer,
 )
@@ -123,6 +121,10 @@ def main():
             aggregator_args,
             ctx_encoder_args,
         ]
+    )
+
+    assert ctx_args.use_sequence_packing, (
+        f"Please set use_sequence_packing=True in {ctx_args}. It's faster!"
     )
 
     set_seed(training_args.seed)
@@ -218,8 +220,6 @@ def main():
                 base_model,
                 hypernet_config,
                 ctx_encoder_args,
-                ctx_args.use_kl_loss,
-                ctx_args.use_sequence_packing,
             )
 
         else:
@@ -230,7 +230,6 @@ def main():
                 torch.load(ctx_args.from_pretrained_checkpoint, weights_only=False),
                 train=True,
                 use_flash_attn=model_args.use_flash_attn,
-                use_sequence_packing=ctx_args.use_sequence_packing,
             )
             tokenizer = get_tokenizer(model.base_model.config.name_or_path, train=True)
             ctx_name = model.ctx_encoder_args.ctx_encoder_model_name_or_path
@@ -267,12 +266,6 @@ def main():
     logger.info("Loading dataset...")
 
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
-    tokenizer_kwargs = {"max_length": ctx_args.max_base_len}  # not used
-    ctx_tokenizer_kwargs = {"max_length": ctx_args.max_ctx_len}  # not used for now
-
-    base_model = get_model(
-        **vars(model_args), train=False, requires_grad=False, peft_config=None
-    )
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
@@ -280,18 +273,10 @@ def main():
         max_qas_per_sample=ctx_args.max_qas_per_sample,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
-        tokenizer_kwargs=tokenizer_kwargs,
         ctx_model_max_len=model.ctx_encoder.config.max_position_embeddings,
         ctx_tokenizer=ctx_tokenizer,
-        ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
-        add_repeat_prompt=ctx_args.add_repeat_prompt,
-        repeat_prob=ctx_args.repeat_prob,
-        add_negative_prompt=ctx_args.add_negative_prompt,
         use_kl_loss=ctx_args.use_kl_loss,
-        set_format=None if ctx_args.use_sequence_packing else "pt",
-        base_model=base_model,
-        # streaming=data_args.streaming,
     )
     tokenized_ds = {"train": dict(), "validation": dict()}
     for split, ds_names in zip(
@@ -300,7 +285,6 @@ def main():
     ):
         if not ds_names:
             continue
-        streaming = (split == "train") and data_args.streaming
         ctx_mgr = (
             training_args.main_process_first()
             if split == "train"
@@ -311,7 +295,7 @@ def main():
             # then other replicas can just load the cached dataset
             # we dont save cache for validation ds
             for ds_name in ds_names:
-                ds = _get_tokenized_dataset(ds_name, split, streaming=streaming)
+                ds = _get_tokenized_dataset(ds_name, split)
 
                 base_name = os.path.basename(ds_name)
                 if ds_name.startswith("self_gen/"):
@@ -337,41 +321,8 @@ def main():
             val_indices = np.random.permutation(len(ds))[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
-    # if data_args.streaming:
-    # max_steps = ceil(
-    #     sum(DS_LEN[ds] for ds in train_ds)
-    #     * training_args.num_train_epochs
-    #     / training_args.per_device_train_batch_size
-    #     / training_args.gradient_accumulation_steps
-    #     / training_args.world_size
-    # )
-    # training_args.max_steps = max_steps
-
-    # # interleaving streaming datasets
-    # # simplify the probs for smaller datasets
-    # # slightly upsample those datasets
-    # probs = [
-    #     0.01 if "fw_qa" not in ds_name else 1 + 0.01 - 0.01 * len(train_ds)
-    #     for ds_name in train_ds
-    # ]
-    # train_ds = interleave_datasets(
-    #     list(train_ds.values()),
-    #     probabilities=probs,
-    #     stopping_strategy="all_exhausted",
-    #     seed=training_args.seed,
-    # )
-    # else:
-
     train_ds_len = [len(ds) for ds in train_ds.values()]
     total_len = sum(train_ds_len)
-    # max_steps = ceil(
-    #     total_len
-    #     * training_args.num_train_epochs
-    #     / training_args.per_device_train_batch_size
-    #     / training_args.gradient_accumulation_steps
-    #     / training_args.world_size
-    # )
-    # training_args.max_steps = max_steps
     train_ds = interleave_datasets(
         list(train_ds.values()),
         probabilities=get_ds_prob(train_ds_len, total_len),
@@ -380,35 +331,27 @@ def main():
     )
     logger.info(f"Train dataset length: {len(train_ds)}")
 
-    if ctx_args.use_sequence_packing:
-        with training_args.main_process_first():
-            logging.info("Packing dataset")
-            old_ds_len = len(train_ds)
-            train_ds = pack(
-                train_ds,
-                ctx_args.max_packed_inp_len,
-                ctx_args.max_packed_ctx_len,
-                max_packed_size=-1,
-                num_proc=8,
-            )
-            logger.info(f"Train dataset length: {len(train_ds)}")
-            logger.info(
-                f"Avg. # of samples per packed sequence: {old_ds_len / len(train_ds)}"
-            )
-            logger.info("Setting per_device_train_batch_size to 1")
-            training_args.per_device_train_batch_size = 1
+    with training_args.main_process_first():
+        logging.info("Packing dataset")
+        old_ds_len = len(train_ds)
+        train_ds = pack(
+            train_ds,
+            ctx_args.max_packed_inp_len,
+            ctx_args.max_packed_ctx_len,
+            max_packed_size=-1,
+            num_proc=8,
+        )
+        logger.info(f"Train dataset length: {len(train_ds)}")
+        logger.info(
+            f"Avg. # of samples per packed sequence: {old_ds_len / len(train_ds)}"
+        )
+        logger.info("Setting per_device_train_batch_size to 1")
+        training_args.per_device_train_batch_size = 1
 
     logger.info(f"train_ds: {train_ds}")
     logger.info(f"val_ds: {val_ds}")
 
-    collator = (
-        flatten_if_not_packed
-        # DefaultDataCollator(return_tensors="pt")
-        if ctx_args.use_sequence_packing
-        else partial(train_collator, tokenizer=tokenizer)
-    )
-
-    # TODO: use SFTTrainer instead? https://huggingface.co/docs/trl/en/sft_trainer
+    collator = flatten_if_not_packed
 
     # HACK [local patch]: deepspeed model loading problem (for resume training)
     # see https://github.com/microsoft/DeepSpeed/pull/6626/files
@@ -469,12 +412,10 @@ if __name__ == "__main__":
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     os.environ["WANDB_DIR"] = ".wandb/"
     os.environ["WANDB_PROJECT"] = "ctx_to_lora"
-    os.environ["WANDB_WATCH"] = ""  # "all"
+    os.environ["WANDB_WATCH"] = ""
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    # os.environ["KMP_AFFINITY"] = "disabled"  # fixing iterable dataset stuck
     os.environ["OMP_NUM_THREADS"] = "23"
-    # os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "137438953472"  # 128 TB
     torch._dynamo.config.capture_scalar_outputs = True
 
     # DOES THIS CAUSE ACCURACY DEGRADATION?

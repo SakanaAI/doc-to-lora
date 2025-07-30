@@ -13,25 +13,6 @@ from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 logger = logging.getLogger()
 
 
-def add_pre_label_token(labels, is_packed):
-    """
-    Add a token before the first label token.
-    1 is used as a placeholder for the first label token.
-    We compute the loss against the teacher logits anyway.
-    """
-    if is_packed:
-        non_label_mask = torch.where(labels == -100, True, False)
-        diff = torch.diff(labels, append=torch.tensor([[-100]], device=labels.device))
-        pre_label_pos = torch.where(non_label_mask * (diff != 0))
-        labels[pre_label_pos] = 1
-    else:
-        bsz = labels.shape[0]
-        first_label_pos = torch.argmax((labels != -100).float(), axis=-1)
-        labels[torch.arange(bsz), first_label_pos - 1] = 1
-    return labels
-
-
-# TODO: test
 class DistillationTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.gen_lora_l1_reg_coef = kwargs.pop("gen_lora_l1_reg_coef", 0.0)
@@ -46,71 +27,61 @@ class DistillationTrainer(Trainer):
             if num_items_in_batch is not None:
                 loss_kwargs["num_items_in_batch"] = num_items_in_batch
             inputs = {**inputs, **loss_kwargs}
-
-        labels = inputs.pop("labels", None)  # remove labels if present
-        # NOTE: have to account that we save +1 # token before the first label token
-        is_packed = "position_ids" in inputs
-        # labels = add_pre_label_token(labels, is_packed)
-        label_pos = torch.where(labels != -100)
+        use_kl = "logprobs_vals" in inputs
+        # TODO: handle when val data doesnt have logprobs
+        if use_kl:
+            labels = inputs.pop("labels", None)
+            label_pos = torch.where(labels != -100)
         # TODO: add efficient logits indexing?
         # https://github.com/huggingface/trl/pull/2773
         # + use `num_logits_to_keep` to limit the number of logits
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
-        target_logp = inputs.pop("logprobs_vals")
-        indices = inputs.pop("logprobs_indices")
 
-        # packed
-        if isinstance(target_logp, torch.Tensor):
-            target_logp = target_logp.squeeze(0)
-            indices = indices.squeeze(0)
-        # non-packed max_qas_per_sample=1
-        elif isinstance(target_logp[0], torch.Tensor):
-            target_logp = torch.cat([x[0] for x in target_logp], dim=0)
-            indices = torch.cat([x[0] for x in indices], dim=0)
-        # non-packed max_qas_per_sample>1
+        if not use_kl:
+            loss = outputs["loss"]
+
         else:
-            # convert to tensor
-            raise NotImplementedError(
-                "Non-packed data with max_qas_per_sample > 1 is not supported yet."
+            target_logp = inputs.pop("logprobs_vals")
+            indices = inputs.pop("logprobs_indices")
+
+            # packed
+            if isinstance(target_logp, torch.Tensor):
+                target_logp = target_logp.squeeze(0)
+                indices = indices.squeeze(0)
+            # non-packed max_qas_per_sample=1
+            elif isinstance(target_logp[0], torch.Tensor):
+                target_logp = torch.cat([x[0] for x in target_logp], dim=0)
+                indices = torch.cat([x[0] for x in indices], dim=0)
+            # non-packed max_qas_per_sample>1
+            else:
+                # convert to tensor
+                raise NotImplementedError(
+                    "Non-packed data with max_qas_per_sample > 1 is not supported yet."
+                )
+
+            assert label_pos[0].shape[0] == target_logp.shape[0], (
+                "Label positions and target log probabilities should have the same # tokens."
+                f"Got : {label_pos[0].shape[0]=} and {target_logp.shape[0]=}"
             )
 
-        assert label_pos[0].shape[0] == target_logp.shape[0], (
-            "Label positions and target log probabilities should have the same # tokens."
-            f"Got : {label_pos[0].shape[0]=} and {target_logp.shape[0]=}"
-        )
+            # TODO: per-ctx average loss?
+            ##### KL loss
+            outputs_logits = outputs.logits[
+                label_pos[0], label_pos[1] - 1
+            ]  # shift back 1
 
-        # TODO: per-ctx average loss?
-        ##### KL loss
-        outputs_logits = outputs.logits[label_pos[0], label_pos[1] - 1]  # shift back 1
+            teacher_logp = torch.full_like(outputs_logits, -torch.inf)
+            teacher_logp.scatter_(1, indices, target_logp)
+            reduction = "batchmean" if num_items_in_batch is None else "sum"
 
-        teacher_logp = torch.full_like(outputs_logits, -torch.inf)
-        teacher_logp.scatter_(1, indices, target_logp)
-        reduction = "batchmean" if num_items_in_batch is None else "sum"
-
-        # loss = torch.nn.functional.kl_div(
-        #     torch.nn.functional.log_softmax(
-        #         outputs_logits / self.distillation_temperature, dim=-1
-        #     ),
-        #     torch.nn.functional.softmax(
-        #         teacher_logits / self.distillation_temperature, dim=-1
-        #     ),
-        #     reduction=reduction,
-        #     log_target=False,
-        # ) * (self.distillation_temperature**2)
-        # loss = loss / num_items_in_batch if num_items_in_batch is not None else loss
-
-        # p = torch.nn.functional.softmax(
-        #     teacher_logits / self.distillation_temperature, dim=-1
-        # )
-        p = teacher_logp.exp()
-        logq = nn.functional.log_softmax(outputs_logits, dim=-1)
-
-        loss = -torch.sum(p * logq, dim=-1) * (self.distillation_temperature**2)
-        if reduction == "batchmean":
-            loss = loss.mean()
-        elif reduction == "sum" and num_items_in_batch is not None:
-            loss = loss.sum() / num_items_in_batch
-        #####
+            p = teacher_logp.exp()
+            logq = nn.functional.log_softmax(outputs_logits, dim=-1)
+            loss = -torch.sum(p * logq, dim=-1) * (self.distillation_temperature**2)
+            if reduction == "batchmean":
+                loss = loss.mean()
+            elif reduction == "sum" and num_items_in_batch is not None:
+                loss = loss.sum() / num_items_in_batch
+            #####
 
         ##### unpack gen lora dict and compute regularization loss
         l1_norm = 0
@@ -121,7 +92,8 @@ class DistillationTrainer(Trainer):
             self.args.logging_strategy == IntervalStrategy.STEPS
             and self.state.global_step % self.state.logging_steps == 0
         ):
-            self.log({"ce_loss": loss.item(), "gen_lora_l1_norm": l1_norm.item()})
+            loss_field = "kl_loss" if use_kl else "ce_loss"
+            self.log({loss_field: loss.item(), "gen_lora_l1_norm": l1_norm.item()})
         loss += self.gen_lora_l1_reg_coef * l1_norm
         #####
 

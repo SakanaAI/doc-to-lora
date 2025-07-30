@@ -59,7 +59,6 @@ def lora_forward_packed(
     # repeated_A = A.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
     # # [tot_seq_len, d_out, r]
     # repeated_B = B.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
-    # TODO: is ther a better way to implement this?
     repeated_A = A.repeat_interleave(n_qs, dim=0, output_size=tot_q)
     repeated_A = repeated_A.repeat_interleave(seq_lens, dim=0, output_size=tot_len)
 

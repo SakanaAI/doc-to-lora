@@ -1,6 +1,9 @@
 # based on
 # https://github.com/MeetKai/functionary/blob/aa3dbdd65f7e388f2386622606bdfeec95c2b863/functionary/train/packing/packed_dataset.py
+import json
 import logging
+import os
+import pprint
 
 import numpy as np
 
@@ -77,17 +80,13 @@ def pack_data_points_by_length(
 
 def pack_data_points_FA(
     batch: dict[str, any],
-    need_flatten: bool,
 ) -> dict[str, np.ndarray]:
     if not batch:
         raise ValueError("Batch is empty")
 
     # Pre-allocate lists with known sizes
     total_ctx_len = sum(len(x) for x in batch["ctx_ids"])
-    if not need_flatten:
-        total_inp_len = sum(len(x) for x in batch["input_ids"])
-    else:
-        total_inp_len = sum(len(y) for x in batch["input_ids"] for y in x)
+    total_inp_len = sum(len(y) for x in batch["input_ids"] for y in x)
 
     ctx_ids = np.empty(total_ctx_len, dtype=np.long)
     ctx_position_ids = np.empty(total_ctx_len, dtype=np.long)
@@ -95,9 +94,9 @@ def pack_data_points_FA(
     position_ids = np.empty(total_inp_len, dtype=np.long)
     labels = np.empty(total_inp_len, dtype=np.long)
 
-    has_logits = "logprobs_vals" in batch
+    has_logprobs = "logprobs_vals" in batch
 
-    if has_logits:
+    if has_logprobs:
         sequences = zip(
             batch["input_ids"],
             batch["labels"],
@@ -116,29 +115,26 @@ def pack_data_points_FA(
     for sample in sequences:
         input_ids_b, labels_b = sample[:2]
         inp_start = offset
-        if need_flatten:
-            # compute position_ids for each sub-list in input_ids_b
-            local_start = inp_start
-            for ids_b in input_ids_b:
-                position_ids[local_start : local_start + len(ids_b)] = np.arange(
-                    len(ids_b), dtype=np.long
-                )
-                local_start += len(ids_b)
 
-            input_ids_b = concat_list(input_ids_b)
-            labels_b = concat_list(labels_b)
+        # compute position_ids for each sub-list in input_ids_b
+        local_start = inp_start
+        for ids_b in input_ids_b:
+            position_ids[local_start : local_start + len(ids_b)] = np.arange(
+                len(ids_b), dtype=np.long
+            )
+            local_start += len(ids_b)
+
+        input_ids_b = concat_list(input_ids_b)
+        labels_b = concat_list(labels_b)
 
         inp_len = len(input_ids_b)
         inp_end = offset + inp_len
-
-        if not need_flatten:
-            position_ids[inp_start:inp_end] = np.arange(inp_len, dtype=np.long)
 
         input_ids[inp_start:inp_end] = input_ids_b
         labels[inp_start:inp_end] = labels_b
         offset += inp_len
 
-        if has_logits:
+        if has_logprobs:
             logprobs_vals_b, logprobs_indices_b = sample[2:]
             logprobs_vals_b = concat_list(logprobs_vals_b)
             logprobs_indices_b = concat_list(logprobs_indices_b)
@@ -163,7 +159,7 @@ def pack_data_points_FA(
         "position_ids": position_ids,
         "labels": labels,
     }
-    if has_logits:
+    if has_logprobs:
         out["logprobs_vals"] = logprobs_vals
         out["logprobs_indices"] = logprobs_indices
     return out
@@ -174,21 +170,17 @@ def pack_batch(
     max_packed_inp_len: int,
     max_packed_ctx_len: int,
     max_packed_size: int = -1,
+    metadata_path: str = "",
 ) -> dict[str, any]:
     need_flatten = check_is_iterable(batch["input_ids"][0][0])
-    assert need_flatten
+    assert need_flatten, (
+        f"Packing requires the input_ids to be nested "
+        f"(allowing multiple QAs per sample), but got {batch['input_ids'][0]}"
+    )
 
-    if need_flatten:
-        n_queries = [len(x) for x in batch["input_ids"]]
-        inp_lens = [[len(y) for y in x] for x in batch["input_ids"]]
-        # batch = {k: concat_list([x for x in batch[k]]) for k in keys}
-        # for k in ["input_ids", "attention_mask", "labels"]:
-        #     batch[k] = concat_list([x for x in batch[k]])
-    else:
-        n_queries = [1] * len(batch["input_ids"])
-        inp_lens = [[len(x)] for x in batch["input_ids"]]
+    n_queries = [len(x) for x in batch["input_ids"]]
+    inp_lens = [[len(y) for y in x] for x in batch["input_ids"]]
     inp_count = len(inp_lens)
-    # total_original_tokens = sum(inp_lens)
     if "ctx_ids" not in batch:
         raise ValueError("Batch must contain 'ctx_ids' and 'labels' keys")
     # we do not pad so we can just take the length of the tokens
@@ -214,8 +206,8 @@ def pack_batch(
         "labels": [],
         "n_queries": [],
     }
-    has_logits = "logprobs_vals" in batch
-    if has_logits:
+    has_logprobs = "logprobs_vals" in batch
+    if has_logprobs:
         packed_batch["logprobs_vals"] = []
         packed_batch["logprobs_indices"] = []
 
@@ -231,19 +223,19 @@ def pack_batch(
             "input_ids": batch["input_ids"][start_idx:end_idx],
             "labels": batch["labels"][start_idx:end_idx],
         }
-        if has_logits:
+        if has_logprobs:
             group_items["logprobs_vals"] = batch["logprobs_vals"][start_idx:end_idx]
             group_items["logprobs_indices"] = batch["logprobs_indices"][
                 start_idx:end_idx
             ]
-        packed_item = pack_data_points_FA(group_items, need_flatten)
+        packed_item = pack_data_points_FA(group_items)
         packed_batch["ctx_ids"].append(packed_item["ctx_ids"])
         packed_batch["ctx_position_ids"].append(packed_item["ctx_position_ids"])
         packed_batch["input_ids"].append(packed_item["input_ids"])
         packed_batch["position_ids"].append(packed_item["position_ids"])
         packed_batch["labels"].append(packed_item["labels"])
         packed_batch["n_queries"].append(n_queries[start_idx:end_idx])
-        if has_logits:
+        if has_logprobs:
             packed_batch["logprobs_vals"].append(packed_item["logprobs_vals"])
             packed_batch["logprobs_indices"].append(packed_item["logprobs_indices"])
 
@@ -272,18 +264,33 @@ def pack_batch(
         np.mean(ctx_packing_efficiency_ratios) if ctx_packing_efficiency_ratios else 0
     )
 
-    logging.debug(
-        f"Packing stats - Original samples: {inp_count}\n"
-        f"# Packed samples: {len(idx_pairs)}\n"
-        f"Avg inp packing efficiency: {avg_inp_packing_efficiency:.3f}\n"
-        f"Avg ctx packing efficiency: {avg_ctx_packing_efficiency:.3f}\n\n"
-        f"Input IDs length stats:\n"
-        f"  Avg: {np.mean(packed_inp_lens_arr):.1f}, Std: {np.std(packed_inp_lens_arr):.1f}, "
-        f"Min: {np.min(packed_inp_lens_arr)}, Max: {np.max(packed_inp_lens_arr)}\n"
-        f"Context IDs length stats:\n"
-        f"  Avg: {np.mean(packed_ctx_lens_arr):.1f}, Std: {np.std(packed_ctx_lens_arr):.1f}, "
-        f"Min: {np.min(packed_ctx_lens_arr)}, Max: {np.max(packed_ctx_lens_arr)}\n\n"
-    )
+    # Create packing statistics dictionary
+    packing_stats = {
+        "original_samples": inp_count,
+        "packed_samples": len(idx_pairs),
+        "avg_inp_packing_efficiency": float(avg_inp_packing_efficiency),
+        "avg_ctx_packing_efficiency": float(avg_ctx_packing_efficiency),
+        "input_ids_length_stats": {
+            "avg": float(np.mean(packed_inp_lens_arr)),
+            "std": float(np.std(packed_inp_lens_arr)),
+            "min": int(np.min(packed_inp_lens_arr)),
+            "max": int(np.max(packed_inp_lens_arr)),
+        },
+        "context_ids_length_stats": {
+            "avg": float(np.mean(packed_ctx_lens_arr)),
+            "std": float(np.std(packed_ctx_lens_arr)),
+            "min": int(np.min(packed_ctx_lens_arr)),
+            "max": int(np.max(packed_ctx_lens_arr)),
+        },
+    }
+
+    # Save to metadata_path if provided
+    if metadata_path:
+        os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
+        with open(metadata_path, "w") as f:
+            json.dump(packing_stats, f, indent=4)
+
+    logging.debug(f"Packing stats:\n{pprint.pformat(packing_stats, indent=2)}")
 
     return packed_batch
 

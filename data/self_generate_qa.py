@@ -239,23 +239,16 @@ def self_generate(
 
         shard_name = "_" + os.path.basename(parquet_file).replace(".parquet", "")
         ds = load_dataset(path="parquet", data_files=[parquet_file], split="train")
-        processing_fn = get_preprocessing_fn(ds_name, is_eval=False, is_pretrain=False)
+        processing_fn = get_preprocessing_fn(ds_name, is_eval=False)
         ds = ds.map(processing_fn, num_proc=8)
 
     else:
         ds_name = ds_name.split("/")[-1]  # Extract just the dataset name
 
         print(f"Loading dataset: {ds_name} with split: {split}")
-        kwargs = dict(
-            ds_name=ds_name,
-            split=split,
-            add_negative_prompt=False,
-            add_repeat_prompt=False,
-            repeat_prob=0,
-            is_pretrain=False,
-        )
+        kwargs = dict(ds_name=ds_name, split=split)
 
-        ds = load_and_process_dataset(**kwargs, streaming=False, num_proc=8)
+        ds = load_and_process_dataset(**kwargs, num_proc=8)
     print(f"Loaded dataset: {ds_name} with split: {split}")
 
     if args.debug:

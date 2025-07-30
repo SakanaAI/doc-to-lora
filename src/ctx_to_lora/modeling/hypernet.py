@@ -591,19 +591,18 @@ class ModulatedPretrainedModel(nn.Module):
         base_model: PeftModel,
         hypernet_config: HypernetConfig,
         ctx_encoder_args: CtxEncoderArguments,
-        # use_kl_loss is only used for training
-        use_kl_loss: bool = False,
-        use_sequence_packing: bool = False,
         use_base_input_as_ctx: bool = False,
+        # need non-packed inputs for generation
+        use_sequence_packing: bool = True,
     ):
+        assert not use_base_input_as_ctx
         super().__init__()
         self.device = base_model.device
         self.peft_config = base_model.peft_config["default"]
         self.hypernet_config = hypernet_config
         self.ctx_encoder_args = ctx_encoder_args
-        self.use_kl_loss = use_kl_loss
-        self.use_sequence_packing = use_sequence_packing
         self.use_base_input_as_ctx = use_base_input_as_ctx
+        self.use_sequence_packing = use_sequence_packing
         self.lora_id = 1
         self.active_adapters = []
 
@@ -618,6 +617,7 @@ class ModulatedPretrainedModel(nn.Module):
         train: bool = True,
         base_model_kwargs: dict = None,
         use_flash_attn: bool = True,
+        **kwargs: Any,
     ):
         lora_config = state_dict["hypernet_config"].lora_config
         print(f"lora_config: {lora_config}")
@@ -634,7 +634,7 @@ class ModulatedPretrainedModel(nn.Module):
         if getattr(hypernet_config, "num_pre_head_layers", None) is None:
             hypernet_config.num_pre_head_layers = 4
         ctx_encoder_args = state_dict["ctx_encoder_args"]
-        model = cls(base_model, hypernet_config, ctx_encoder_args)
+        model = cls(base_model, hypernet_config, ctx_encoder_args, **kwargs)
         model.load_state_dict(state_dict)
         return model
 
@@ -650,7 +650,7 @@ class ModulatedPretrainedModel(nn.Module):
 
         layers = get_layers(self.base_model)
         lora_forward_fn = (
-            lora_forward if not self.use_sequence_packing else lora_forward_packed
+            lora_forward_packed if self.use_sequence_packing else lora_forward
         )
         for layer_idx in self.hypernet.layer_indices:
             for module_info in get_peft_modules(layers[layer_idx], self.peft_config):
@@ -909,44 +909,57 @@ class ModulatedPretrainedModel(nn.Module):
         else:
             return model_outputs
 
-    # @torch.inference_mode()
-    # def generate_with_multi_loras(
-    #     self,
-    #     ctx_ids: Integer[Tensor, "bs ctx_length"],
-    #     ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
-    #     ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
-    #     *model_inputs_args: Any,
-    #     **model_inputs_kwargs: dict[str, Any],
-    # ):
-    #     # TODO: make this persistent
-    #     generated_loras, _ = self.generate_weights(
-    #         ctx_ids, ctx_attn_mask, ctx_position_ids
-    #     )
-    #     # sum loras
-    #     for lora_at_module in generated_loras.values():
-    #         if len(lora_at_module["A"]) > 1:
-    #             print("Multiple LoRAs are generated, summing them up")
-    #         lora_at_module["A"] = torch.mean(lora_at_module["A"], dim=0, keepdim=True)
-    #         lora_at_module["B"] = torch.mean(lora_at_module["B"], dim=0, keepdim=True)
+    @torch.inference_mode()
+    def generate_with_multi_loras(
+        self,
+        ctx_ids: Integer[Tensor, "bs ctx_length"],
+        ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
+        ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
+        n_queries: Integer[Tensor, "n_ctx"] | None = None,
+        *model_inputs_args: Any,
+        **model_inputs_kwargs: dict[str, Any],
+    ):
+        # TODO: make this persistent
+        generated_loras, _ = self.generate_weights(
+            ctx_ids, ctx_attn_mask, ctx_position_ids
+        )
+        # sum loras
+        for lora_at_module in generated_loras.values():
+            if len(lora_at_module["A"]) > 1:
+                print("Multiple LoRAs are generated, summing them up")
+            lora_at_module["A"] = torch.mean(lora_at_module["A"], dim=0, keepdim=True)
+            lora_at_module["B"] = torch.mean(lora_at_module["B"], dim=0, keepdim=True)
 
-    #     position_ids = (
-    #         model_inputs_kwargs["position_ids"]
-    #         if "position_ids" in model_inputs_kwargs
-    #         else None
-    #     )
+        # apply lora hook to the base model
+        position_ids = (
+            model_inputs_kwargs["position_ids"]
+            if "position_ids" in model_inputs_kwargs
+            else None
+        )
+        if n_queries is None:
+            if ctx_position_ids is None:
+                n_queries = torch.ones(
+                    ctx_ids.shape[0], dtype=torch.int32, device=self.device
+                )
+            else:
+                # quite redundant (we do cu_seqlens many places)
+                # TODO: compute cu_seqlens here and propagate that
+                n_queries = torch.ones(
+                    (ctx_position_ids == 0).sum(), dtype=torch.int32, device=self.device
+                )
 
-    #     # apply loras
-    #     with apply_generated_loras(
-    #         self.base_model,
-    #         generated_loras,
-    #         self.hypernet.layer_indices,
-    #         position_ids,
-    #         self.training,
-    #     ):
-    #         model_outputs = self.base_model.generate(
-    #             *model_inputs_args, **model_inputs_kwargs
-    #         )
-    #     return model_outputs
+        apply_lora_to_layers(
+            self.base_model,
+            self.hypernet.layer_indices,
+            generated_loras,
+            n_queries,
+            position_ids,  # TODO: remove (cant be used with generation?)
+        )
+
+        model_outputs = self.base_model.generate(
+            *model_inputs_args, **model_inputs_kwargs
+        )
+        return model_outputs
 
     @torch.inference_mode()
     def generate(
@@ -1031,93 +1044,6 @@ class ModulatedPretrainedModel(nn.Module):
             *model_inputs_args, **model_inputs_kwargs
         )
         return model_outputs
-
-
-# class ModulatedModelWithSharedInput(nn.Module):
-#     def __init__(
-#         self,
-#         modulated_model: ModulatedPretrainedModel,
-#         base_tokenizer: PreTrainedTokenizerBase,
-#         ctx_tokenizer: PreTrainedTokenizerBase,
-#         ctx_end_predicate: str | None = None,
-#         remove_ctx_from_base_input: bool = False,
-#     ):
-#         super().__init__()
-#         self.modulated_model = modulated_model
-#         self.base_tokenizer = base_tokenizer
-#         self.ctx_tokenizer = ctx_tokenizer
-#         self.register_module("modulated_model", self.modulated_model)
-#         self.ctx_end_predicate = ctx_end_predicate
-#         self.remove_ctx_from_base_input = remove_ctx_from_base_input
-
-#     # delegate to self.modulated_model
-#     @property
-#     def config(self):
-#         return self.modulated_model.config
-
-#     @property
-#     def device(self):
-#         return self.modulated_model.device
-
-#     def tie_weights(self):
-#         self.modulated_model.base_model.tie_weights()
-
-#     def state_dict(self, *args, **kwargs):
-#         return self.modulated_model.state_dict(*args, **kwargs)
-
-#     def forward(self, *args, **kwargs):
-#         input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
-#         input_txts = self.base_tokenizer.batch_decode(
-#             input_ids,
-#             skip_special_tokens=True,
-#             clean_up_tokenization_spaces=True,
-#         )
-#         ctx_txts = deepcopy(input_txts)
-#         if self.ctx_end_predicate:
-#             ctx_txts = [
-#                 txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
-#             ]
-#         ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
-#             self.device
-#         )
-#         ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
-#         if self.remove_ctx_from_base_input:
-#             raise NotImplementedError("Not implemented")
-#             # input_txts = [
-#             #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
-#             # ]
-#             # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
-#             # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
-#             # kwargs["input_ids"] = input_ids
-#             # kwargs["attention_mask"] = attention_mask
-#         return self.modulated_model(ctx_ids, ctx_attn_mask, *args, **kwargs)
-
-#     def generate(self, *args, **kwargs):
-#         input_ids = kwargs["input_ids"] if "input_ids" in kwargs else args[0]
-#         input_txts = self.base_tokenizer.batch_decode(
-#             input_ids,
-#             skip_special_tokens=True,
-#             clean_up_tokenization_spaces=True,
-#         )
-#         ctx_txts = deepcopy(input_txts)
-#         if self.ctx_end_predicate:
-#             ctx_txts = [
-#                 txt.split(self.ctx_end_predicate)[0].strip() for txt in input_txts
-#             ]
-#         ctx_inputs = self.ctx_tokenizer(ctx_txts, return_tensors="pt", padding=True).to(
-#             self.device
-#         )
-#         ctx_ids, ctx_attn_mask = ctx_inputs.input_ids, ctx_inputs.attention_mask
-#         if self.remove_ctx_from_base_input:
-#             raise NotImplementedError("Not implemented")
-#             # input_txts = [
-#             #     txt.split(self.ctx_end_predicate)[1].strip() for txt in input_txts
-#             # ]
-#             # inputs = self.base_tokenizer(input_txts, return_tensors="pt", padding=True)
-#             # input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
-#             # kwargs["input_ids"] = input_ids
-#             # kwargs["attention_mask"] = attention_mask
-#         return self.modulated_model.generate(ctx_ids, ctx_attn_mask, *args, **kwargs)
 
 
 @contextmanager

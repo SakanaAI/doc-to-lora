@@ -284,7 +284,7 @@ class LoRAArguments:
         metadata={"help": ("LoRA R value.")},
     )
     lora_dropout: float | None = field(
-        default=0.02,
+        default=0.0,
         metadata={"help": ("LoRA dropout.")},
     )
     target_modules: list[str] | None = field(
@@ -354,20 +354,6 @@ class CtxTrainingArguments:
     notes: str | None = field(
         default=None,
         metadata={"help": "Wandb notes for the experiment."},
-    )
-    add_repeat_prompt: bool = field(
-        default=False,
-        metadata={"help": "Whether to add repeat prompt to the dataset."},
-    )
-    repeat_prob: float = field(
-        default=0.0,
-        metadata={
-            "help": "Probability that a context will be used with repeat prompts."
-        },
-    )
-    add_negative_prompt: bool = field(
-        default=False,
-        metadata={"help": "Whether to add negative prompt to the dataset."},
     )
     use_kl_loss: bool = field(
         default=False,

@@ -6,14 +6,14 @@
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --error=slurm_logs/%x-%j.out
 
-port=$((10000 + ($SLURM_JOBID % 50000)))
+port=$((29560 + ($SLURM_JOBID % 10)))
 echo "Using port: $port"
 
 # --gradient_accumulation_steps=8 --gradient_clipping=1.0
 uv run accelerate launch --main_process_port $port \
 --num_processes=4 --gpu_ids all intx_sft.py $1 \
 --model_name_or_path=google/gemma-2-2b-it \
---num_train_epochs=5 \
+--num_train_epochs=3 \
 --per_device_train_batch_size=-1 \
 --gradient_accumulation_steps=8 \
 --per_device_eval_batch_size=64 \
@@ -29,13 +29,11 @@ uv run accelerate launch --main_process_port $port \
 --learning_rate=4e-5 \
 --lora_dropout=0.0 \
 --neftune_noise_alpha=5 \
---add_negative_prompt=False \
---add_repeat_prompt=False \
 --use_sequence_packing=True \
 --max_qas_len=2048 \
 --max_qas_per_sample=1 \
 --max_packed_inp_len=8192 \
---max_packed_ctx_len=16384 \
+--max_packed_ctx_len=8192 \
 --per_rank_gen=True \
 --per_layer_processing=True \
 --gen_lora_l1_reg_coef=0.1 \

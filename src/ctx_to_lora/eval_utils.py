@@ -680,6 +680,7 @@ def evaluate(
             train=False,
             base_model_kwargs=model_kwargs,
             use_flash_attn=True,
+            use_sequence_packing=False,  # for generation
         )
     else:
         model = get_model(
@@ -724,8 +725,6 @@ def evaluate(
         if ctx_tokenizer.pad_token_id is None:
             ctx_tokenizer.pad_token_id = ctx_tokenizer.eos_token_id
 
-    tokenizer_kwargs = {}
-    ctx_tokenizer_kwargs = {}
     add_ctx_to_chat = (
         not isinstance(model, ModulatedPretrainedModel) and not args.remove_context
     )
@@ -741,13 +740,9 @@ def evaluate(
         max_qas_per_sample=1,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
-        tokenizer_kwargs=tokenizer_kwargs,
         ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=ctx_tokenizer,
-        ctx_tokenizer_kwargs=ctx_tokenizer_kwargs,
         add_ctx_to_chat=add_ctx_to_chat,
-        add_repeat_prompt=False,
-        add_negative_prompt=False,
         use_kl_loss=False,
         set_format="pt",
     )
