@@ -133,9 +133,24 @@ class ExperimentSetup(str, Enum):
 
 @dataclass
 class TrainingArguments(TrainingArguments):
+    output_dir: str = field(
+        default="",
+        metadata={"help": "Placeholder. Will be overwritten by train.py"},
+    )
     tf32: bool = field(
         default=True,
         metadata={"help": "Whether to use tf32 precision."},
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={"help": "Whether to use bf16 precision."},
+    )
+    label_names: list[str] = field(
+        default=("labels",),
+        metadata={
+            "help": "List of strings to specify the label names in the dataset. "
+            "This is used to compute the loss and metrics."
+        },
     )
     include_for_metrics: list[str] = field(
         default=("inputs",),
@@ -144,6 +159,21 @@ class TrainingArguments(TrainingArguments):
             "Options: 'inputs', 'loss'."
         },
     )
+    per_device_eval_batch_size: int = field(
+        default=64,
+        metadata={
+            "help": "Batch size for evaluation. "
+            "If not set, will use the same as per_device_train_batch_size."
+        },
+    )
+    per_device_train_batch_size: int = field(
+        default=1,
+        metadata={
+            "help": "Batch size for training. "
+            "If not set, will use the same as per_device_eval_batch_size."
+        },
+    )
+    # TODO: use this! (check trainer.py for proper computation)
     average_tokens_across_devices: bool = field(
         default=False,
         metadata={"help": "compute num_items_in_batch across devices."},
@@ -164,6 +194,18 @@ class TrainingArguments(TrainingArguments):
     dataloader_num_workers: int = field(
         default=8,
         metadata={"help": "Number of subprocesses to use for data loading."},
+    )
+    neftune_noise_alpha: float = field(
+        default=5.0,
+        metadata={"help": "Neftune noise alpha for the optimizer."},
+    )
+    learning_rate: float = field(
+        default=4e-5,
+        metadata={"help": "Initial learning rate."},
+    )
+    weight_decay: float = field(
+        default=0.01,
+        metadata={"help": "Weight decay for the optimizer."},
     )
     optim: str = field(
         default="adamw_torch_fused",
@@ -202,7 +244,7 @@ class TrainingArguments(TrainingArguments):
         metadata={"help": "Evaluation strategy."},
     )
     eval_steps: int = field(
-        default=10_000,
+        default=1_000,
         metadata={"help": "Evaluation steps."},
     )
     metric_for_best_model: str = field(
@@ -225,7 +267,7 @@ class TrainingArguments(TrainingArguments):
         default="steps",
     )
     save_steps: int = field(
-        default=10_000,
+        default=5_000,
     )
     save_safetensors: bool = field(
         default=False,
@@ -316,8 +358,12 @@ class CtxTrainingArguments:
         metadata={"help": "Maximum context length for training."},
     )
     use_sequence_packing: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to use sequence packing."},
+    )
+    max_ctx_len: int = field(
+        default=-1,
+        metadata={"help": "Max context length. Overrides ctx tokenizer length."},
     )
     max_qas_len: int = field(
         default=2**11,
@@ -344,7 +390,7 @@ class CtxTrainingArguments:
     )
 
     max_new_tokens: int | None = field(
-        default=2**10,
+        default=256,
         metadata={"help": "Maximum new tokens for generation-based evaluation."},
     )
     gen_per_device_eval_batch_size: int | None = field(
@@ -358,6 +404,10 @@ class CtxTrainingArguments:
     use_kl_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use KL loss."},
+    )
+    use_per_ctx_average_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use per-context average loss."},
     )
     gen_lora_l1_reg_coef: float = field(
         default=0.0,
@@ -429,7 +479,7 @@ class HypernetArguments:
         metadata={"help": "Whether to use token mixing block."},
     )
     num_pre_head_layers: int = field(
-        default=4, metadata={"help": "# of layers before hypernet head"}
+        default=1, metadata={"help": "# of layers before hypernet head"}
     )
 
 
@@ -499,7 +549,7 @@ class AggregatorArguments:
         metadata={"help": "Number of blocks for Perceiver."},
     )
     num_self_attn_per_block: int = field(
-        default=6,
+        default=0,
         metadata={"help": "Number of self-attention layers per block for Perceiver."},
     )
     shared_weights: bool = field(

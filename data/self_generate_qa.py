@@ -91,6 +91,29 @@ MODEL_CTX_LEN = {
 }
 
 
+def truncate_middle_if_too_long(
+    input_ids: list[int],
+    max_length: int,
+    max_new_tokens: int = 256,
+) -> list[int]:
+    """
+    Truncate the middle of a list of tokens to fit within a maximum length.
+
+    Args:
+        tokens: List of token IDs
+        max_length: Maximum length for the truncated tokens
+
+    Returns:
+        List of truncated token IDs
+    """
+    max_new_tokens_half = max_new_tokens // 2
+    # leave max_new_tokens for generation
+    half = max_length // 2 - max_new_tokens_half
+    if len(input_ids) > max_length:
+        return input_ids[:half] + input_ids[-half:]
+    return input_ids
+
+
 def get_prompt(context: str, q: str) -> str:
     return PROMPT_TEMPLATE.format(context=context, question=q)
 
@@ -197,6 +220,7 @@ def self_generate(
     llm: LLM,
     system_template: str,
     parquet_file: str | None = None,
+    do_truncate: bool = False,
 ) -> None:
     """Process a single dataset and generate QA pairs."""
 
@@ -294,6 +318,28 @@ def self_generate(
         chunk_messages = create_messages(
             chunk_ctxs, chunk_questions, args.vllm_model, SELF_GEN_SYSTEM_MSG
         )
+
+        if do_truncate:
+            # we should only do this for evaluation data
+            tokenized_contents = tk(
+                [m[0]["content"] for m in chunk_messages],
+                add_special_tokens=False,
+                return_attention_mask=False,
+            )
+            tokenized_contents["input_ids"] = [
+                truncate_middle_if_too_long(
+                    ids,
+                    max_length=MODEL_CTX_LEN[args.vllm_model],
+                    max_new_tokens=1024,
+                )
+                for ids in tokenized_contents["input_ids"]
+            ]
+            contents = tk.batch_decode(
+                tokenized_contents["input_ids"], skip_special_tokens=True
+            )
+            for c, m in zip(contents, chunk_messages):
+                m[0]["content"] = c
+
         print(f"Generating from {len(chunk_messages)} contexts")
 
         # Clear GPU memory before processing the next chunk
@@ -309,7 +355,7 @@ def self_generate(
             sys_tokens,
             n_sys_tokens,
             chunk_ctxs,
-            ds["ctx_ids"][start : start + chunk_size],
+            ds[start : start + chunk_size]["ctx_ids"],
             chunk_questions,
             chunk_messages,
             k,
@@ -560,6 +606,11 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Probability of using closed QA prompt template (default: 0.0)",
     )
+    parser.add_argument(
+        "--do_truncate",
+        action="store_true",
+        help="Truncate contexts to fit model context length",
+    )
     return parser.parse_args()
 
 
@@ -599,7 +650,7 @@ if __name__ == "__main__":
         # Process each dataset
         for ds_name, split in dataset_configs:
             print(f"Processing dataset: {ds_name}, split: {split}")
-            self_generate(ds_name, split, args, llm, SYSTEM_TEMPLATE)
+            self_generate(ds_name, split, args, llm, SYSTEM_TEMPLATE, args.do_truncate)
     else:
         assert args.glob_pattern, (
             "glob_pattern must be provided if no ds_names or config"
@@ -614,4 +665,5 @@ if __name__ == "__main__":
                 args=args,
                 llm=llm,
                 system_template=SYSTEM_TEMPLATE,
+                do_truncate=args.do_truncate,
             )

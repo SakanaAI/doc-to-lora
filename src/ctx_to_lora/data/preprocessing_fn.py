@@ -55,6 +55,25 @@ def get_preprocessing_fn(
                 "responses": responses[:min_len],
             }
 
+    elif ds_name.startswith("ctx_qa"):
+
+        def f(sample):
+            ctx = sample["context"]
+            # remove unintended prompt
+            ctx = ctx.split("\n...\n\n### Code ###\n")[-1]
+            sample["context"] = ctx
+            return sample
+
+    elif ds_name == "facts":
+
+        def f(sample):
+            prompt = sample["system_instruction"] + sample["user_request"]
+            return {
+                "context": sample["context_document"],
+                "prompt": prompt,
+                "response": "PLACEHOLDER. PLEASE GENERATE SELF-GEN DATA.",
+            }
+
     elif ds_name.startswith("longbench"):
 
         def f(sample):

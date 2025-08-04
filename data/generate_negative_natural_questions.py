@@ -6,7 +6,7 @@ from tqdm import tqdm
 if __name__ == "__main__":
     ds = load_dataset("google-research-datasets/natural_questions")
     ds = ds.shuffle(seed=42)
-    for split in ds:
+    for split in ["validation"]:
         out = []
         for i, sample in enumerate(tqdm(ds[split])):
             ctx = " ".join(

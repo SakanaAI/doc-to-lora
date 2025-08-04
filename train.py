@@ -239,6 +239,7 @@ def main():
 
         training_args.gen_lora_l1_reg_coef = ctx_args.gen_lora_l1_reg_coef
         training_args.use_kl_loss = ctx_args.use_kl_loss
+        training_args.use_per_ctx_average_loss = ctx_args.use_per_ctx_average_loss
 
         if len([p for p in model.ctx_encoder.parameters() if p.requires_grad]):
             raise ValueError("ctx_encoder contains trainable parameters")
@@ -266,6 +267,9 @@ def main():
     logger.info("Loading dataset...")
 
     add_ctx_to_chat = not isinstance(model, ModulatedPretrainedModel)
+    ctx_model_max_len = model.ctx_encoder.config.max_position_embeddings
+    if ctx_args.max_ctx_len > 0:
+        ctx_model_max_len = ctx_args.max_ctx_len
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
@@ -273,14 +277,17 @@ def main():
         max_qas_per_sample=ctx_args.max_qas_per_sample,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
-        ctx_model_max_len=model.ctx_encoder.config.max_position_embeddings,
+        ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=ctx_tokenizer,
         add_ctx_to_chat=add_ctx_to_chat,
         use_kl_loss=ctx_args.use_kl_loss,
     )
-    tokenized_ds = {"train": dict(), "validation": dict()}
+    splits = ["train"]
+    if training_args.eval_strategy != "no":
+        splits.append("validation")
+    tokenized_ds = {split: {} for split in splits}
     for split, ds_names in zip(
-        ["train", "validation"],
+        splits,
         [data_args.train_ds_names, data_args.val_ds_names],
     ):
         if not ds_names:
@@ -323,6 +330,8 @@ def main():
 
     train_ds_len = [len(ds) for ds in train_ds.values()]
     total_len = sum(train_ds_len)
+
+    # TODO: cache this?
     train_ds = interleave_datasets(
         list(train_ds.values()),
         probabilities=get_ds_prob(train_ds_len, total_len),
@@ -339,7 +348,7 @@ def main():
             ctx_args.max_packed_inp_len,
             ctx_args.max_packed_ctx_len,
             max_packed_size=-1,
-            num_proc=8,
+            num_proc=16,
         )
         logger.info(f"Train dataset length: {len(train_ds)}")
         logger.info(
@@ -370,7 +379,8 @@ def main():
             logger.info("Compiling ctx_encoder_model")
             ctx_base_model = model.ctx_encoder.base_model
             compile_linear(ctx_base_model)
-            # model.ctx_encoder.compile(fullgraph=True, mode="max-autotune")
+            # TODO: why we can't compile ctx_base_model?
+            # ctx_base_model.compile(fullgraph=True, mode="max-autotune")
 
     elif isinstance(model, PeftModel):
         base_model = model.base_model

@@ -16,7 +16,7 @@ logger = logging.getLogger()
 class DistillationTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.gen_lora_l1_reg_coef = kwargs.pop("gen_lora_l1_reg_coef", 0.0)
-        self.distillation_temperature = kwargs.pop("distillation_temperature", 1.0)
+        self.use_per_ctx_average_loss = kwargs.pop("use_per_ctx_average_loss", False)
         super().__init__(*args, **kwargs)
 
     def compute_loss(
@@ -28,43 +28,23 @@ class DistillationTrainer(Trainer):
                 loss_kwargs["num_items_in_batch"] = num_items_in_batch
             inputs = {**inputs, **loss_kwargs}
         use_kl = "logprobs_vals" in inputs
-        # TODO: handle when val data doesnt have logprobs
         if use_kl:
             labels = inputs.pop("labels", None)
             label_pos = torch.where(labels != -100)
-        # TODO: add efficient logits indexing?
-        # https://github.com/huggingface/trl/pull/2773
-        # + use `num_logits_to_keep` to limit the number of logits
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
 
         if not use_kl:
             loss = outputs["loss"]
 
         else:
-            target_logp = inputs.pop("logprobs_vals")
-            indices = inputs.pop("logprobs_indices")
-
-            # packed
-            if isinstance(target_logp, torch.Tensor):
-                target_logp = target_logp.squeeze(0)
-                indices = indices.squeeze(0)
-            # non-packed max_qas_per_sample=1
-            elif isinstance(target_logp[0], torch.Tensor):
-                target_logp = torch.cat([x[0] for x in target_logp], dim=0)
-                indices = torch.cat([x[0] for x in indices], dim=0)
-            # non-packed max_qas_per_sample>1
-            else:
-                # convert to tensor
-                raise NotImplementedError(
-                    "Non-packed data with max_qas_per_sample > 1 is not supported yet."
-                )
+            target_logp = inputs.pop("logprobs_vals").squeeze(0)
+            indices = inputs.pop("logprobs_indices").squeeze(0)
 
             assert label_pos[0].shape[0] == target_logp.shape[0], (
                 "Label positions and target log probabilities should have the same # tokens."
                 f"Got : {label_pos[0].shape[0]=} and {target_logp.shape[0]=}"
             )
 
-            # TODO: per-ctx average loss?
             ##### KL loss
             outputs_logits = outputs.logits[
                 label_pos[0], label_pos[1] - 1
@@ -76,8 +56,48 @@ class DistillationTrainer(Trainer):
 
             p = teacher_logp.exp()
             logq = nn.functional.log_softmax(outputs_logits, dim=-1)
-            loss = -torch.sum(p * logq, dim=-1) * (self.distillation_temperature**2)
-            if reduction == "batchmean":
+            loss = -torch.sum(p * logq, dim=-1)
+
+            if self.use_per_ctx_average_loss:
+                n_queries_per_ctx = inputs["n_queries"].tolist()
+
+                position_ids = inputs["position_ids"].squeeze(0)
+                # account only label positions
+                label_mask = labels.squeeze(0) != -100
+                label_pos_ids = label_mask * position_ids
+                label_pos_ids_diff = label_pos_ids.diff(
+                    append=torch.tensor([0], device=position_ids.device)
+                )
+                start_label_pos = torch.where((label_pos_ids_diff > 0) * ~label_mask)[0]
+                end_label_pos = torch.where((label_pos_ids_diff < 0) * label_mask)[0]
+
+                label_seq_lens = end_label_pos - start_label_pos
+                cu_label_seq_lens = torch.cumsum(label_seq_lens, dim=0)
+                start_indices = torch.cat(
+                    (
+                        torch.tensor([0], device=cu_label_seq_lens.device),
+                        cu_label_seq_lens[:-1],
+                    )
+                )
+
+                # these stack and split can be optimized but let's keep it simple
+                # Calculate mean loss for each QA pair
+                qa_losses = torch.stack(
+                    [
+                        loss[start:end].mean()
+                        for start, end in zip(start_indices, cu_label_seq_lens)
+                    ]
+                )
+
+                # Split losses by context and calculate per-context average loss
+                per_ctx_losses = [
+                    ctx.mean() for ctx in torch.split(qa_losses, n_queries_per_ctx)
+                ]
+
+                # Final loss is the average of per-context losses
+                loss = torch.stack(per_ctx_losses).mean()
+
+            elif reduction == "batchmean":
                 loss = loss.mean()
             elif reduction == "sum" and num_items_in_batch is not None:
                 loss = loss.sum() / num_items_in_batch
@@ -85,8 +105,10 @@ class DistillationTrainer(Trainer):
 
         ##### unpack gen lora dict and compute regularization loss
         l1_norm = 0
+        n_modules = len(gen_loras)
         for module, lora in gen_loras.items():
             l1_norm += lora["A"].abs().mean() + lora["B"].abs().mean()
+        l1_norm /= n_modules
         # rough estimate of the losses (we only log the values from one step)
         if (self.state.global_step == 1 and self.args.logging_first_step) or (
             self.args.logging_strategy == IntervalStrategy.STEPS
@@ -131,12 +153,8 @@ class ModulatedModelTrainer(Trainer):
             if num_items_in_batch is not None:
                 loss_kwargs["num_items_in_batch"] = num_items_in_batch
             inputs = {**inputs, **loss_kwargs}
-        # TODO: add efficient logits indexing?
-        # https://github.com/huggingface/trl/pull/2773
-        # + use `num_logits_to_keep` to limit the number of logits
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
         # Save past state if it exists
-        # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
             self._past = outputs[self.args.past_index]
 
@@ -235,7 +253,11 @@ def train_model(
         logger.info("Training with modulated model. Using ModulatedModelTrainer.")
         trainer_cls = ModulatedModelTrainer
         trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
+        trainer_kwargs["use_per_ctx_average_loss"] = (
+            training_args.use_per_ctx_average_loss
+        )
         del training_args.gen_lora_l1_reg_coef
+        del training_args.use_per_ctx_average_loss
 
         if training_args.use_kl_loss:
             logger.info("Training with distillation loss. Using DistillationTrainer.")

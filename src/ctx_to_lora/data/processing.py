@@ -170,12 +170,12 @@ def load_and_process_dataset(
     ds = ds.map(
         get_preprocessing_fn(ds_name, is_eval),
         remove_columns=cols_to_remove,
-        num_proc=num_proc,
+        num_proc=16,
     )
     ds = ds.filter(
         filter_none,
         batched=False,
-        num_proc=num_proc,
+        num_proc=16,
     )
     return ds
 
@@ -191,6 +191,7 @@ def get_tokenized_dataset(
     ctx_tokenizer: PreTrainedTokenizerBase,
     add_ctx_to_chat: bool,
     use_kl_loss: bool,
+    max_new_tokens: int = 256,
     set_format: str | None = None,
 ) -> dict[str, Any]:
     if max_qas_len > 0:
@@ -210,9 +211,10 @@ def get_tokenized_dataset(
         base_model_max_len=base_model_max_len,
         ctx_model_max_len=ctx_model_max_len,
         add_ctx_to_chat=add_ctx_to_chat,
-        use_kl_loss=use_kl_loss,
+        use_kl_loss=True,  # HACK: for consistent hash (to be removed)
         need_ctx_ids=need_ctx_ids,
         split=split,
+        max_new_tokens=max_new_tokens,
         set_format=set_format,
     )
 
@@ -229,6 +231,10 @@ def get_tokenized_dataset(
         # load the cached ds
         logger.info(f"Loaded tokenized dataset from {ds_path}")
         tokenized_ds = datasets.load_from_disk(ds_path)
+        if (not use_kl_loss) and ("logprobs_vals" in tokenized_ds.column_names):
+            tokenized_ds = tokenized_ds.remove_columns(
+                ["logprobs_vals", "logprobs_indices"]
+            )
         return tokenized_ds
 
     num_proc = 4
@@ -236,7 +242,17 @@ def get_tokenized_dataset(
         **load_and_process_kwargs,
         num_proc=num_proc,
     )
+    if use_kl_loss:
+        if "train" in split and "logprobs_vals" not in ds.column_names:
+            raise ValueError(
+                "`use_kl_loss` is set to True but 'logprobs_vals' column "
+                "is not present in the dataset."
+            )
     logger.info(f"Constructing and tokenizing {ds_name} with {split} split...")
+
+    # HACK
+    tokenize_kwargs.pop("use_kl_loss", None)
+
     tokenized_ds = construct_and_tokenize_ctx_qa(
         ds=ds,
         tokenizer=tokenizer,
@@ -247,9 +263,14 @@ def get_tokenized_dataset(
 
     if ("train" in split) and is_caching_enabled():
         tokenized_ds = tokenized_ds.shuffle()
-        tokenized_ds.save_to_disk(ds_path, num_proc=num_proc)
+        tokenized_ds.save_to_disk(ds_path, num_proc=16)
         # force reload from disk for fingerprint consistency
         tokenized_ds = datasets.load_from_disk(ds_path)
+
+    if (not use_kl_loss) and ("logprobs_vals" in tokenized_ds.column_names):
+        tokenized_ds = tokenized_ds.remove_columns(
+            ["logprobs_vals", "logprobs_indices"]
+        )
     return tokenized_ds
 
 
@@ -261,34 +282,24 @@ def construct_and_tokenize_ctx_qa(
     ctx_model_max_len,
     ctx_tokenizer,
     add_ctx_to_chat,
-    use_kl_loss,
     need_ctx_ids,
     ds,
     split,
+    max_new_tokens,
     set_format=None,
     num_proc=None,
 ):
-    if use_kl_loss:
-        if "train" in split and "logprobs_vals" not in ds.column_names:
-            raise ValueError(
-                "`use_kl_loss` is set to True but 'logprobs_vals' column "
-                "is not present in the dataset."
-            )
-    else:
-        if "logprobs_vals" in ds.column_names:
-            ds = ds.remove_columns(["logprobs_vals", "logprobs_indices"])
-
     # for sft + chat_model, we need to convert the dataset to chat format
     if "input_ids" in ds.column_names and "response_start_end" in ds.column_names:
         # already tokenized dataset (e.g., self-gen qa data)
-        tokenized_ds = ds.map(get_labels_from_input_ids, num_proc=num_proc)
+        tokenized_ds = ds.map(get_labels_from_input_ids, num_proc=16)
     else:
         # construct messages from prompts and responses
         # add "messages_list" field
         ds = ds.map(
             convert_ctx_prompt_response_to_messages,
             fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
-            num_proc=num_proc,
+            num_proc=16,
         )
         # add `input_ids`, `attention_mask`, `labels`
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -301,6 +312,10 @@ def construct_and_tokenize_ctx_qa(
 
     tokenized_ds = tokenized_ds.remove_columns(
         [col for col in tokenized_ds.column_names if col not in COLS_TO_KEEP_TOKENIZED],
+    )
+    tokenized_ds = tokenized_ds.filter(
+        lambda x: bool(x["input_ids"]),  # remove empty "input_ids"
+        num_proc=num_proc,
     )
 
     if need_ctx_ids:
@@ -321,7 +336,7 @@ def construct_and_tokenize_ctx_qa(
             tokenized_ds = tokenized_ds.filter(
                 len_filter,
                 fn_kwargs={"max_length": ctx_model_max_len, "keys": ["ctx_ids"]},
-                num_proc=num_proc,
+                num_proc=16,
             )
 
     logging.info(f"Split too long QAs with max length {max_qas_len}")
@@ -332,8 +347,8 @@ def construct_and_tokenize_ctx_qa(
             "max_qas_per_sample": max_qas_per_sample,
         },
         batched=True,
-        batch_size=100_000,
-        num_proc=4,
+        batch_size=12_500,
+        num_proc=16,
     )
     if "train" not in split:
         # squeeze since we always have one query per sample in eval
@@ -343,7 +358,7 @@ def construct_and_tokenize_ctx_qa(
             fn_kwargs={
                 "max_length": base_model_max_len,
                 "columns": ["input_ids", "labels"],
-                "max_new_tokens": 256,
+                "max_new_tokens": max_new_tokens,
             },
         )
         tokenized_ds = tokenized_ds.map(
@@ -589,7 +604,7 @@ def split_too_long_qas(
                 target_vals, target_indices = None, None
 
             inp_len = len(inp_ids)
-            if inp_len > max_qas_len:
+            if (max_qas_len > 0) and (inp_len > max_qas_len):
                 # Skip individual sequences that are too long
                 n_skip += 1
                 continue
@@ -774,7 +789,7 @@ def pack(
                 "metadata_path": f"{ds_path}/packing_metadata.json",
             },
             batched=True,
-            batch_size=250_000,
+            batch_size=125_000,
             num_proc=num_proc,
             remove_columns=ds.column_names,
         )

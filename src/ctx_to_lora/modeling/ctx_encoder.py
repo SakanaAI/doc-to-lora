@@ -53,12 +53,13 @@ def maybe_add_batch_dim(kwargs):
 class EarlyExit(nn.Module):
     def __init__(self, base_model: PreTrainedModel, config: CtxEncoderArguments):
         super().__init__()
-        self.base_model = base_model = get_base_model(base_model)
-        self.exit_layer = config.layer_idx
+        base_model = get_base_model(base_model)
         if "gte" in base_model.config.name_or_path:
-            self.base_model.encoder.layer = base_model.encoder.layer[: self.exit_layer]
+            base_model.encoder.layer = base_model.encoder.layer[: config.layer_idx]
         else:
-            self.base_model.layers = base_model.layers[: self.exit_layer]
+            base_model.layers = base_model.layers[: config.layer_idx]
+
+        self.base_model = base_model
 
     @property
     def config(self):
@@ -90,6 +91,8 @@ class EmbeddingOnly(nn.Module):
 class PerLayerActivations(nn.Module):
     def __init__(self, base_model: PreTrainedModel, config: CtxEncoderArguments):
         super().__init__()
+        base_model = get_base_model(base_model)  # remove lm head
+        base_model.layers = base_model.layers[:-1]  # remove last attn block
         self.base_model = base_model
 
     @property
@@ -103,7 +106,7 @@ class PerLayerActivations(nn.Module):
         # Return all layers' activations except the last one
         # from embeddings to the input of the last attn block
         # Shape: (batch_size, num_layers, seq_len, hidden_size)
-        return torch.stack(outputs.hidden_states[:-1], dim=1)
+        return torch.stack(outputs.hidden_states, dim=1)
 
 
 class CTX_ENCODER_TYPE(str, Enum):

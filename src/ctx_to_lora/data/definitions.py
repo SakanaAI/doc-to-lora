@@ -546,9 +546,26 @@ DS_KWARGS = {
     ),
     # for negative training and evaluating
     "negative_nq": dict(
+        validation=dict(
+            path="json",
+            data_files="data/raw_datasets/negative_natural_questions/validation.jsonl",
+            split="train[:1000]",
+        ),
         test=dict(
             path="json",
             data_files="data/raw_datasets/negative_natural_questions/validation.jsonl",
+            split="train",
+        ),
+    ),
+    "facts": dict(
+        validation=dict(
+            path="csv",
+            data_files="data/eval/facts/examples.csv",
+            split="train[:400]",
+        ),
+        test=dict(
+            path="csv",
+            data_files="data/eval/facts/examples.csv",
             split="train",
         ),
     ),
@@ -630,12 +647,22 @@ CLOSED_QA_INTX_TEMPLATES = [
 
 
 EVAL_INTX_TEMPLATES = {
+    # binary (yes/no, a/b) qa given ctx
     "ropes": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    # short-ctx reasoning
     "drop": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
-    "negative_nq": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
-    "triviaqa_retrieved": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
-    "hotpot_qa": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    # short-ctx extractive qa
     "squad": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    # retrieved noisy ctx?
+    "triviaqa_retrieved": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    # doc w/ distractors qa
+    "hotpot_qa": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    # unrelated ctx-qa
+    "negative_nq": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    # summary
+    "booksum": "Write a summary for the story. Make it a *one-paragraph monologue*. Don't use bullet point. Do not output anything else beyond the summary.",
+    "gov_report": "Write a summary for the report. Make it a *one-paragraph monologue*. Don't use bullet point. Do not output anything else beyond the summary.",
+    # longbench
     "longbench/qasper": 'Answer the question as concisely as you can, using a single phrase or sentence if possible.\nIf the question cannot be answered based on the information in the article, write "unanswerable".\nIf the question is a yes/no question, answer "yes", "no", or "unanswerable". Do not provide any explanation.\n\nQuestion: {input}',
     "longbench/narrativeqa": "Answer the question as concisely as you can, using a single phrase if possible. Do not provide any explanation.\n\nQuestion: {input}",
     "longbench/multifieldqa_en": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",

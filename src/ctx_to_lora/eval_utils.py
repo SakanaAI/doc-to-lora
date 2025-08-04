@@ -20,6 +20,7 @@ from transformers import (
     Trainer,
     set_seed,
 )
+from transformers.trainer_utils import find_executable_batch_size
 
 from ctx_to_lora.data.collator import eval_collator, generation_collator
 from ctx_to_lora.data.definitions import (
@@ -50,13 +51,76 @@ logger = logging.getLogger()
 sys.modules["ctx_to_lora.modeling_utils"] = hypernet
 
 
+# from https://github.com/huggingface/transformers/issues/32215#issuecomment-2386274138
+
+
+class EvaluateAutoFindBatchSizeMixin:
+    def evaluate(self, *args, **kwargs):
+        print(f"Auto-finding batch size for evaluate")
+        # can't set self.args.eval_batch_size, it is computed from self.args.per_device_eval_batch_size
+        super_evaluate = super().evaluate  # super cannot be called inside lambda
+
+        # assert not self.args.dataloader_persistent_workers, "dataloader_persistent_workers not supported because eval batch size does not change"
+        def new_evaluate(batch_size):
+            old_eval_batch_size = self.args.eval_batch_size
+            self.args.per_device_eval_batch_size = batch_size
+            if self.args.eval_batch_size != old_eval_batch_size:
+                if self.args.dataloader_persistent_workers and hasattr(
+                    self, "_eval_dataloaders"
+                ):
+                    del self._eval_dataloaders  # to shutdown the workers
+                logger.info(
+                    f"Setting eval_batch_size to {self.args.eval_batch_size} (per device: {batch_size}) from old {old_eval_batch_size}"
+                )
+            return super_evaluate(*args, **kwargs)
+            # don't reset at end, but keep batch size for the next time evaluate is called
+
+        return find_executable_batch_size(
+            new_evaluate,
+            self.args.per_device_eval_batch_size,
+            auto_find_batch_size=self.args.auto_find_batch_size,
+        )()
+
+    def predict(self, *args, **kwargs):
+        print(f"Auto-finding batch size for predict")
+        # can't set self.args.eval_batch_size, it is computed from self.args.per_device_eval_batch_size
+        super_predict = super().predict  # super cannot be called inside lambda
+
+        def new_predict(batch_size):
+            old_eval_batch_size = self.args.eval_batch_size
+            self.args.per_device_eval_batch_size = batch_size
+            if self.args.eval_batch_size != old_eval_batch_size:
+                if self.args.dataloader_persistent_workers and hasattr(
+                    self, "_eval_dataloaders"
+                ):
+                    del self._eval_dataloaders  # to shutdown the workers
+                logger.info(
+                    f"Setting eval_batch_size to {self.args.eval_batch_size} (per device: {batch_size}) from old {old_eval_batch_size}"
+                )
+            return super_predict(*args, **kwargs)
+
+        return find_executable_batch_size(
+            new_predict,
+            self.args.per_device_eval_batch_size,
+            auto_find_batch_size=self.args.auto_find_batch_size,
+        )()
+
+
+class CustomSeq2SeqTrainer(Seq2SeqTrainer, EvaluateAutoFindBatchSizeMixin):
+    pass
+
+
+class CustomTrainer(Trainer, EvaluateAutoFindBatchSizeMixin):
+    pass
+
+
 # ============================================================================
 # Metrics and Evaluation Utilities
 # ============================================================================
 
 # from https://gist.github.com/cloneofsimo/8abd0284d4738f28f04200628f9a83f5
 # https://github.com/Nordth/humanize-ai-lib/blob/main/src/humanize-string.ts
-import re
+
 
 _HIDDEN_CHARS = re.compile(
     r"[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]"
@@ -501,6 +565,7 @@ def eval_generation(
         if remove_context:
             split_name += "_no_context"
 
+        clear_gpu()
         eval_result = eval_trainer.predict(
             ds,
             metric_key_prefix=split_name,
@@ -662,6 +727,7 @@ def evaluate(
     eval_batch_size: int,
     args: Namespace,
     split: str,
+    max_new_tokens: int,
     generative: bool,
 ) -> dict[str, dict]:
     """Main evaluation function."""
@@ -690,25 +756,6 @@ def evaluate(
             model_kwargs=model_kwargs,
             use_flash_attn=True,
         )
-
-    # if is_liger_kernel_available():
-    #     from liger_kernel.transformers import _apply_liger_kernel_to_instance
-
-    #     if isinstance(model, ModulatedPretrainedModel):
-    #         print("Applying liger-kernel to ModulatedPretrainedModel")
-    #         if isinstance(model.base_model, PeftModel):
-    #             _apply_liger_kernel_to_instance(model=model.base_model.base_model.model)
-    #         else:
-    #             _apply_liger_kernel_to_instance(model=model.base_model.model)
-    #         if ctx_name is not None:
-    #             print("Applying liger-kernel to ctx_encoder_model")
-    #             _apply_liger_kernel_to_instance(model=model.ctx_encoder.base_model)
-    #     elif isinstance(model, PeftModel):
-    #         print("Applying liger-kernel to PeftModel")
-    #         _apply_liger_kernel_to_instance(model=model.base_model.model)
-    #     elif isinstance(model, PreTrainedModel):
-    #         print("Applying liger-kernel to PretrainedModel")
-    #         _apply_liger_kernel_to_instance(model=model.model)
 
     tokenizer = get_tokenizer(args.model_name_or_path, train=False)
     if tokenizer.pad_token_id is None:
@@ -744,6 +791,7 @@ def evaluate(
         ctx_tokenizer=ctx_tokenizer,
         add_ctx_to_chat=add_ctx_to_chat,
         use_kl_loss=False,
+        max_new_tokens=max_new_tokens,
         set_format="pt",
     )
 
@@ -774,7 +822,7 @@ def evaluate(
 
     gen_kwargs = dict(
         do_sample=False,
-        max_new_tokens=256,
+        max_new_tokens=max_new_tokens,
     )
 
     eval_trainer_args = {}
@@ -832,12 +880,13 @@ def evaluate(
         # spents a few hours on this but couldn't find the reason
         for ds_name, ds in datasets.items():
             eval_trainer = Trainer(**trainer_kwargs)
+            clear_gpu()
             metrics = eval_teacher_forcing(
                 eval_trainer, {ds_name: ds}, split, args.remove_context
             )
             out.update(metrics)
     else:
-        eval_trainer = Seq2SeqTrainer(**trainer_kwargs)
+        eval_trainer = CustomSeq2SeqTrainer(**trainer_kwargs)
         metrics = eval_generation(
             eval_trainer,
             tokenizer,
@@ -861,6 +910,7 @@ def run_eval(
     split: str = "validation",
     eval_batch_size: int = 8,
     remove_context: bool = False,
+    max_new_tokens: int = 256,
     generative: bool = False,
 ) -> None:
     """Run evaluation with the specified parameters."""
@@ -925,5 +975,6 @@ def run_eval(
         eval_batch_size,
         args,
         split,
+        max_new_tokens,
         generative=generative,
     )

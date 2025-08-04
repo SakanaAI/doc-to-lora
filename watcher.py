@@ -31,8 +31,13 @@ class Watcher:
     def watch(self):
         self.files = self.get_files()
         new_files = self.files - self.last_files
-        self.last_files = self.files
         return sorted(list(new_files))
+
+    def update(self, file):
+        if file in self.last_files:
+            return
+        self.last_files.add(file)
+        print(f"Added {file} to evaluated files.")
 
     def save_state(self):
         with open("watcher_state.yaml", "w") as f:
@@ -79,14 +84,15 @@ if __name__ == "__main__":
 
             # TODO: have to change this for bigger models
             eval_batch_size = 8
-            eval_batch_size_gen = 32
+            eval_batch_size_gen = 16
             try:
-                metrics = run_eval(
-                    checkpoint_path=file,
-                    eval_batch_size=eval_batch_size,
-                    split="validation",
-                    generative=False,
-                )
+                # metrics = run_eval(
+                #     checkpoint_path=file,
+                #     eval_batch_size=eval_batch_size,
+                #     split="validation",
+                #     generative=False,
+                # )
+                metrics = {}
             except FileNotFoundError as e:
                 print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
                 continue
@@ -100,6 +106,7 @@ if __name__ == "__main__":
             except FileNotFoundError as e:
                 print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
                 gen_metrics = {}
+                file = ""
             metrics.update(gen_metrics)
             for k in metrics:
                 wandb.log(metrics[k], step=curstep)
@@ -107,5 +114,6 @@ if __name__ == "__main__":
             print(f"Logged metrics: {metrics}")
             print("=" * 80)
             clear_gpu()
+            watcher.update(file)
 
         watcher.save_state()

@@ -85,7 +85,7 @@ def apply_lora_to_layers(
 ) -> None:
     layers = get_layers(model)
     if position_ids is not None:
-        position_ids = position_ids.squeeze()
+        position_ids = position_ids.squeeze(0)
         seq_lens = position_ids[torch.where(position_ids == 0)[0][1:] - 1]
         seq_lens = torch.cat(
             [seq_lens, torch.tensor([position_ids[-1]], device=seq_lens.device)]

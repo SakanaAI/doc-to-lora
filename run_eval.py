@@ -52,6 +52,12 @@ if __name__ == "__main__":
         help="Eval batch size for generation",
     )
     parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=256,
+        help="Maximum number of new tokens to generate during evaluation",
+    )
+    parser.add_argument(
         "--remove_context",
         action="store_true",
         help="Remove context when evaluating the base model.",
