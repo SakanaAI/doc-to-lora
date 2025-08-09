@@ -47,28 +47,8 @@ WANDB_MODE=disabled run uv run train.py configs/fw_qa_v2_level_0_tiny.yaml --mod
 ```bash
 WANDB_MODE=disabled uv run train.py configs/squad.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=5 --per_device_train_batch_size=64 --gradient_accumulation_steps=8 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=8 --num_latent_factor=1 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --max_packed_inp_len=16000 --max_packed_ctx_len=32000 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --logging_steps=10
 ```
-<!-- 
-### HyperLoRA w/ self-gen 3 mini
-```bash
-# self-gen sft
-# 3_mini config
-uv run python data/self_generate_qa.py \
---vllm_model=google/gemma-2-2b-it --config=configs/self_gen_3_mini.yaml
 
 
-WANDB_MODE=disabled uv run python train.py configs/self_gen_3_mini.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=10 --per_device_train_batch_size=32 --gradient_accumulation_steps=8 --per_device_eval_batch_size=32 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=8 --num_latent_factor=2 --lora_r=8 --eval_steps=5000 --save_steps=5000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --load_best_model_at_end=True --metric_for_best_model=pwc_loss --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1
-```
-
-
-### HyperLoRA w/ fw-qa pretrain only
-```bash
-WANDB_MODE=disabled run uv run python train.py configs/fw_qa_pretrain_only.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=1 --per_device_train_batch_size=4 --gradient_accumulation_steps=8 --per_device_eval_batch_size=8 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=4 --num_latent_factor=1 --lora_r=8 --eval_steps=100 --save_steps=100 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1
-``` -->
-
-<!-- ### HyperLoRA w/ context_numbers_128
-```bash
-WANDB_MODE=disabled run python hyperlora/train.py configs/context_numbers_128.yaml --model_name_or_path=meta-llama/Llama-3.2-1B-Instruct --num_train_epochs=10 --per_device_train_batch_size=64 --per_device_eval_batch_size=8 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj
-``` -->
 ### Favourite numbers data generation
 ```bash
 uv run python data/generate_fav_num.py
@@ -86,6 +66,18 @@ run uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --d
 ```bash
 # for some reason download directly through `load_dataset` does not work
 HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download --repo-type dataset rajpurkar/squad --local-dir data/raw_datasets/squad
+```
+
+### Self-gen data upload/download
+```bash
+# create a bucket (needed only once)
+# gsutil mb -l EU gs://ctx-to-lora/
+
+# uploading from login node to gcp bucket
+gsutil -m rsync -r data/raw_datasets/self_gen gs://ctx-to-lora/data/raw_datasets/self_gen
+
+# downloading from gcp bucket to login node
+gsutil -m rsync -r gs://ctx-to-lora/data/raw_datasets/self_gen data/raw_datasets/self_gen 
 ```
 
 ### Data Generation (v2)

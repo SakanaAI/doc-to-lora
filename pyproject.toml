@@ -34,6 +34,7 @@ dependencies = [
     "opt-einsum>=3.4.0",
     "kagglehub[hf-datasets]>=0.3.12",
     "kaggle>=1.7.4.5",
+    "bitsandbytes>=0.46.1",
 ]
 
 [build-system]

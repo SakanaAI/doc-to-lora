@@ -199,7 +199,7 @@ class Perceiver(nn.Module):
             per_layer_size = self.num_modules * self.r + self.num_extra_modules
             x = rearrange(
                 x,
-                ("(num_layers bs) (per_layer_sz) d -> bs (num_layers per_layer_sz) d"),
+                "(num_layers bs) (per_layer_sz) d -> bs (num_layers per_layer_sz) d",
                 num_layers=self.num_layers,
                 per_layer_sz=per_layer_size,
             )

@@ -309,6 +309,20 @@ wheels = [
 ]
 
 [[package]]
+name = "bitsandbytes"
+version = "0.46.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "torch" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/b2/9dadb4f8dca3948e35c1ebfee75ca82353e41468b41ff785430595f8e6f0/bitsandbytes-0.46.1-py3-none-manylinux_2_24_aarch64.whl", hash = "sha256:21b349f776d04c6c1380405961081de29c84f49640b79d3d199b6d719818da84", size = 30713241, upload-time = "2025-07-02T19:44:21.857Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/1e/c26dbcb46cebb49fa6b17ff888966e6d8f306078b095a5df801a583549d0/bitsandbytes-0.46.1-py3-none-manylinux_2_24_x86_64.whl", hash = "sha256:b0ee4a204fb926d4eae02bc2f5468ae3c11c011cfa849a4c771d4c6b201f57ae", size = 72865511, upload-time = "2025-07-02T19:44:25.192Z" },
+    { url = "https://files.pythonhosted.org/packages/85/7d/06da01fac23a5032632dd7874b31c1d9b7b9af2314b2b07e5f99641950da/bitsandbytes-0.46.1-py3-none-win_amd64.whl", hash = "sha256:9f6f61376bd0e9780c5dc4ddee7d1f52cb10fe8034a1ea588611f4e8b87eb6a7", size = 72197544, upload-time = "2025-07-02T19:44:29.483Z" },
+]
+
+[[package]]
 name = "blake3"
 version = "1.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -676,6 +690,7 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "bitsandbytes" },
     { name = "datasets" },
     { name = "deepspeed" },
     { name = "einops" },
@@ -708,6 +723,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = "==1.6.0" },
+    { name = "bitsandbytes", specifier = ">=0.46.1" },
     { name = "datasets", specifier = "==3.6.0" },
     { name = "deepspeed", specifier = "==0.17.1" },
     { name = "einops" },

@@ -9,6 +9,7 @@ from transformers import (
     AutoModel,
     AutoModelForCausalLM,
     AutoTokenizer,
+    BitsAndBytesConfig,
     Gemma3ForConditionalGeneration,
 )
 
@@ -33,6 +34,7 @@ def get_model_and_tokenizer(
     peft_config=None,
     model_kwargs=None,
     tokenizer_kwargs=None,
+    use_q_lora=False,
     device="cuda",
     dtype=torch.bfloat16,
 ):
@@ -43,6 +45,7 @@ def get_model_and_tokenizer(
         use_flash_attn,
         peft_config,
         model_kwargs,
+        use_q_lora,
         device,
         dtype,
     )
@@ -95,6 +98,7 @@ def get_model(
     use_flash_attn=True,
     peft_config=None,
     model_kwargs=None,
+    use_q_lora=False,
     device="cuda",
     dtype=torch.bfloat16,
 ):
@@ -127,6 +131,20 @@ def get_model(
     elif is_bidir_model:
         model_init_kwargs["torch_dtype"] = torch.float32
         model_init_kwargs.pop("use_cache")
+
+    if use_q_lora:
+        # https://huggingface.co/blog/4bit-transformers-bitsandbytes
+        # https://colab.research.google.com/drive/1VoYNfYDKcKRQRor98Zbf2-9VQTtGJ24k?usp=sharing
+        # see bitsandbytes for the quantization implementation https://github.com/bitsandbytes-foundation/bitsandbytes
+        # see unsloth https://huggingface.co/docs/trl/v0.7.11/en/sft_trainer#accelerate-fine-tuning-2x-using-unsloth
+        # does work currently bc it modifies the forward pass call of Linear
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        model_init_kwargs["quantization_config"] = bnb_config
 
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     if not is_vision_model:

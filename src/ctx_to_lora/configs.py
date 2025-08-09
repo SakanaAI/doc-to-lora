@@ -207,6 +207,7 @@ class TrainingArguments(TrainingArguments):
         default=0.01,
         metadata={"help": "Weight decay for the optimizer."},
     )
+    # TODO: is paged_adam_w faster? (bigger batch size -> fewer grad accum steps)
     optim: str = field(
         default="adamw_torch_fused",
         metadata={"help": "Optimizer."},
@@ -292,6 +293,10 @@ class TrainingArguments(TrainingArguments):
     logging_first_step: bool = field(
         default=True,
         metadata={"help": "Whether to log the first step."},
+    )
+    ddp_find_unused_parameters: bool = field(
+        default=False,
+        metadata={"help": "Whether to find unused parameters in DDP."},
     )
     ddp_timeout: int = field(
         default=2**20,
@@ -469,6 +474,9 @@ class HypernetArguments:
     per_rank_gen: bool = field(
         default=False,
         metadata={"help": "Whether to use per-rank generation."},
+    )
+    use_per_rank_bias: bool = field(
+        default=False, metadata={"help": "Whether to use per-rank bias."}
     )
     per_layer_processing: bool = field(
         default=False,

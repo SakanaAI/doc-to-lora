@@ -5,12 +5,13 @@ import random
 from collections.abc import Callable
 from glob import glob
 from hashlib import sha256
+from math import isclose
 from os import path
 from typing import Any
 
 import datasets
 import torch
-from datasets import Dataset, is_caching_enabled, load_dataset
+from datasets import Dataset, interleave_datasets, is_caching_enabled, load_dataset
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.data.definitions import (
@@ -48,6 +49,24 @@ COLS_TO_KEEP_TOKENIZED = [
     "logprobs_vals",
     "logprobs_indices",
 ]
+
+
+def get_ds_prob(train_ds_len: list[int], total_len: int):
+    # if a dataset is smaller than 1%, make it 1%
+    probs = [0 for _ in train_ds_len]
+    for i, ds_len in enumerate(train_ds_len):
+        if ds_len / total_len <= 0.01:
+            probs[i] = 0.01
+    res_probs = 1 - sum(probs)
+    res_total_len = sum([l for l in train_ds_len if (l / total_len) > 0.01])
+    for i, ds_len in enumerate(train_ds_len):
+        if (ds_len / total_len) > 0.01:
+            probs[i] = ds_len / res_total_len * res_probs
+    logger.debug(f"Dataset probabilities: {probs}")
+    assert isclose(sum(probs), 1.0), (
+        f"Probs sum to {sum(probs)} ({probs}), expected 1.0"
+    )
+    return probs
 
 
 def load_answers(ds_name, split):
@@ -759,10 +778,11 @@ def tokenize_ctx_text(
 
 
 def pack(
-    ds: Dataset,
+    ds_dict: dict[str, Dataset],
     max_packed_inp_len: int,
     max_packed_ctx_len: int,
     max_packed_size: int,
+    seed: int,
     num_proc: int = 0,
 ):
     # this would generate another cache file for the already concat'd + packed ds
@@ -771,7 +791,9 @@ def pack(
         max_packed_ctx_len=max_packed_ctx_len,
         max_packed_size=max_packed_size,
     )
-    ds_hash = sha256((ds._fingerprint + json.dumps(kwargs)).encode()).hexdigest()
+    sorted_keys = sorted(ds_dict)
+    ds_fingerprint = "|".join([ds_dict[k]._fingerprint for k in sorted_keys])
+    ds_hash = sha256((ds_fingerprint + json.dumps(kwargs)).encode()).hexdigest()
     ds_path = f"{TRANSFORMED_DATA_DIR}/packed_{ds_hash}"
     logger.info(
         f"Packing ds {ds_hash} with {max_packed_inp_len=} and {max_packed_ctx_len=}"
@@ -780,6 +802,13 @@ def pack(
         logger.info(f"Loading a cached packed dataset for {ds_path}")
         return datasets.load_from_disk(ds_path)
     else:
+        train_ds = interleave_datasets(
+            list(train_ds.values()),
+            probabilities=get_ds_prob(train_ds_len, total_len),
+            seed=seed,
+            stopping_strategy="all_exhausted",
+        )
+        logger.info(f"Train dataset length: {len(train_ds)}")
         ds = ds.map(
             pack_batch,
             fn_kwargs={

@@ -66,6 +66,7 @@ class HypernetConfig:
     use_light_weight_lora: bool
     light_weight_latent_size: int
     per_rank_gen: bool
+    use_per_rank_bias: bool
     per_layer_processing: bool
     use_token_mixing: bool
     num_pre_head_layers: int
@@ -353,98 +354,135 @@ class HyperLoRA(nn.Module):
             if self.config.per_rank_gen:
                 if n_modules == 1:
                     if self.config.per_layer_processing:
-                        self.head = Mix(
-                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_layers d_latent d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="n_layers d_lora",
-                            n_layers=len(self.layer_indices),
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
-                    else:
-                        self.head = Mix(
-                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="d_latent d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="d_lora",
-                            # n_layers=len(self.layer_indices),
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
+                        if self.config.use_per_rank_bias:
+                            self.head = Mix(
+                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                                weight_shape="n_layers d_latent d_lora",
+                                # bias_shape=None,  # no bias
+                                bias_shape="n_layers r d_lora",
+                                n_layers=len(self.layer_indices),
+                                d_latent=self.config.latent_size,
+                                r=self.config.lora_config.r,
+                                d_lora=d_lora,
+                            )
+                        else:
+                            self.head = Mix(
+                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                                weight_shape="n_layers d_latent d_lora",
+                                # bias_shape=None,  # no bias
+                                bias_shape="n_layers d_lora",
+                                n_layers=len(self.layer_indices),
+                                d_latent=self.config.latent_size,
+                                r=self.config.lora_config.r,
+                                d_lora=d_lora,
+                            )
+                    # else:
+                    #     if self.config.use_per_rank_bias:
+                    #         self.head = Mix(
+                    #             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                    #             weight_shape="d_latent d_lora",
+                    #             # bias_shape=None,  # no bias
+                    #             bias_shape="r d_lora",
+                    #             # n_layers=len(self.layer_indices),
+                    #             d_latent=self.config.latent_size,
+                    #             r=self.config.lora_config.r,
+                    #             d_lora=d_lora,
+                    #         )
+                    #     else:
+                    #         self.head = Mix(
+                    #             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                    #             weight_shape="d_latent d_lora",
+                    #             # bias_shape=None,  # no bias
+                    #             bias_shape="d_lora",
+                    #             # n_layers=len(self.layer_indices),
+                    #             d_latent=self.config.latent_size,
+                    #             r=self.config.lora_config.r,
+                    #             d_lora=d_lora,
+                    #         )
                 else:
                     if self.config.per_layer_processing:
-                        self.head = Mix(
-                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_layers n_modules d_latent d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="n_layers n_modules d_lora",
-                            n_layers=len(self.layer_indices),
-                            n_modules=n_modules,
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
-                    else:
-                        self.head = Mix(
-                            "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_modules d_latent d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="n_modules d_lora",
-                            n_layers=len(self.layer_indices),
-                            n_modules=n_modules,
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
-            else:
-                if n_modules == 1:
-                    if self.config.per_layer_processing:
-                        self.head = Mix(
-                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_layers d_latent r d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="n_layers r d_lora",
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
-                    else:
-                        self.head = Mix(
-                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="d_latent r d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="r d_lora",
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
-                else:
-                    # each module processes d -> r d_out independently
-                    if self.config.per_layer_processing:
-                        self.head = Mix(
-                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_layers n_modules d_latent r d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="n_layers n_modules r d_lora",
-                            n_modules=n_modules,
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
-                    else:
-                        self.head = Mix(
-                            "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-                            weight_shape="n_modules d_latent r d_lora",
-                            # bias_shape=None,  # no bias
-                            bias_shape="n_modules r d_lora",
-                            n_modules=n_modules,
-                            d_latent=self.config.latent_size,
-                            r=self.config.lora_config.r,
-                            d_lora=d_lora,
-                        )
+                        if self.config.use_per_rank_bias:
+                            self.head = Mix(
+                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                                weight_shape="n_layers n_modules d_latent d_lora",
+                                # bias_shape=None,  # no bias
+                                bias_shape="n_layers n_modules r d_lora",
+                                n_layers=len(self.layer_indices),
+                                n_modules=n_modules,
+                                d_latent=self.config.latent_size,
+                                r=self.config.lora_config.r,
+                                d_lora=d_lora,
+                            )
+                        else:
+                            self.head = Mix(
+                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                                weight_shape="n_layers n_modules d_latent d_lora",
+                                # bias_shape=None,  # no bias
+                                bias_shape="n_layers n_modules d_lora",
+                                n_layers=len(self.layer_indices),
+                                n_modules=n_modules,
+                                d_latent=self.config.latent_size,
+                                r=self.config.lora_config.r,
+                                d_lora=d_lora,
+                            )
+                    # else:
+                    #     self.head = Mix(
+                    #         "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                    #         weight_shape="n_modules d_latent d_lora",
+                    #         # bias_shape=None,  # no bias
+                    #         bias_shape="n_modules d_lora",
+                    #         n_layers=len(self.layer_indices),
+                    #         n_modules=n_modules,
+                    #         d_latent=self.config.latent_size,
+                    #         r=self.config.lora_config.r,
+                    #         d_lora=d_lora,
+                    #     )
+            # else:
+            #     if n_modules == 1:
+            #         if self.config.per_layer_processing:
+            #             self.head = Mix(
+            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+            #                 weight_shape="n_layers d_latent r d_lora",
+            #                 # bias_shape=None,  # no bias
+            #                 bias_shape="n_layers r d_lora",
+            #                 d_latent=self.config.latent_size,
+            #                 r=self.config.lora_config.r,
+            #                 d_lora=d_lora,
+            #             )
+            #         else:
+            #             self.head = Mix(
+            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+            #                 weight_shape="d_latent r d_lora",
+            #                 # bias_shape=None,  # no bias
+            #                 bias_shape="r d_lora",
+            #                 d_latent=self.config.latent_size,
+            #                 r=self.config.lora_config.r,
+            #                 d_lora=d_lora,
+            #             )
+            #     else:
+            #         # each module processes d -> r d_out independently
+            #         if self.config.per_layer_processing:
+            #             self.head = Mix(
+            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+            #                 weight_shape="n_layers n_modules d_latent r d_lora",
+            #                 # bias_shape=None,  # no bias
+            #                 bias_shape="n_layers n_modules r d_lora",
+            #                 n_modules=n_modules,
+            #                 d_latent=self.config.latent_size,
+            #                 r=self.config.lora_config.r,
+            #                 d_lora=d_lora,
+            #             )
+            #         else:
+            #             self.head = Mix(
+            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
+            #                 weight_shape="n_modules d_latent r d_lora",
+            #                 # bias_shape=None,  # no bias
+            #                 bias_shape="n_modules r d_lora",
+            #                 n_modules=n_modules,
+            #                 d_latent=self.config.latent_size,
+            #                 r=self.config.lora_config.r,
+            #                 d_lora=d_lora,
+            #             )
 
         # if self.extra_modules:
         #     # self.extra_layers = nn.Sequential(
