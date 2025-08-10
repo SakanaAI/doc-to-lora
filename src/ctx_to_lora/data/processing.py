@@ -334,7 +334,7 @@ def construct_and_tokenize_ctx_qa(
     )
     tokenized_ds = tokenized_ds.filter(
         lambda x: bool(x["input_ids"]),  # remove empty "input_ids"
-        num_proc=num_proc,
+        num_proc=16,
     )
 
     if need_ctx_ids:
@@ -785,12 +785,16 @@ def pack(
     seed: int,
     num_proc: int = 0,
 ):
-    # this would generate another cache file for the already concat'd + packed ds
     kwargs = dict(
         max_packed_inp_len=max_packed_inp_len,
         max_packed_ctx_len=max_packed_ctx_len,
         max_packed_size=max_packed_size,
     )
+    train_ds_lens = [len(ds) for ds in ds_dict.values()]
+    total_samples = sum(train_ds_lens)
+    logging.info(f"Total samples before packing: {total_samples}")
+    logging.info("Packing dataset")
+
     sorted_keys = sorted(ds_dict)
     ds_fingerprint = "|".join([ds_dict[k]._fingerprint for k in sorted_keys])
     ds_hash = sha256((ds_fingerprint + json.dumps(kwargs)).encode()).hexdigest()
@@ -800,16 +804,16 @@ def pack(
     )
     if path.exists(ds_path) and is_caching_enabled():
         logger.info(f"Loading a cached packed dataset for {ds_path}")
-        return datasets.load_from_disk(ds_path)
+        packed_ds = datasets.load_from_disk(ds_path)
     else:
         train_ds = interleave_datasets(
-            list(train_ds.values()),
-            probabilities=get_ds_prob(train_ds_len, total_len),
+            list(ds_dict.values()),
+            probabilities=get_ds_prob(train_ds_lens, total_samples),
             seed=seed,
             stopping_strategy="all_exhausted",
         )
         logger.info(f"Train dataset length: {len(train_ds)}")
-        ds = ds.map(
+        packed_ds = train_ds.map(
             pack_batch,
             fn_kwargs={
                 "max_packed_inp_len": max_packed_inp_len,
@@ -820,10 +824,16 @@ def pack(
             batched=True,
             batch_size=125_000,
             num_proc=num_proc,
-            remove_columns=ds.column_names,
+            remove_columns=train_ds.column_names,
         )
+        # this would generate another cache file for the already concat'd + packed ds
         # TODO: saving here is not space efficient at all...
         # the contexts are being duplicated for each datapoint when splitting QAs
-        ds.save_to_disk(ds_path, num_proc=num_proc)
+        packed_ds.save_to_disk(ds_path, num_proc=num_proc)
 
-    return ds
+    logger.info(f"Packed dataset length: {len(packed_ds)}")
+    logger.info(
+        f"Avg. # of samples per packed sequence: {total_samples / len(packed_ds)}"
+    )
+
+    return packed_ds

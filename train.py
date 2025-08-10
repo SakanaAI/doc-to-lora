@@ -307,9 +307,6 @@ def main():
             val_indices = np.random.permutation(len(ds))[:n_val_samples]
             val_ds[ds_name] = val_ds[ds_name].select(val_indices)
 
-    total_samples = sum([len(ds) for ds in train_ds.values()])
-    logging.info(f"Total samples before packing: {total_samples}")
-    logging.info("Packing dataset")
     with training_args.main_process_first():
         train_ds = pack(
             train_ds,
@@ -318,10 +315,6 @@ def main():
             max_packed_size=-1,
             seed=training_args.seed,
             num_proc=16,
-        )
-        logger.info(f"Packed dataset length: {len(train_ds)}")
-        logger.info(
-            f"Avg. # of samples per packed sequence: {total_samples / len(train_ds)}"
         )
         logger.info("Setting per_device_train_batch_size to 1")
         training_args.per_device_train_batch_size = 1
