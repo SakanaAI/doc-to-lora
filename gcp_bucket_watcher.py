@@ -1,0 +1,202 @@
+"""Minimal GCS prefix sync (one-way): download (default) or upload.
+
+Remote -> Local (download):
+    python gcp_bucket_watcher.py --bucket ctx-to-lora --prefix train_outputs --dest train_outputs
+Local  -> Remote (upload):
+    python gcp_bucket_watcher.py --bucket ctx-to-lora --prefix train_outputs --dest train_outputs --upload
+
+Mirrors only new / changed files (size or mtime difference). No deletions.
+Filtering: --include / --exclude accept comma separated globs. Auth uses
+Application Default Credentials or --credentials JSON.
+
+Example
+# download
+python gcp_bucket_watcher.py --bucket ctx-to-lora --prefix train_outputs --dest train_outputs
+# upload
+python gcp_bucket_watcher.py --bucket ctx-to-lora --prefix train_outputs --dest train_outputs --upload
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import sys
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+try:
+    from google.cloud import storage  # type: ignore
+    from google.oauth2 import service_account  # type: ignore
+except Exception as e:  # pragma: no cover - import guard
+    print("google-cloud-storage not installed. Add to dependencies.", file=sys.stderr)
+    raise
+
+
+@dataclass
+class ObjectMeta:  # Unified meta for local + remote
+    name: str  # relative path (no leading prefix for remote)
+    updated: float  # mtime (remote object updated timestamp or local mtime)
+    size: int  # bytes
+
+
+def parse_globs(spec: str | None) -> list[str]:
+    if not spec:
+        return []
+    return [g.strip() for g in spec.split(",") if g.strip()]
+
+
+def should_skip(
+    rel_path: str, includes: Sequence[str], excludes: Sequence[str]
+) -> bool:
+    base = os.path.basename(rel_path)
+    if excludes and any(fnmatch.fnmatch(base, p) for p in excludes):
+        return True
+    if includes and not any(fnmatch.fnmatch(base, p) for p in includes):
+        return True
+    return False
+
+
+def list_remote(
+    client: storage.Client, bucket: str, prefix: str
+) -> dict[str, ObjectMeta]:
+    out: dict[str, ObjectMeta] = {}
+    p = prefix.rstrip("/")
+    for b in client.list_blobs(bucket_or_name=bucket, prefix=prefix):
+        if b.name.endswith("/"):
+            continue
+        rel = b.name[len(p) :].lstrip("/") if p else b.name
+        out[rel] = ObjectMeta(
+            rel, (b.updated.timestamp() if b.updated else 0.0), b.size or 0
+        )
+    return out
+
+
+def list_local(root: str) -> dict[str, ObjectMeta]:
+    out: dict[str, ObjectMeta] = {}
+    for base, _dirs, files in os.walk(root):
+        for f in files:
+            path = os.path.join(base, f)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            rel = os.path.relpath(path, root).replace("\\", "/")
+            out[rel] = ObjectMeta(rel, st.st_mtime, st.st_size)
+    return out
+
+
+def needs_transfer(src: ObjectMeta, dst: ObjectMeta | None, tolerance: float) -> bool:
+    if dst is None:
+        return True
+    if src.size != dst.size:
+        return True
+    if abs(src.updated - dst.updated) > tolerance:
+        return True
+    return False
+
+
+def download_file(
+    client: storage.Client, bucket: str, prefix: str, meta: ObjectMeta, dest: str
+) -> None:
+    blob_name = f"{prefix.rstrip('/')}/{meta.name}" if prefix else meta.name
+    blob = client.bucket(bucket).blob(blob_name)
+    local_path = os.path.join(dest, meta.name)
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    tmp = local_path + ".part"
+    blob.download_to_filename(tmp)
+    os.utime(tmp, (time.time(), meta.updated))
+    os.replace(tmp, local_path)
+
+
+def upload_file(
+    client: storage.Client, bucket: str, prefix: str, meta: ObjectMeta, src_root: str
+) -> None:
+    blob_name = f"{prefix.rstrip('/')}/{meta.name}" if prefix else meta.name
+    blob = client.bucket(bucket).blob(blob_name)
+    blob.upload_from_filename(os.path.join(src_root, meta.name))
+
+
+def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
+    includes, excludes = parse_globs(args.include), parse_globs(args.exclude)
+    remote = list_remote(client, args.bucket, args.prefix)
+    local = list_local(args.dest)
+    changed = 0
+    if args.upload:  # local -> remote (original tolerance 2s)
+        for rel, meta in local.items():
+            if should_skip(rel, includes, excludes):
+                continue
+            if needs_transfer(meta, remote.get(rel), tolerance=2.0):
+                upload_file(client, args.bucket, args.prefix, meta, args.dest)
+                print(f"[uploaded] {rel} ({meta.size} bytes)")
+                changed += 1
+        if changed == 0:
+            print("No new or updated local files to upload.")
+    else:  # download (original tolerance 1s)
+        for rel, meta in remote.items():
+            if should_skip(rel, includes, excludes):
+                continue
+            if needs_transfer(meta, local.get(rel), tolerance=1.0):
+                download_file(client, args.bucket, args.prefix, meta, args.dest)
+                print(f"[downloaded] {rel} ({meta.size} bytes)")
+                changed += 1
+        if changed == 0:
+            print("No new or updated objects.")
+    return changed
+
+
+def build_client(args: argparse.Namespace) -> storage.Client:
+    if args.credentials:
+        creds = service_account.Credentials.from_service_account_file(args.credentials)
+        return storage.Client(credentials=creds, project=creds.project_id)
+    return storage.Client()  # ADC
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Watch and mirror a GCS prefix locally.")
+    p.add_argument("--bucket", required=True, help="GCS bucket name (without gs://)")
+    p.add_argument(
+        "--prefix",
+        default="",
+        help="Prefix inside the bucket to mirror (e.g. train_outputs)",
+    )
+    p.add_argument(
+        "--dest", default="train_outputs", help="Local destination directory"
+    )
+    p.add_argument(
+        "--interval", type=int, default=60, help="Seconds between scans (default 60)"
+    )
+    p.add_argument("--once", action="store_true", help="Run a single scan and exit")
+    p.add_argument(
+        "--upload",
+        action="store_true",
+        help="Reverse direction: upload local files to bucket (default is download).",
+    )
+    p.add_argument("--include", help="Comma separated glob(s) to include (default all)")
+    p.add_argument("--exclude", help="Comma separated glob(s) to exclude")
+    p.add_argument("--credentials", help="Path to service account JSON (optional)")
+    return p.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    client = build_client(args)
+    os.makedirs(args.dest, exist_ok=True)
+    try:
+        while True:
+            print(
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                "Scanning (upload)" if args.upload else "Scanning (download)",
+            )
+            sync_cycle(args, client)
+            if args.once:
+                break
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("Interrupted.")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
