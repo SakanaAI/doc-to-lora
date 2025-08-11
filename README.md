@@ -77,15 +77,25 @@ HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download --repo-type dataset rajpurk
 gsutil -m rsync -r data/raw_datasets/self_gen gs://ctx-to-lora/data/raw_datasets/self_gen
 
 # downloading from gcp bucket to login node
-gsutil -m rsync -r gs://ctx-to-lora/data/raw_datasets/self_gen data/raw_datasets/self_gen 
+mkdir -p data/raw_datasets/self_gen
+gsutil -m rsync -r gs://ctx-to-lora/data/raw_datasets/self_gen data/raw_datasets/self_gen
 ```
 
-### Data Generation (v2)
+### Upload/download checkpoints
+```bash
+# upload to bucket
+gsutil -m rsync -r train_outputs gs://ctx-to-lora/train_outputs
+
+# download from bucket
+gsutil -m rsync -r gs://ctx-to-lora/train_outputs train_outputs 
+```
+
+<!-- ### Data Generation (v2)
 ***Download a subset of generated Fineweb-QA directly***
 ```bash
 uv run data/download_generated_fineweb_qa.py
 uv run data/download_self_gen_qa.py
-```
+``` -->
 
 Loading self-generated data
 ```python

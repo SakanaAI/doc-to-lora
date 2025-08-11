@@ -128,7 +128,12 @@ def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
             if should_skip(rel, includes, excludes):
                 continue
             if needs_transfer(meta, remote.get(rel), tolerance=2.0):
-                upload_file(client, args.bucket, args.prefix, meta, args.dest)
+                try:
+                    upload_file(client, args.bucket, args.prefix, meta, args.dest)
+                except FileNotFoundError:
+                    # File disappeared between scan and upload attempt; skip gracefully.
+                    print(f"[skipped missing] {rel}")
+                    continue
                 print(f"[uploaded] {rel} ({meta.size} bytes)")
                 changed += 1
         if changed == 0:
