@@ -163,7 +163,7 @@ run uv run python data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to
 ```bash
 # Example commands using gemma-2-2b-it
 # self-gen data for fw_qa_v2
-uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/013*_level_3*'
+uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/013*_level_3*' --closed_qa_prob 1.0 # or 0.0
 
 # val split
 uv run python data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern 'data/raw_datasets/fw_qa_v2/min_0_to_2000/*_level_0_val.parquet'
