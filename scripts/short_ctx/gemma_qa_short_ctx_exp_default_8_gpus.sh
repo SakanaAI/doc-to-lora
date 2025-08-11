@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=ctxlora
 #SBATCH --nodes=1
-#SBATCH --partition=a3
+#SBATCH --partition=sakura-gpu
 #SBATCH --gpus=8
 #SBATCH --output=slurm_logs/%x-%j.out
 #SBATCH --error=slurm_logs/%x-%j.out
@@ -25,5 +25,5 @@ default_args=(
 
 # Pass all script arguments to the training command
 # $1 comes first, then defaults, then remaining arguments (which can override defaults)
-uv run accelerate launch --main_process_port $port \
---num_processes=8 --gpu_ids all train.py $1 "${default_args[@]}" "${@:2}" 
+uv run accelerate launch --config_file accelerate_config.yaml --main_process_port $port \
+--num_processes=8 --gpu_ids all train.py $1 "${default_args[@]}" "${@:2}"
