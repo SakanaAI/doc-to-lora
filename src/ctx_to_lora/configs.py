@@ -358,10 +358,6 @@ class CtxTrainingArguments:
         default=2**13,
         metadata={"help": "Maximum base length for training."},
     )
-    max_ctx_len: int | None = field(
-        default=2**13,
-        metadata={"help": "Maximum context length for training."},
-    )
     use_sequence_packing: bool = field(
         default=True,
         metadata={"help": "Whether to use sequence packing."},
@@ -383,6 +379,17 @@ class CtxTrainingArguments:
             "help": "Max QA pair per context. If a context has more QA pairs than this value, "
             "they will be split up into multiple samples."
         },
+    )
+    max_ctx_chunk_len: int = field(
+        default=-1,
+        metadata={
+            "help": "Max context chunk length. If a context is longer than this value, "
+            "it will be split up into multiple chunks."
+        },
+    )
+    max_ctx_chunk_num: int = field(
+        default=-1,
+        metadata={"help": "Max number of context chunks per sample."},
     )
     max_packed_inp_len: int | None = field(
         default=2**14,

@@ -259,6 +259,8 @@ def main():
         ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=ctx_tokenizer,
         add_ctx_to_chat=add_ctx_to_chat,
+        max_ctx_chunk_len=ctx_args.max_ctx_chunk_len,
+        max_ctx_chunk_num=ctx_args.max_ctx_chunk_num,
         use_kl_loss=ctx_args.use_kl_loss,
     )
     splits = ["train"]

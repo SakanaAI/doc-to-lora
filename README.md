@@ -204,7 +204,10 @@ WANDB_MODE=disabled uv run python run_eval.py --checkpoint_path train_outputs/ru
 WANDB_MODE=disabled uv run python run_eval.py --checkpoint_path train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/checkpoint-105000/pytorch_model.bin --datasets negative_nq triviaqa_retrieved squad longbench_e --split test
 
 # squad only
-WANDB_MODE=disabled run uv run python run_eval.py --checkpoint_path train_outputs/runs/Jul08_15-52-27_slurm0-a3nodeset-7_71097_2c7c4d75/checkpoint-12000/pytorch_model.bin --datasets squad --split test
+WANDB_MODE=disabled run uv run python run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad --split test
+
+# chunking
+WANDB_MODE=disabled run uv run python run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad --split validation --max_ctx_chunk_len 100 --max_val_samples_per_ds 10 --lora_aggregation mean
 
 # base model
 WANDB_MODE=disabled uv run python run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets negative_nq triviaqa_retrieved squad longbench_e --split test --eval_batch_size 2

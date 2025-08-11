@@ -5,7 +5,7 @@ import random
 from collections.abc import Callable
 from glob import glob
 from hashlib import sha256
-from math import isclose
+from math import ceil, isclose
 from os import path
 from typing import Any
 
@@ -15,6 +15,7 @@ from datasets import Dataset, interleave_datasets, is_caching_enabled, load_data
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.data.definitions import (
+    CTX_AFFIXES,
     DS_KWARGS,
     IGNORE_INDEX,
     RAW_DATA_DIR,
@@ -208,6 +209,8 @@ def get_tokenized_dataset(
     tokenizer: PreTrainedTokenizerBase,
     ctx_model_max_len: int,
     ctx_tokenizer: PreTrainedTokenizerBase,
+    max_ctx_chunk_len: int,
+    max_ctx_chunk_num: int,
     add_ctx_to_chat: bool,
     use_kl_loss: bool,
     max_new_tokens: int = 256,
@@ -230,7 +233,8 @@ def get_tokenized_dataset(
         base_model_max_len=base_model_max_len,
         ctx_model_max_len=ctx_model_max_len,
         add_ctx_to_chat=add_ctx_to_chat,
-        use_kl_loss=True,  # HACK: for consistent hash (to be removed)
+        max_ctx_chunk_len=max_ctx_chunk_len,
+        max_ctx_chunk_num=max_ctx_chunk_num,
         need_ctx_ids=need_ctx_ids,
         split=split,
         max_new_tokens=max_new_tokens,
@@ -269,9 +273,6 @@ def get_tokenized_dataset(
             )
     logger.info(f"Constructing and tokenizing {ds_name} with {split} split...")
 
-    # HACK
-    tokenize_kwargs.pop("use_kl_loss", None)
-
     tokenized_ds = construct_and_tokenize_ctx_qa(
         ds=ds,
         tokenizer=tokenizer,
@@ -302,12 +303,15 @@ def construct_and_tokenize_ctx_qa(
     ctx_tokenizer,
     add_ctx_to_chat,
     need_ctx_ids,
+    max_ctx_chunk_len,
+    max_ctx_chunk_num,
     ds,
     split,
     max_new_tokens,
     set_format=None,
     num_proc=None,
 ):
+    is_train = "train" in split
     # for sft + chat_model, we need to convert the dataset to chat format
     if "input_ids" in ds.column_names and "response_start_end" in ds.column_names:
         # already tokenized dataset (e.g., self-gen qa data)
@@ -349,14 +353,31 @@ def construct_and_tokenize_ctx_qa(
                 batch_size=100_000,
                 remove_columns=["context"],
             )
-        if "train" in split:
-            # TODO: do something if ctx length is longer than the ctx model length
-            # e.g., drop or split for multi-lora training
+
+        # TODO: this can be removed once we implement ctx chunking for training
+        if is_train:
+            # drop
             tokenized_ds = tokenized_ds.filter(
                 len_filter,
                 fn_kwargs={"max_length": ctx_model_max_len, "keys": ["ctx_ids"]},
                 num_proc=16,
             )
+
+        # ctx chunking
+        # Ideally we want to chunk the raw text directly
+        # however, since the contexts are tokenized during self-gen
+        # we can only chunk the tokenized context which requires some workaround
+        # e.g., removing/applying template to each chunk
+        # with some big caveats, e.g., losing order info
+        tokenized_ds = tokenized_ds.map(
+            split_too_long_ctx,
+            fn_kwargs={
+                "max_length": max_ctx_chunk_len,
+                "max_num_split": max_ctx_chunk_num,
+                "model_name_or_path": tokenizer.name_or_path,
+                "is_train": is_train,
+            },
+        )
 
     logging.info(f"Split too long QAs with max length {max_qas_len}")
     tokenized_ds = tokenized_ds.map(
@@ -385,15 +406,16 @@ def construct_and_tokenize_ctx_qa(
             fn_kwargs={"columns": ["input_ids"]},
         )
         if "ctx_ids" in tokenized_ds.column_names:
-            tokenized_ds = tokenized_ds.map(
-                truncate_middle_if_too_long,
-                fn_kwargs={
-                    "max_length": ctx_model_max_len,
-                    "columns": ["ctx_ids"],
-                    # cxt encoder doesnt need to add new_tokens
-                    "max_new_tokens": 0,
-                },
-            )
+            # TODO: remove since we already have ctx chunking for eval
+            # tokenized_ds = tokenized_ds.map(
+            #     truncate_middle_if_too_long,
+            #     fn_kwargs={
+            #         "max_length": ctx_model_max_len,
+            #         "columns": ["ctx_ids"],
+            #         # cxt encoder doesnt need to add new_tokens
+            #         "max_new_tokens": 0,
+            #     },
+            # )
             tokenized_ds = tokenized_ds.map(
                 add_length_info,
                 fn_kwargs={"columns": ["ctx_ids"]},
@@ -468,6 +490,7 @@ def get_sft_prompt_formatting_fn(
             add_special_tokens=False,
             padding=False,
             truncation=False,
+            return_attention_mask=False,
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
@@ -535,6 +558,73 @@ def convert_ctx_prompt_response_to_messages(
         )
 
     return {"messages_list": messages_list}
+
+
+def split_too_long_ctx(
+    sample: dict[str, Any],
+    max_length: int,
+    max_num_split: int,
+    model_name_or_path: str,
+    is_train: bool,
+) -> dict[str, Any]:
+    """
+    Split context into smaller chunks if it exceeds the maximum length.
+
+    Args:
+        samples: Dictionary containing 'ctx_ids' and 'ctx_attn_mask'
+        max_length: Maximum length for each context chunk
+        max_num_split: Maximum number of splits allowed
+
+    Returns:
+        Dictionary with split context data
+    """
+
+    if is_train:
+        # TODO: for training, we might wanna sort the context by length since merging
+        # a batch of chunked loras need padded in the rank axes
+        # e.g., ctx1 has 5 chunks (rank-48), ctx2 has 10 chunks (rank-88)
+        #
+        # TODO: should be stochastic during training?
+        # e.g., even if the ctx is not too long, we still split it randomly?
+        # say 0-4k is max len for one split,
+        # for some ctx shorter than 4k, we leave it as is
+        # for some we split to smaller chunks
+        # For eval, always split at max len?
+        # raise NotImplementedError(
+        #     "Splitting contexts for training is not implemented yet. "
+        # )
+        # # Limit the number of splits for training?
+        # if len(chunks) > max_num_split > 0:
+        #     chunks = chunks[:max_num_split]
+        # TODO: training inputs right now is not nested
+        return sample
+
+    ctx_affixes = CTX_AFFIXES[model_name_or_path]
+    prefix = ctx_affixes["prefix"]
+    suffix = ctx_affixes["suffix"]
+    ctx_ids = sample["ctx_ids"]
+
+    if max_length < 0 and max_num_split < 0:
+        return {"ctx_ids": [ctx_ids]}
+
+    if len(ctx_ids) <= max_length:
+        return {"ctx_ids": [ctx_ids]}
+
+    # can we improve how we chunk?
+    # compute num chunks for more uniform chunking
+    n_chunks = ceil(len(ctx_ids) / max_length)
+    avg_len = ceil(len(ctx_ids) / n_chunks)
+
+    # Split the context into smaller chunks
+    chunks = [ctx_ids[i : i + avg_len] for i in range(0, len(ctx_ids), avg_len)]
+
+    # this would exceed the avg_len a bit
+    chunks[0] = chunks[0] + suffix
+    for i in range(1, len(chunks) - 1):
+        chunks[i] = prefix + chunks[i] + suffix
+    chunks[-1] = prefix + chunks[-1]
+
+    return {"ctx_ids": chunks}
 
 
 def split_too_long_qas(
@@ -722,7 +812,13 @@ def squeeze_tokens(sample: dict[str, Any]) -> dict[str, Any]:
 
 
 def add_length_info(sample: dict[str, any], columns: list[str]) -> dict[str, any]:
-    return {f"{k}_len": len(sample[k]) for k in columns}
+    out = {}
+    for k in columns:
+        if check_is_iterable(sample[k][0]):
+            out[f"{k}_len"] = sum([len(x) for x in sample[k]])
+        else:
+            out[f"{k}_len"] = len(sample[k])
+    return out
 
 
 def truncate_middle_if_too_long(
@@ -765,6 +861,7 @@ def tokenize_ctx_text(
             ],
             tokenize=True,
             add_generation_prompt=True,
+            return_attention_mask=False,
             padding=False,
             truncation=False,
             add_special_tokens=False,  # special tokens are already added by the chat template

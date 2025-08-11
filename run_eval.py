@@ -52,6 +52,27 @@ if __name__ == "__main__":
         help="Eval batch size for generation",
     )
     parser.add_argument(
+        "--max_val_samples_per_ds",
+        type=int,
+        default=-1,
+        help=(
+            "Maximum number of validation samples per dataset. "
+            "If -1, uses values from checkpoint config."
+        ),
+    )
+    parser.add_argument(
+        "--max_ctx_chunk_len",
+        type=int,
+        default=-1,
+        help="Maximum length of context chunk for evaluation",
+    )
+    parser.add_argument(
+        "--lora_aggregation",
+        choices=["mean", "sum"],
+        default="sum",
+        help="LoRA aggregation method",
+    )
+    parser.add_argument(
         "--max_new_tokens",
         type=int,
         default=256,
@@ -68,16 +89,16 @@ if __name__ == "__main__":
 
     eval_batch_size_gen = cli_args.pop("eval_batch_size_gen")
     eval_batch_size = cli_args.pop("eval_batch_size")
-    run_eval(
-        **cli_args,
-        # cli_args.checkpoint_path,
-        # cli_args.model_name_or_path,
-        # cli_args.eval_batch_size,
-        # args,
-        # split=cli_args.split,
-        eval_batch_size=eval_batch_size,
-        generative=False,
-    )
+    # run_eval(
+    #     **cli_args,
+    #     # cli_args.checkpoint_path,
+    #     # cli_args.model_name_or_path,
+    #     # cli_args.eval_batch_size,
+    #     # args,
+    #     # split=cli_args.split,
+    #     eval_batch_size=eval_batch_size,
+    #     generative=False,
+    # )
     run_eval(
         **cli_args,
         # cli_args.checkpoint_path,

@@ -42,7 +42,7 @@ from ctx_to_lora.metrics import (
 from ctx_to_lora.model_loading import get_model, get_tokenizer
 from ctx_to_lora.modeling import hypernet
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
-from ctx_to_lora.utils import clear_gpu, setup_logging
+from ctx_to_lora.utils import clear_gpu, concat_list, setup_logging
 
 logger = logging.getLogger()
 
@@ -529,7 +529,7 @@ def decode_test_result(
         d["generated"] = tokenizer.decode(gen_toks, skip_special_tokens=True).strip()
         if "ctx_ids" in sample:
             d["context"] = ctx_tokenizer.decode(
-                sample["ctx_ids"], skip_special_tokens=False
+                concat_list(sample["ctx_ids"]), skip_special_tokens=False
             )
         for k in sample:
             if k.endswith("_len"):
@@ -612,7 +612,7 @@ def eval_generation(
                     grouped_texts[group_key]["generated"].append(txt["generated"])
                     grouped_texts[group_key]["label"].append(txt["label"])
                     grouped_texts[group_key]["count"] += 1
-                    break
+                    # break
 
         for group_key, data in grouped_texts.items():
             if data["count"] > 0:
@@ -634,7 +634,7 @@ def eval_generation(
                                         )
                                     else:
                                         group_answers.append([txt["label"]])
-                                break
+                                # break
 
                     group_qa_f1_metric, _ = compute_qa_f1_score(
                         data["generated"], group_answers
@@ -727,6 +727,8 @@ def evaluate(
     eval_batch_size: int,
     args: Namespace,
     split: str,
+    max_ctx_chunk_len: int,
+    lora_aggregation: str,
     max_new_tokens: int,
     generative: bool,
 ) -> dict[str, dict]:
@@ -785,6 +787,8 @@ def evaluate(
         get_tokenized_dataset,
         max_qas_len=-1,
         max_qas_per_sample=1,
+        max_ctx_chunk_len=max_ctx_chunk_len,
+        max_ctx_chunk_num=-1,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         ctx_model_max_len=ctx_model_max_len,
@@ -860,6 +864,11 @@ def evaluate(
 
     collator = generation_collator if generative else eval_collator
 
+    if max_ctx_chunk_len > 0:
+        model.generate = model.generate_with_multi_loras
+        print(f"Using {lora_aggregation} for aggregation generated LoRAs.")
+        model.generate = partial(model.generate, lora_aggregation=lora_aggregation)
+
     trainer_kwargs = {
         "model": model,
         "args": eval_trainer_args,
@@ -909,6 +918,9 @@ def run_eval(
     datasets: list[str] = None,
     split: str = "validation",
     eval_batch_size: int = 8,
+    max_val_samples_per_ds: int = -1,
+    max_ctx_chunk_len: int = -1,
+    lora_aggregation: str = "sum",
     remove_context: bool = False,
     max_new_tokens: int = 256,
     generative: bool = False,
@@ -960,6 +972,8 @@ def run_eval(
             test_ds_names=[],
             remove_context=remove_context,
         )
+    if max_val_samples_per_ds > 0:
+        args.max_val_samples_per_ds = max_val_samples_per_ds
     setup_logging(args.logging_dir)
 
     # Override dataset names if provided via CLI
@@ -975,6 +989,8 @@ def run_eval(
         eval_batch_size,
         args,
         split,
+        max_ctx_chunk_len,
+        lora_aggregation,
         max_new_tokens,
         generative=generative,
     )

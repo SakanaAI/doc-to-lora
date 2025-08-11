@@ -47,6 +47,18 @@ REPEAT_PROMPTS = [
     "Repeat precisely what is written in the information above.",
 ]
 
+# for chunking
+CTX_AFFIXES = {
+    "google/gemma-3-1b-it": {
+        "prefix": [2, 105, 2364, 109],  # <bos><start_of_turn>user\n\n\n
+        "suffix": [106, 107, 105, 4368, 107],  # <end_of_turn>\n<start_of_turn>model\n
+    },
+    "google/gemma-2-2b-it": {
+        "prefix": [2, 106, 1645, 110],  # <bos><start_of_turn>user\n\n\n
+        "suffix": [107, 108, 106, 2516, 108],  # <end_of_turn>\n<start_of_turn>model\n
+    },
+}
+
 # approximate length of the datasets (train split)
 # needed for streaming datasets
 DS_LEN = {

@@ -7,6 +7,11 @@ from rouge_score import rouge_scorer
 from transformers import EvalPrediction
 
 LENGTH_BINS = [
+    # finegrain bins
+    (0, 2**7 - 1),
+    (2**7, 2**8 - 1),
+    (2**8, 2**9 - 1),
+    # coarse bins
     (0, 2**9 - 1),
     (2**9, 2**10 - 1),
     (2**10, 2**11 - 1),

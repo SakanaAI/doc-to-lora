@@ -5,7 +5,7 @@ from transformers.data import (
     default_data_collator,
 )
 
-from ctx_to_lora.utils import check_is_iterable
+from ctx_to_lora.utils import check_is_iterable, concat_list
 
 flattener = DataCollatorWithFlattening()
 
@@ -35,7 +35,13 @@ def flatten_if_not_packed(inp_list):
 
     packed_inputs["n_queries"] = n_queries
     if "ctx_ids" in sample:
-        ctx_ids = [{"input_ids": example["ctx_ids"]} for example in inp_list]
+        # HACK: assumes 1 ctx chunk here
+        # TODO: fix this after we have chunk ctx training
+        assert all(len(ctx_ids) == 1 for ctx_ids in sample["ctx_ids"]), (
+            "ctx_ids can only have one chunk for eval. "
+            "Please implement chunked ctx forward pass to handle this."
+        )
+        ctx_ids = [{"input_ids": example["ctx_ids"][0]} for example in inp_list]
         packed_ctx = flattener(ctx_ids, return_tensors="pt")
         packed_inputs["ctx_ids"] = packed_ctx["input_ids"]
         packed_inputs["ctx_position_ids"] = packed_ctx["position_ids"]
@@ -51,13 +57,14 @@ def flatten_if_not_packed(inp_list):
 def eval_collator(inp_list, tokenizer):
     # only used for teacher-forcing eval
     # input is a list of tokenized sequences
+    # TODO: handle list input (used to be torch.Tensor)
     padding_kwargs = dict(padding=True, padding_side="right", return_tensors="pt")
 
     has_ctx_ids = "ctx_ids" in inp_list[0]
     if has_ctx_ids:
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
-
+        # TODO: handle chunked ctx_ids
         ctx_ids = [example.pop("ctx_ids") for example in inp_list]
         ctx_attn_mask = [torch.ones_like(x) for x in ctx_ids]
         ctx_ids = torch.nn.utils.rnn.pad_sequence(
@@ -92,7 +99,7 @@ def eval_collator(inp_list, tokenizer):
 
 def generation_collator(inp_list, tokenizer):
     padding_kwargs = dict(padding=True, padding_side="left", return_tensors="pt")
-    input_ids = [x.pop("input_ids") for x in inp_list]
+    input_ids = [torch.tensor(x.pop("input_ids")) for x in inp_list]
     labels = [x.pop("labels") for x in inp_list]
     for i, label in enumerate(labels):
         # we don't include the labels in the output during generation
@@ -107,10 +114,15 @@ def generation_collator(inp_list, tokenizer):
     )
 
     if "ctx_ids" in inp_list[0]:
+        # TODO: handle chunked ctx_ids
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
         ctx_ids = [example.pop("ctx_ids") for example in inp_list]
+        n_chunks = [len(x) for x in ctx_ids]
+        ctx_ids = concat_list(ctx_ids)
+        ctx_ids = [torch.tensor(x) for x in ctx_ids]
         ctx_attn_mask = [torch.ones_like(x) for x in ctx_ids]
+
         ctx_ids = torch.nn.utils.rnn.pad_sequence(
             ctx_ids,
             batch_first=True,
@@ -123,4 +135,9 @@ def generation_collator(inp_list, tokenizer):
         )
         out["ctx_ids"] = ctx_ids
         out["ctx_attn_mask"] = ctx_attn_mask
+
+        out["n_ctx_chunks"] = torch.tensor(n_chunks, dtype=torch.int32)
+        # print(f"ctx_ids: {ctx_ids}")
+        # print(f"n_chunks: {n_chunks}")
+        # breakpoint()
     return out

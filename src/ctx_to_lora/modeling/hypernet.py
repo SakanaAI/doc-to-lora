@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from einops import rearrange, unpack
@@ -50,6 +50,7 @@ from ctx_to_lora.modeling.lora_layer import (
     lora_forward,
     lora_forward_packed,
 )
+from ctx_to_lora.modeling.lora_merger import combine_lora
 from ctx_to_lora.utils import (
     get_layers,
     get_num_layers,
@@ -233,7 +234,7 @@ class HyperLoRA(nn.Module):
         self.lora_config = self.config.lora_config
 
         self.target_modules = (
-            self.lora_config.target_modules if self.lora_config else None
+            tuple(sorted(self.lora_config.target_modules)) if self.lora_config else None
         )
         self.num_modules = len(self.target_modules) if self.target_modules else 0
         self.extra_modules = (
@@ -526,7 +527,25 @@ class HyperLoRA(nn.Module):
         #             hidden_size=self.config.base_hidden_size,
         #         )
 
-    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    def get_head_bias(self):
+        bias_list = unpack(
+            self.head.bias,
+            [[] for _ in range(len(self.target_modules))],
+            "bs n_layers * r max_io_dim",
+        )
+        bias_dict = dict()
+        for module, bias in zip(self.target_modules, bias_list):
+            bias_A, bias_B = unpack(
+                bias[..., : self.d_in[module] + self.d_out[module]],
+                [[self.d_in[module]], [self.d_out[module]]],
+                "bs n_layers r *",
+            )
+            # transpose B
+            bias_B = rearrange(bias_B, "bs n_layers r d_out -> bs n_layers d_out r")
+            bias_dict[module] = dict(A=bias_A, B=bias_B)
+        return bias_dict
+
+    # @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
     ) -> dict[str, dict[str, Float[Tensor, "bs n_layers r _"]]]:
@@ -582,7 +601,6 @@ class HyperLoRA(nn.Module):
         )
         return {k: v for k, v in zip(self.extra_modules, layernorms)}
 
-    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def forward(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
@@ -590,7 +608,9 @@ class HyperLoRA(nn.Module):
         position_ids: Integer[Tensor, "bs seq_len"] | None = None,
     ):
         # [bs, n_layers x n_total_modules x r, feature_dim]
-        lora_emb, extra_emb = self.aggregator(features, attn_mask, position_ids)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            # OMG!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            lora_emb, extra_emb = self.aggregator(features, attn_mask, position_ids)
         # lora_emb, extra_emb = unpack(
         #     emb,
         #     [[self.num_modules], [self.num_extra_modules]],
@@ -612,7 +632,6 @@ class HyperLoRA(nn.Module):
 
         return flat_loras, flat_layernorms
 
-    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def generate_weights(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
@@ -953,20 +972,22 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_ids: Integer[Tensor, "bs ctx_length"],
         ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
         ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
+        n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
         n_queries: Integer[Tensor, "n_ctx"] | None = None,
+        lora_aggregation: Literal["mean", "sum"] = "sum",
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
-        # TODO: make this persistent
         generated_loras, _ = self.generate_weights(
             ctx_ids, ctx_attn_mask, ctx_position_ids
         )
-        # sum loras
-        for lora_at_module in generated_loras.values():
-            if len(lora_at_module["A"]) > 1:
-                print("Multiple LoRAs are generated, summing them up")
-            lora_at_module["A"] = torch.mean(lora_at_module["A"], dim=0, keepdim=True)
-            lora_at_module["B"] = torch.mean(lora_at_module["B"], dim=0, keepdim=True)
+
+        generated_loras = combine_lora(
+            generated_loras,
+            n_ctx_chunks,
+            aggregation=lora_aggregation,
+            lora_bias=self.hypernet.get_head_bias(),
+        )
 
         # apply lora hook to the base model
         position_ids = (
@@ -975,16 +996,10 @@ class ModulatedPretrainedModel(nn.Module):
             else None
         )
         if n_queries is None:
-            if ctx_position_ids is None:
-                n_queries = torch.ones(
-                    ctx_ids.shape[0], dtype=torch.int32, device=self.device
-                )
-            else:
-                # quite redundant (we do cu_seqlens many places)
-                # TODO: compute cu_seqlens here and propagate that
-                n_queries = torch.ones(
-                    (ctx_position_ids == 0).sum(), dtype=torch.int32, device=self.device
-                )
+            # assumes each group has one q
+            n_queries = torch.ones(
+                len(n_ctx_chunks), dtype=torch.int32, device=self.device
+            )
 
         apply_lora_to_layers(
             self.base_model,
@@ -1003,9 +1018,10 @@ class ModulatedPretrainedModel(nn.Module):
     def generate(
         self,
         # TODO: allow more than one LoRA per sample (multi-lora)
-        ctx_ids: Integer[Tensor, "bs ctx_length"] | None = None,
-        ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
-        ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
+        ctx_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,
+        ctx_attn_mask: Integer[Tensor, "n_chunks ctx_length"] | None = None,
+        ctx_position_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,
+        n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
         n_queries: Integer[Tensor, "n_ctx"] | None = None,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
@@ -1053,7 +1069,18 @@ class ModulatedPretrainedModel(nn.Module):
                 ctx_ids, ctx_attn_mask, ctx_position_ids
             )
 
+        # generated_loras = combine_lora(
+        #     generated_loras,
+        #     n_chunks=n_ctx_chunks,
+        #     aggregation="sum",
+        #     lora_bias=self.hypernet.get_head_bias(),
+        # )
+
+        # # for generation the ctx_ids are batched not packed
+        # ctx_ids_list = torch.split(ctx_ids, n_ctx_chunks, dim=0)
+
         # apply lora hook to the base model
+        # TODO: we dont this position_ids for generation?
         position_ids = (
             model_inputs_kwargs["position_ids"]
             if "position_ids" in model_inputs_kwargs
