@@ -127,27 +127,43 @@ def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
         for rel, meta in local.items():
             if should_skip(rel, includes, excludes):
                 continue
-            if needs_transfer(meta, remote.get(rel), tolerance=2.0):
+            remote_meta = remote.get(rel)
+            # For uploads we consider a file up-to-date if sizes match and the remote
+            # object timestamp is >= local mtime (within tolerance). Using absolute
+            # delta caused perpetual re-uploads because GCS sets its own server time.
+            if (
+                remote_meta
+                and meta.size == remote_meta.size
+                and remote_meta.updated >= meta.updated - 2.0
+            ):
+                continue
+            if needs_transfer(meta, remote_meta, tolerance=2.0):
+                print(f"[uploading ] {rel} ({meta.size} bytes)")
                 try:
                     upload_file(client, args.bucket, args.prefix, meta, args.dest)
                 except FileNotFoundError:
                     # File disappeared between scan and upload attempt; skip gracefully.
                     print(f"[skipped missing] {rel}")
                     continue
-                print(f"[uploaded] {rel} ({meta.size} bytes)")
+                print(f"[uploaded  ✓] {rel} ({meta.size} bytes)")
                 changed += 1
         if changed == 0:
             print("No new or updated local files to upload.")
+        else:
+            print("All uploads complete.")
     else:  # download (original tolerance 1s)
         for rel, meta in remote.items():
             if should_skip(rel, includes, excludes):
                 continue
             if needs_transfer(meta, local.get(rel), tolerance=1.0):
+                print(f"[downloading] {rel} ({meta.size} bytes)")
                 download_file(client, args.bucket, args.prefix, meta, args.dest)
-                print(f"[downloaded] {rel} ({meta.size} bytes)")
+                print(f"[downloaded ✓] {rel} ({meta.size} bytes)")
                 changed += 1
         if changed == 0:
             print("No new or updated objects.")
+        else:
+            print("All downloads complete.")
     return changed
 
 
