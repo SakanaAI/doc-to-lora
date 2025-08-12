@@ -690,6 +690,8 @@ class ModulatedPretrainedModel(nn.Module):
         hypernet_config = state_dict["hypernet_config"]
         if getattr(hypernet_config, "num_pre_head_layers", None) is None:
             hypernet_config.num_pre_head_layers = 4
+        if getattr(hypernet_config, "use_per_rank_bias", None) is None:
+            hypernet_config.use_per_rank_bias = False
         ctx_encoder_args = state_dict["ctx_encoder_args"]
         model = cls(base_model, hypernet_config, ctx_encoder_args, **kwargs)
         model.load_state_dict(state_dict)
