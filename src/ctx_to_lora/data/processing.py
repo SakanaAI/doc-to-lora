@@ -379,17 +379,17 @@ def construct_and_tokenize_ctx_qa(
             },
         )
 
-    logging.info(f"Split too long QAs with max length {max_qas_len}")
-    tokenized_ds = tokenized_ds.map(
-        split_too_long_qas,
-        fn_kwargs={
-            "max_qas_len": max_qas_len,
-            "max_qas_per_sample": max_qas_per_sample,
-        },
-        batched=True,
-        batch_size=12_500,
-        num_proc=16,
-    )
+        logging.info(f"Split too long QAs with max length {max_qas_len}")
+        tokenized_ds = tokenized_ds.map(
+            split_too_long_qas,
+            fn_kwargs={
+                "max_qas_len": max_qas_len,
+                "max_qas_per_sample": max_qas_per_sample,
+            },
+            batched=True,
+            batch_size=12_500,
+            num_proc=16,
+        )
     if "train" not in split:
         # squeeze since we always have one query per sample in eval
         tokenized_ds = tokenized_ds.map(squeeze_tokens, num_proc=num_proc)
@@ -604,7 +604,7 @@ def split_too_long_ctx(
     suffix = ctx_affixes["suffix"]
     ctx_ids = sample["ctx_ids"]
 
-    if max_length < 0 and max_num_split < 0:
+    if max_length <= 0 and max_num_split <= 0:
         return {"ctx_ids": [ctx_ids]}
 
     if len(ctx_ids) <= max_length:
