@@ -78,7 +78,7 @@ def combine_lora(
     # Iterate over modules and LoRA matrices A / B.
     # For A we concatenate along its rank dimension index=2; for B along index=3.
     for module_name, module_loras in generated_loras.items():
-        for matrix_key, concat_dim in (("A", 2), ("B", 3)):
+        for matrix_key, rank_dim in (("A", 2), ("B", 3)):
             # Shape conventions (both stored with leading chunk axis):
             #   loras: [total_chunks, n_layers, r, dim] (A)
             #       or [total_chunks, n_layers, dim, r] (B)
@@ -117,7 +117,7 @@ def combine_lora(
                 max_rank_needed=max_rank_needed,
                 aggregation=aggregation,
                 matrix_key=matrix_key,
-                concat_dim=concat_dim,
+                rank_dim=rank_dim,
             )
 
     return combined_loras
@@ -132,7 +132,7 @@ def _combine_single_matrix(
     max_rank_needed: int,
     aggregation: str,
     matrix_key: str,
-    concat_dim: int,
+    rank_dim: int,
 ) -> Tensor:
     """Assemble a single LoRA matrix (either 'A' or 'B') across groups.
 
@@ -156,7 +156,7 @@ def _combine_single_matrix(
         'mean' or 'sum'. For 'sum' we optionally append a bias-related term.
     matrix_key
         'A' or 'B'. Determines which axis is the rank axis and bias handling sign.
-    concat_dim
+    rank_dim
         Dimension along which to concatenate within each group's tensors.
 
     Returns
@@ -182,19 +182,47 @@ def _combine_single_matrix(
 
     for g, deltas in enumerate(per_group_deltas):
         # we remove leading dim when rearrange
-        combined_rank = deltas.shape[concat_dim]
+        combined_rank = deltas.shape[rank_dim]
 
         # Build slice pattern: rank slice up to combined_rank.
         slice_pattern = [g, slice(None), slice(None), slice(None)]
-        slice_pattern[concat_dim] = slice(combined_rank)
-        combined[slice_pattern] = deltas
+        slice_pattern[rank_dim] = slice(combined_rank)
         if bias is not None and aggregation == "sum":
             if matrix_key == "A":
-                bias_to_add = -bias[g : g + 1] * (n_chunks[g] - 1)
-            else:  # 'B'
-                bias_to_add = bias[g : g + 1]
+                deltas = rearrange(
+                    deltas,
+                    "1 n_layers (chunks r) dim -> chunks n_layers r dim",
+                    chunks=n_chunks[g],
+                )
+            else:
+                deltas = rearrange(
+                    deltas,
+                    "1 n_layers dim (chunks r) -> chunks n_layers dim r",
+                    chunks=n_chunks[g],
+                )
 
-            slice_pattern[concat_dim] = slice(combined_rank, combined_rank + base_rank)
-            combined[slice_pattern] = bias_to_add
+            center = deltas.mean(dim=0, keepdim=True)
+            deltas = deltas - center
+
+            if matrix_key == "A":
+                deltas = rearrange(
+                    deltas, "chunks n_layers r dim -> 1 n_layers (chunks r) dim"
+                )
+                cat_lora = torch.cat(
+                    [deltas, center],
+                    dim=rank_dim,
+                )
+                combined[g, :, : (1 + n_chunks[g]) * base_rank, :] = cat_lora
+            else:
+                deltas = rearrange(
+                    deltas, "chunks n_layers dim r -> 1 n_layers dim (chunks r)"
+                )
+                combined[g, :, :, : (1 + n_chunks[g]) * base_rank] = torch.cat(
+                    [deltas, center],
+                    dim=rank_dim,
+                )
+
+        else:
+            combined[slice_pattern] = deltas
 
     return combined
