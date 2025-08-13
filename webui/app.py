@@ -652,6 +652,9 @@ def chat():
                     outputs = modulated_model.generate_with_multi_loras(
                         ctx_ids=ctx_ids,
                         ctx_attn_mask=ctx_attn_mask,
+                        n_ctx_chunks=torch.tensor(
+                            [len(ctx_ids)], device=ctx_ids.device
+                        ),
                         input_ids=model_inputs,
                         max_new_tokens=512,
                         do_sample=False,
