@@ -18,8 +18,10 @@ def flatten_if_not_packed(inp_list):
     if "position_ids" in sample:
         if n == 1:
             n_queries = sample.pop("n_queries")
+            n_ctx_chunks = sample.pop("n_ctx_chunks")
             batch = default_data_collator(inp_list, return_tensors="pt")
             batch["n_queries"] = torch.tensor(n_queries)
+            batch["n_ctx_chunks"] = torch.tensor(n_ctx_chunks)
             return batch
         elif n > 1:
             raise NotImplementedError("Please use batch_size=1 when using packed data")
@@ -31,20 +33,29 @@ def flatten_if_not_packed(inp_list):
     assert not need_flatten, f"Validation data should not be nested."
 
     n_queries = torch.ones(len(inp_list), dtype=torch.int32)
+    n_ctx_chunks = torch.tensor(
+        [len(example["ctx_ids"]) for example in inp_list], dtype=torch.int32
+    )
     packed_inputs = flattener(inp_list, return_tensors="pt")
 
     packed_inputs["n_queries"] = n_queries
+    packed_inputs["n_ctx_chunks"] = n_ctx_chunks
+
     if "ctx_ids" in sample:
         # HACK: assumes 1 ctx chunk here
         # TODO: fix this after we have chunk ctx training
-        assert all(len(ctx_ids) == 1 for ctx_ids in sample["ctx_ids"]), (
-            "ctx_ids can only have one chunk for eval. "
-            "Please implement chunked ctx forward pass to handle this."
-        )
-        ctx_ids = [{"input_ids": example["ctx_ids"][0]} for example in inp_list]
-        packed_ctx = flattener(ctx_ids, return_tensors="pt")
-        packed_inputs["ctx_ids"] = packed_ctx["input_ids"]
-        packed_inputs["ctx_position_ids"] = packed_ctx["position_ids"]
+        # print(sample["ctx_ids"])
+        # breakpoint()
+        # assert all(len(ctx_ids) == 1 for ctx_ids in sample["ctx_ids"]), (
+        #     "ctx_ids can only have one chunk for eval. "
+        #     "Please implement chunked ctx forward pass to handle this."
+        # )
+        ctx_ids = concat_list([example.pop("ctx_ids") for example in inp_list])
+        ctx_position_ids = torch.cat([torch.arange(len(ids)) for ids in ctx_ids])
+        ctx_ids = torch.tensor(concat_list(ctx_ids))
+
+        packed_inputs["ctx_ids"] = ctx_ids.unsqueeze(0)
+        packed_inputs["ctx_position_ids"] = ctx_position_ids.unsqueeze(0)
         # for eval info
         if "ctx_ids_len" in sample:
             packed_inputs["ctx_ids_len"] = [

@@ -36,6 +36,7 @@ dependencies = [
     "kaggle>=1.7.4.5",
     "bitsandbytes>=0.46.1",
     "google-cloud-storage>=3.2.0",
+    "wonderwords>=2.2.0",
 ]
 
 [build-system]

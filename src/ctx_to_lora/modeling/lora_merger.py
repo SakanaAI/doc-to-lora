@@ -10,18 +10,8 @@ from jaxtyping import Integer
 from torch import Tensor
 
 
-def compute_rank(n_lora, rank, aggregation):
-    """Return the effective (max) rank required for a group.
-
-    aggregation == 'mean': we only concatenate the existing LoRA ranks (n_lora * r)
-    aggregation == 'sum' : an additional bias term may be appended (+1 * r)
-    """
-    if aggregation == "mean":
-        return n_lora * rank
-    elif aggregation == "sum":
-        return (n_lora + 1) * rank
-    else:
-        raise ValueError(f"Unknown aggregation: {aggregation}")
+def compute_rank(n_lora, rank):
+    return (n_lora + 1) * rank
 
 
 def combine_lora(
@@ -53,22 +43,20 @@ def combine_lora(
         combined_A shape: [G, n_layers, max_rank, dim]
         combined_B shape: [G, n_layers, dim, max_rank]
     """
-    assert aggregation in ["mean", "sum"]
+    # TODO: optimize!
+    # assert aggregation in ["mean", "sum"]
+    if (n_chunks == 1).all():
+        return generated_loras
 
     # Precompute common quantities
-    num_groups = len(n_chunks)
     total_chunks = int(n_chunks.sum())
-    sqrt_group_sizes = n_chunks**0.5  # [G]
-    # Repeat for each chunk within a group: e.g.,
-    # if n_chunks=[2,3] -> repeat factors [sqrt2, sqrt2, sqrt3, sqrt3, sqrt3]
-    sqrt_group_sizes_per_chunk = sqrt_group_sizes.repeat_interleave(n_chunks, dim=0)
 
     # Assume all modules share same base rank r
     # (second-to-last dim index for A, last dim for B)
     # Use first module's A tensor to infer rank
     first_module = next(iter(generated_loras))
     base_rank = generated_loras[first_module]["A"].shape[-2]
-    max_rank_needed = max(compute_rank(n, base_rank, aggregation) for n in n_chunks)
+    max_rank_needed = max(compute_rank(n, base_rank) for n in n_chunks)
 
     # Initialize output container
     combined_loras: dict[str, dict[str, Tensor]] = {
@@ -84,15 +72,14 @@ def combine_lora(
             #       or [total_chunks, n_layers, dim, r] (B)
             loras = module_loras[matrix_key]
 
-            # Expand bias if provided
-            bias_tensor = None
-            if lora_bias is not None:
-                bias_tensor = lora_bias[module_name][matrix_key].expand(
-                    num_groups, *loras.shape[1:]
-                )
-
             # For 'mean' aggregation, scale each chunk's LoRA by sqrt(group_size)
             if aggregation == "mean":
+                # Repeat for each chunk within a group: e.g.,
+                # if n_chunks=[2,3] -> repeat factors [sqrt2, sqrt2, sqrt3, sqrt3, sqrt3]
+                sqrt_group_sizes = n_chunks**0.5  # [G]
+                sqrt_group_sizes_per_chunk = sqrt_group_sizes.repeat_interleave(
+                    n_chunks, dim=0
+                )
                 loras = loras / sqrt_group_sizes_per_chunk.view(total_chunks, 1, 1, 1)
 
             # Split the leading chunk dimension into groups per n_chunks specification
@@ -107,6 +94,14 @@ def combine_lora(
                 rearrange(group_tensor, rearrange_pattern)
                 for group_tensor in per_group_list
             ]
+
+            bias_tensor = None
+            if lora_bias is not None:
+                bias_tensor = lora_bias[module_name][matrix_key]
+                per_group_deltas = [
+                    torch.cat([group_tensor, bias_tensor], dim=rank_dim)
+                    for group_tensor in per_group_deltas
+                ]
 
             # Delegate to helper for combining rank expansion across groups.
             combined_loras[module_name][matrix_key] = _combine_single_matrix(
@@ -165,12 +160,10 @@ def _combine_single_matrix(
         Combined LoRA matrix with shape (G, n_layers, max_rank, dim) for 'A'
         or (G, n_layers, dim, max_rank) for 'B'.
     """
-    assert matrix_key in ("A", "B"), f"matrix_key must be 'A' or 'B', got {matrix_key}"
+    # assert matrix_key in ("A", "B"), f"matrix_key must be 'A' or 'B', got {matrix_key}"
 
     num_groups = len(n_chunks)
-    combined_shape = list(bias.shape)
-    combined_shape[0] = num_groups
-
+    combined_shape = [num_groups, *per_group_deltas[0].shape[1:]]
     # Adjust the rank dimension size placeholder.
     if matrix_key == "A":
         rank_dim_index = -2  # (G, layers, rank, dim)
@@ -178,51 +171,19 @@ def _combine_single_matrix(
         rank_dim_index = -1  # (G, layers, dim, rank)
     combined_shape[rank_dim_index] = max_rank_needed
 
-    combined = torch.zeros(*combined_shape, device=bias.device, dtype=bias.dtype)
+    combined = torch.zeros(
+        *combined_shape,
+        device=per_group_deltas[0].device,
+        dtype=per_group_deltas[0].dtype,
+    )
 
     for g, deltas in enumerate(per_group_deltas):
-        # we remove leading dim when rearrange
         combined_rank = deltas.shape[rank_dim]
 
-        # Build slice pattern: rank slice up to combined_rank.
+        # Build slice pattern, slice up to combined_rank.
         slice_pattern = [g, slice(None), slice(None), slice(None)]
         slice_pattern[rank_dim] = slice(combined_rank)
-        if bias is not None and aggregation == "sum":
-            if matrix_key == "A":
-                deltas = rearrange(
-                    deltas,
-                    "1 n_layers (chunks r) dim -> chunks n_layers r dim",
-                    chunks=n_chunks[g],
-                )
-            else:
-                deltas = rearrange(
-                    deltas,
-                    "1 n_layers dim (chunks r) -> chunks n_layers dim r",
-                    chunks=n_chunks[g],
-                )
 
-            center = deltas.mean(dim=0, keepdim=True)
-            deltas = deltas - center
-
-            if matrix_key == "A":
-                deltas = rearrange(
-                    deltas, "chunks n_layers r dim -> 1 n_layers (chunks r) dim"
-                )
-                cat_lora = torch.cat(
-                    [deltas, center],
-                    dim=rank_dim,
-                )
-                combined[g, :, : (1 + n_chunks[g]) * base_rank, :] = cat_lora
-            else:
-                deltas = rearrange(
-                    deltas, "chunks n_layers dim r -> 1 n_layers dim (chunks r)"
-                )
-                combined[g, :, :, : (1 + n_chunks[g]) * base_rank] = torch.cat(
-                    [deltas, center],
-                    dim=rank_dim,
-                )
-
-        else:
-            combined[slice_pattern] = deltas
+        combined[slice_pattern] = deltas
 
     return combined

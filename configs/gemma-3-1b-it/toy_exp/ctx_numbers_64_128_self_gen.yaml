@@ -1,0 +1,12 @@
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+
+# data
+train_ds_names:
+- self_gen/google/gemma-3-1b-it_temp_0.0_closed_qa_prob_0.0/ctx_numbers_64_128
+
+val_ds_names:
+- ctx_numbers_64_128

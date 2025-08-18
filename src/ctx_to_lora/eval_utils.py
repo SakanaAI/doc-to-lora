@@ -788,6 +788,8 @@ def evaluate(
         max_qas_len=-1,
         max_qas_per_sample=1,
         max_ctx_chunk_len=max_ctx_chunk_len,
+        min_ctx_chunk_len=-1,
+        random_chunking=False,
         max_ctx_chunk_num=-1,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,

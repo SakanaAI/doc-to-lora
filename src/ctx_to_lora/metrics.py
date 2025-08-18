@@ -75,14 +75,15 @@ def compute_prefix_matching(shift_logits, shift_labels, valid_masks):
 
 @torch.inference_mode()
 def compute_perplexity(shift_logits, shift_labels, valid_masks):
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
-    loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
-    preplexities = torch.exp(loss)
-    return {
-        "perplexities": preplexities.tolist(),
-        "n_perplexities": valid_masks.shape[0],
-    }
+    return {"perplexities_ph": [1], "n_perplexities_ph": 1}
+    # loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+    # loss = loss_fct(shift_logits.transpose(1, 2), shift_labels)
+    # loss = (loss * valid_masks).sum(dim=1) / valid_masks.sum(dim=1)
+    # preplexities = torch.exp(loss)
+    # return {
+    #     "perplexities": preplexities.tolist(),
+    #     "n_perplexities": valid_masks.shape[0],
+    # }
 
 
 class Evaluator:

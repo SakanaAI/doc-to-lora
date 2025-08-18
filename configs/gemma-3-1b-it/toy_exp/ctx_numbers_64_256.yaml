@@ -1,0 +1,14 @@
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+
+# data
+train_ds_names:
+- ctx_numbers_64_128
+- ctx_numbers_128_256
+
+val_ds_names:
+- ctx_numbers_64_128
+- ctx_numbers_128_256

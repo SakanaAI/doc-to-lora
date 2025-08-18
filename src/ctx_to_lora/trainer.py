@@ -302,16 +302,16 @@ def train_model(
         logger.info("Training with modulated model. Using ModulatedModelTrainer.")
         trainer_cls = ModulatedModelTrainer
         trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
-        trainer_kwargs["use_per_ctx_average_loss"] = (
-            training_args.use_per_ctx_average_loss
-        )
         del training_args.gen_lora_l1_reg_coef
-        del training_args.use_per_ctx_average_loss
 
         if training_args.use_kl_loss:
             logger.info("Training with distillation loss. Using DistillationTrainer.")
+            trainer_kwargs["use_per_ctx_average_loss"] = (
+                training_args.use_per_ctx_average_loss
+            )
             trainer_cls = DistillationTrainer
             del training_args.use_kl_loss
+            del training_args.use_per_ctx_average_loss
 
     if training_args.auto_find_batch_size:
         # set the batch size to some high number
@@ -319,7 +319,7 @@ def train_model(
         training_args.per_device_train_batch_size = 128
 
     trainer = trainer_cls(**trainer_kwargs)
-    if trainer.use_per_ctx_average_loss:
+    if getattr(trainer, "use_per_ctx_average_loss", False):
         trainer.get_batch_samples = trainer.get_batch_samples_ctx
 
     # MONKEY PATCH: remove embedding layers from weight decay

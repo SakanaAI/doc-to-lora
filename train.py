@@ -199,6 +199,7 @@ def main():
                 base_model,
                 hypernet_config,
                 ctx_encoder_args,
+                lora_aggregation=ctx_args.lora_aggregation,
             )
 
         else:
@@ -249,6 +250,9 @@ def main():
     ctx_model_max_len = model.ctx_encoder.config.max_position_embeddings
     if ctx_args.max_ctx_len > 0:
         ctx_model_max_len = ctx_args.max_ctx_len
+    if ctx_args.max_ctx_chunk_len <= 0:
+        # set default chunk size to max length of the ctx encoder
+        ctx_args.max_ctx_chunk_len = ctx_model_max_len
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
@@ -260,6 +264,8 @@ def main():
         ctx_tokenizer=ctx_tokenizer,
         add_ctx_to_chat=add_ctx_to_chat,
         max_ctx_chunk_len=ctx_args.max_ctx_chunk_len,
+        min_ctx_chunk_len=ctx_args.min_ctx_chunk_len,
+        random_chunking=ctx_args.random_chunking,
         max_ctx_chunk_num=ctx_args.max_ctx_chunk_num,
         use_kl_loss=ctx_args.use_kl_loss,
     )

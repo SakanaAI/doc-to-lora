@@ -583,6 +583,30 @@ DS_KWARGS = {
     ),
 }
 
+# add ctx_numbers
+tok_bins = [(64, 128), (128, 256), (256, 512)] + [
+    (512 + 256 * i, 512 + 256 * (i + 1)) for i in range(14)
+]
+for toy_ds_name in ["ctx_numbers", "ctx_kv", "ctx_magic_number"]:
+    for tok_bin in tok_bins:
+        DS_KWARGS[f"{toy_ds_name}_{tok_bin[0]}_{tok_bin[1]}"] = dict(
+            train=dict(
+                path="json",
+                data_files=f"data/raw_datasets/{toy_ds_name}_{tok_bin[0]}_{tok_bin[1]}/train.jsonl",
+                split="train",
+            ),
+            validation=dict(
+                path="json",
+                data_files=f"data/raw_datasets/{toy_ds_name}_{tok_bin[0]}_{tok_bin[1]}/val.jsonl",
+                split="train",
+            ),
+            test=dict(
+                path="json",
+                data_files=f"data/raw_datasets/{toy_ds_name}_{tok_bin[0]}_{tok_bin[1]}/test.jsonl",
+                split="train",
+            ),
+        )
+
 # LongBench kwargs
 for ds_name in LONGBENCH_TASKS + LONGBENCH_E_TASKS:
     DS_KWARGS[ds_name] = dict(

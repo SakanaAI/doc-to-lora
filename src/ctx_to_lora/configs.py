@@ -380,11 +380,24 @@ class CtxTrainingArguments:
             "they will be split up into multiple samples."
         },
     )
+    lora_aggregation: Literal["mean", "sum"] = field(
+        default="sum", metadata={"help": "LoRA aggregation method."}
+    )
+    random_chunking: bool = field(
+        default=False,
+        metadata={"help": "Whether to use random chunking during training."},
+    )
     max_ctx_chunk_len: int = field(
         default=-1,
         metadata={
             "help": "Max context chunk length. If a context is longer than this value, "
             "it will be split up into multiple chunks."
+        },
+    )
+    min_ctx_chunk_len: int = field(
+        default=-1,
+        metadata={
+            "help": "Min context chunk length. Used only with random chunking training"
         },
     )
     max_ctx_chunk_num: int = field(

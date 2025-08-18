@@ -1,0 +1,29 @@
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+
+# data
+train_ds_names:
+- ctx_numbers_64_128
+- ctx_numbers_128_256
+- ctx_numbers_256_512
+- ctx_numbers_512_768
+- ctx_numbers_768_1024
+- ctx_numbers_1024_1280
+- ctx_numbers_1280_1536
+- ctx_numbers_1536_1792
+- ctx_numbers_1792_2048
+
+
+val_ds_names:
+- ctx_numbers_64_128
+- ctx_numbers_128_256
+- ctx_numbers_256_512
+- ctx_numbers_512_768
+- ctx_numbers_768_1024
+- ctx_numbers_1024_1280
+- ctx_numbers_1280_1536
+- ctx_numbers_1536_1792
+- ctx_numbers_1792_2048

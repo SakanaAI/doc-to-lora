@@ -41,31 +41,21 @@ SYSTEM_TEMPLATE = (
     "### END OF SYSTEM INSTRUCTION ###"
 )
 
+CTX_Q_SEP = "\n\n---\n\n# User\n"
+
 SELF_QA_INTX = (
-    "---\n\n"
+    # "---\n\n"
     "# System Instruction\n"
     "- The information provided is up-to-date information.\n"
     "- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.\n"
-    "- If the provided information is related to the question, incorporate it in your response.\n"
-    "\n---\n\n"
-    "# User\n"
+    "- If the provided information is related to the question, incorporate it in your response."
+    + CTX_Q_SEP
 )
 
-PRE_CTX = "# Information\n"
+PROMPT_TEMPLATE = "{context}" + CTX_Q_SEP + "{question}"
 
-PROMPT_TEMPLATE = (
-    PRE_CTX
-    + "{context}\n\n---\n\n"
-    +
-    # "# System Instruction\n"
-    # "- The information provided is up-to-date information.\n"
-    # "- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.\n"
-    # "- If the provided information is related to the question, incorporate it in your response.\n"
-    # "\n---\n\n"
-    # "# User\n{question}"
-    SELF_QA_INTX
-    + "{question}"
-)
+PRE_CTX = ""
+PROMPT_TEMPLATE_QA = "# Information\n{context}\n\n---\n\n" + SELF_QA_INTX + "{question}"
 
 
 """
@@ -114,8 +104,9 @@ def truncate_middle_if_too_long(
     return input_ids
 
 
-def get_prompt(context: str, q: str) -> str:
-    return PROMPT_TEMPLATE.format(context=context, question=q)
+def get_prompt(context: str, q: str, use_qa_template: bool) -> str:
+    template = PROMPT_TEMPLATE_QA if use_qa_template else PROMPT_TEMPLATE
+    return template.format(context=context, question=q)
 
 
 def add_closed_qa_prompt(q: str, closed_qa_prob: float = 0.1) -> str:
@@ -187,7 +178,11 @@ def get_dataset_configs(
 
 
 def create_messages(
-    ctxs: list[str], questions: list[list[str]], vllm_model: str, system_template: str
+    ctxs: list[str],
+    questions: list[list[str]],
+    vllm_model: str,
+    system_template: str,
+    use_qa_template: bool,
 ) -> list[list[dict]]:
     """Create chat messages for the model."""
     # if "gemma" in vllm_model:
@@ -196,7 +191,9 @@ def create_messages(
         [
             {
                 "role": "user",
-                "content": system_template + "\n\n\n" + get_prompt(ctx, q),
+                "content": system_template
+                + "\n\n\n"
+                + get_prompt(ctx, q, use_qa_template),
             }
         ]
         for ctx, q_list in zip(ctxs, questions)
@@ -221,6 +218,8 @@ def self_generate(
     system_template: str,
     parquet_file: str | None = None,
     do_truncate: bool = False,
+    use_qa_template: bool = True,
+    max_new_tokens: int = 1024,
 ) -> None:
     """Process a single dataset and generate QA pairs."""
 
@@ -254,6 +253,7 @@ def self_generate(
     print(f"Processing dataset: {ds_name}, split: {split}")
     print(f"Using temperature: {temp}")
     print(f"Using closed QA prompt probability: {closed_qa_prob}")
+    print(f"Use QA template: {use_qa_template}")
 
     if parquet_file:
         print(f"Loading dataset from parquet file: {parquet_file}")
@@ -282,8 +282,8 @@ def self_generate(
 
     tk = get_tokenizer(args.vllm_model, train=True)
 
-    self_qa_intx_tokens = tk(SELF_QA_INTX, add_special_tokens=False)["input_ids"]
-    n_self_qa_intx_tokens = len(self_qa_intx_tokens)
+    ctx_q_sep_tokens = tk(CTX_Q_SEP, add_special_tokens=False)["input_ids"]
+    n_qa_sep_tokens = len(ctx_q_sep_tokens)
     pre_ctx_tokens = tk(PRE_CTX, add_special_tokens=False)["input_ids"]
     n_pre_ctx_tokens = len(pre_ctx_tokens)
     sys_tokens = tk(system_template.split("\n")[0], add_special_tokens=False)[
@@ -316,7 +316,11 @@ def self_generate(
         chunk_ctxs = ctxs[start : start + chunk_size]
         chunk_questions = questions[start : start + chunk_size]
         chunk_messages = create_messages(
-            chunk_ctxs, chunk_questions, args.vllm_model, SELF_GEN_SYSTEM_MSG
+            chunk_ctxs,
+            chunk_questions,
+            args.vllm_model,
+            SELF_GEN_SYSTEM_MSG,
+            use_qa_template,
         )
 
         if do_truncate:
@@ -330,7 +334,7 @@ def self_generate(
                 truncate_middle_if_too_long(
                     ids,
                     max_length=MODEL_CTX_LEN[args.vllm_model],
-                    max_new_tokens=1024,
+                    max_new_tokens=max_new_tokens,
                 )
                 for ids in tokenized_contents["input_ids"]
             ]
@@ -350,8 +354,8 @@ def self_generate(
             llm,
             temp,
             tk,
-            self_qa_intx_tokens,
-            n_self_qa_intx_tokens,
+            ctx_q_sep_tokens,
+            n_qa_sep_tokens,
             sys_tokens,
             n_sys_tokens,
             chunk_ctxs,
@@ -359,6 +363,7 @@ def self_generate(
             chunk_questions,
             chunk_messages,
             k,
+            max_new_tokens,
         )
 
 
@@ -368,8 +373,8 @@ def execute_qa_generation(
     llm,
     temp,
     tk,
-    self_qa_intx_tokens,
-    n_self_qa_intx_tokens,
+    ctx_q_sep_tokens,
+    n_qa_sep_tokens,
     sys_tokens,
     n_sys_tokens,
     ctxs,
@@ -377,11 +382,12 @@ def execute_qa_generation(
     questions,
     messages,
     k,
+    max_tokens,
 ):
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
-            max_tokens=1024,
+            max_tokens=max_tokens,
             logprobs=k,
             temperature=temp,
             seed=42,
@@ -389,6 +395,8 @@ def execute_qa_generation(
             skip_special_tokens=False,
             include_stop_str_in_output=True,
         ),
+        chat_template=tk.chat_template,
+        chat_template_content_format="string",
     )
 
     self_gen_data = {
@@ -451,13 +459,13 @@ def execute_qa_generation(
 
             q_start = None
             for ii in range(
-                len(prompt_ids) - n_self_qa_intx_tokens,
+                len(prompt_ids) - n_qa_sep_tokens,
                 -1,
                 -1,
             ):
-                if prompt_ids[ii : ii + n_self_qa_intx_tokens] == self_qa_intx_tokens:
+                if prompt_ids[ii : ii + n_qa_sep_tokens] == ctx_q_sep_tokens:
                     # found the start of the user input
-                    q_start = ii + n_self_qa_intx_tokens
+                    q_start = ii + n_qa_sep_tokens
                     break
 
             # bos + question + eos + start model turn + response + eos
@@ -611,6 +619,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Truncate contexts to fit model context length",
     )
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=1024,
+        help="Maximum number of new tokens to generate (default: 1024)",
+    )
+    parser.add_argument(
+        "--remove_qa_template",
+        action="store_true",
+        help="Remove the QA template from the prompt (default: False)",
+    )
     return parser.parse_args()
 
 
@@ -650,7 +669,17 @@ if __name__ == "__main__":
         # Process each dataset
         for ds_name, split in dataset_configs:
             print(f"Processing dataset: {ds_name}, split: {split}")
-            self_generate(ds_name, split, args, llm, SYSTEM_TEMPLATE, args.do_truncate)
+            self_generate(
+                ds_name,
+                split,
+                args,
+                llm,
+                system_template=SYSTEM_TEMPLATE,
+                parquet_file=None,
+                do_truncate=args.do_truncate,
+                use_qa_template=not args.remove_qa_template,
+                max_new_tokens=args.max_new_tokens,
+            )
     else:
         assert args.glob_pattern, (
             "glob_pattern must be provided if no ds_names or config"
@@ -666,4 +695,6 @@ if __name__ == "__main__":
                 llm=llm,
                 system_template=SYSTEM_TEMPLATE,
                 do_truncate=args.do_truncate,
+                use_qa_template=not args.remove_qa_template,
+                max_new_tokens=args.max_new_tokens,
             )

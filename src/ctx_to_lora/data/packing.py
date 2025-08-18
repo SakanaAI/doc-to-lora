@@ -14,8 +14,7 @@ logger = logging.getLogger()
 
 def pack_data_points_by_length(
     lens: list[list[int]],
-    ctx_lens: list[int],
-    n_queries: list[int],
+    ctx_lens: list[list[int]],
     max_packed_inp_len: int,
     max_packed_ctx_len: int,
     max_size: int = -1,
@@ -24,10 +23,9 @@ def pack_data_points_by_length(
         return []
 
     len_arr = np.array([sum(l) for l in lens], dtype=np.long)
-    ctx_len_arr = np.array(ctx_lens, dtype=np.long)
+    ctx_len_arr = np.array([sum(l) for l in ctx_lens], dtype=np.long)
     n = len(len_arr)
     assert len(ctx_len_arr) == n, "Length of ctx_len_arr must match length of lens"
-    assert len(n_queries) == n, "Length of n_queries must match length of lens"
 
     if n == 1:
         return (
@@ -40,11 +38,6 @@ def pack_data_points_by_length(
     cumsum_inp_len = np.cumsum(len_arr)
     cumsum_ctx_len = np.cumsum(ctx_len_arr)
 
-    # indices of flattened input_ids
-    cumsum_n_queries = np.cumsum(n_queries)
-
-    # start_indices_inp = [0]
-    # start_indices_ctx = [0]
     idx_pairs = []
     i = 0
 
@@ -85,7 +78,7 @@ def pack_data_points_FA(
         raise ValueError("Batch is empty")
 
     # Pre-allocate lists with known sizes
-    total_ctx_len = sum(len(x) for x in batch["ctx_ids"])
+    total_ctx_len = sum(len(y) for x in batch["ctx_ids"] for y in x)
     total_inp_len = sum(len(y) for x in batch["input_ids"] for y in x)
 
     ctx_ids = np.empty(total_ctx_len, dtype=np.long)
@@ -111,7 +104,7 @@ def pack_data_points_FA(
     else:
         sequences = zip(batch["input_ids"], batch["labels"])
 
-    offset = ctx_offset = 0
+    offset = 0
     for sample in sequences:
         input_ids_b, labels_b = sample[:2]
         inp_start = offset
@@ -119,10 +112,9 @@ def pack_data_points_FA(
         # compute position_ids for each sub-list in input_ids_b
         local_start = inp_start
         for ids_b in input_ids_b:
-            position_ids[local_start : local_start + len(ids_b)] = np.arange(
-                len(ids_b), dtype=np.long
-            )
-            local_start += len(ids_b)
+            local_end = local_start + len(ids_b)
+            position_ids[local_start:local_end] = np.arange(len(ids_b), dtype=np.int32)
+            local_start = local_end
 
         input_ids_b = concat_list(input_ids_b)
         labels_b = concat_list(labels_b)
@@ -145,11 +137,20 @@ def pack_data_points_FA(
             )
             logits_offset += logits_len
 
+    ctx_offset = 0
     for ctx_ids_b in batch["ctx_ids"]:
+        local_start = ctx_offset
+        for ctx_ids_b_item in ctx_ids_b:
+            local_end = local_start + len(ctx_ids_b_item)
+            ctx_position_ids[local_start:local_end] = np.arange(
+                len(ctx_ids_b_item), dtype=np.int32
+            )
+            local_start = local_end
+
+        ctx_ids_b = concat_list(ctx_ids_b)
         ctx_len = len(ctx_ids_b)
         ctx_start, ctx_end = ctx_offset, ctx_offset + ctx_len
         ctx_ids[ctx_start:ctx_end] = ctx_ids_b
-        ctx_position_ids[ctx_start:ctx_end] = np.arange(ctx_len, dtype=np.long)
         ctx_offset += ctx_len
 
     out = {
@@ -179,18 +180,18 @@ def pack_batch(
     )
 
     n_queries = [len(x) for x in batch["input_ids"]]
+    n_ctx_chunks = [len(x) for x in batch["ctx_ids"]]
     inp_lens = [[len(y) for y in x] for x in batch["input_ids"]]
     inp_count = len(inp_lens)
     if "ctx_ids" not in batch:
         raise ValueError("Batch must contain 'ctx_ids' and 'labels' keys")
     # we do not pad so we can just take the length of the tokens
-    ctx_lens = [len(x) for x in batch["ctx_ids"]]
+    ctx_lens = [[len(y) for y in x] for x in batch["ctx_ids"]]
 
     # Group indices
     idx_pairs = pack_data_points_by_length(
         inp_lens,
         ctx_lens,
-        n_queries,
         max_packed_inp_len,
         max_packed_ctx_len,
         max_packed_size,
@@ -205,6 +206,7 @@ def pack_batch(
         "position_ids": [],
         "labels": [],
         "n_queries": [],
+        "n_ctx_chunks": [],
     }
     has_logprobs = "logprobs_vals" in batch
     if has_logprobs:
@@ -235,6 +237,7 @@ def pack_batch(
         packed_batch["position_ids"].append(packed_item["position_ids"])
         packed_batch["labels"].append(packed_item["labels"])
         packed_batch["n_queries"].append(n_queries[start_idx:end_idx])
+        packed_batch["n_ctx_chunks"].append(n_ctx_chunks[start_idx:end_idx])
         if has_logprobs:
             packed_batch["logprobs_vals"].append(packed_item["logprobs_vals"])
             packed_batch["logprobs_indices"].append(packed_item["logprobs_indices"])

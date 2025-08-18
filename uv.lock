@@ -723,6 +723,7 @@ dependencies = [
     { name = "transformers" },
     { name = "vllm" },
     { name = "wandb" },
+    { name = "wonderwords" },
 ]
 
 [package.metadata]
@@ -757,6 +758,7 @@ requires-dist = [
     { name = "transformers", specifier = "==4.51.3" },
     { name = "vllm", specifier = "==0.8.5" },
     { name = "wandb" },
+    { name = "wonderwords", specifier = ">=2.2.0" },
 ]
 
 [[package]]
@@ -5785,6 +5787,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/41/53/2e0253c5efd69c9656b1843892052a31c36d37ad42812b5da45c62191f7e/widgetsnbextension-4.0.14.tar.gz", hash = "sha256:a3629b04e3edb893212df862038c7232f62973373869db5084aed739b437b5af", size = 1097428, upload-time = "2025-04-10T13:01:25.628Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/51/5447876806d1088a0f8f71e16542bf350918128d0a69437df26047c8e46f/widgetsnbextension-4.0.14-py3-none-any.whl", hash = "sha256:4875a9eaf72fbf5079dc372a51a9f268fc38d46f767cbf85c43a36da5cb9b575", size = 2196503, upload-time = "2025-04-10T13:01:23.086Z" },
+]
+
+[[package]]
+name = "wonderwords"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/ed/d5f4336a7b1b416d5c502a6ed323f02acdb5e67467ef8f5e80ea6617fe3e/wonderwords-2.2.0.tar.gz", hash = "sha256:0b7ec6f591062afc55603bfea71463afbab06794b3064d9f7b04d0ce251a13d0", size = 50579, upload-time = "2021-02-17T20:28:45.402Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/a4/6a7705c6e17de71e45782a0284e06691f85350adb80b1dea9c027c07f024/wonderwords-2.2.0-py3-none-any.whl", hash = "sha256:65fc665f1f5590e98f6d9259414ea036bf1b6dd83e51aa6ba44473c99ca92da1", size = 44970, upload-time = "2021-02-17T20:28:43.977Z" },
 ]
 
 [[package]]
