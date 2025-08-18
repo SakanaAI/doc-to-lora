@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
             # TODO: have to change this for bigger models
             eval_batch_size = 8
-            eval_batch_size_gen = 16
+            eval_batch_size_gen = 8
             try:
                 # metrics = run_eval(
                 #     checkpoint_path=file,

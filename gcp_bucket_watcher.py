@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import os
 import sys
 import time
@@ -97,6 +98,36 @@ def needs_transfer(src: ObjectMeta, dst: ObjectMeta | None, tolerance: float) ->
     return False
 
 
+# --- Minimal persistent state to honor local deletions ---
+def _state_path(dest: str) -> str:
+    return os.path.join(dest, ".gcs_sync_state.json")
+
+
+def _load_state(dest: str) -> tuple[set[str], set[str]]:
+    path = _state_path(dest)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return set(data.get("downloaded", [])), set(data.get("tombstones", []))
+    except FileNotFoundError:
+        return set(), set()
+    except Exception:
+        # Corrupt/invalid state; ignore to keep going.
+        return set(), set()
+
+
+def _save_state(dest: str, downloaded: set[str], tombstones: set[str]) -> None:
+    path = _state_path(dest)
+    tmp = path + ".part"
+    data = {
+        "downloaded": sorted(downloaded),
+        "tombstones": sorted(tombstones),
+    }
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
 def download_file(
     client: storage.Client, bucket: str, prefix: str, meta: ObjectMeta, dest: str
 ) -> None:
@@ -152,18 +183,44 @@ def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
         else:
             print("All uploads complete.")
     else:  # download (original tolerance 1s)
+        downloaded_set, tombstones = _load_state(args.dest)
+        state_dirty = False
         for rel, meta in remote.items():
             if should_skip(rel, includes, excludes):
                 continue
-            if needs_transfer(meta, local.get(rel), tolerance=1.0):
+            # Respect user-deleted files (tombstones)
+            if rel in tombstones:
+                continue
+            # If we had downloaded this before but it's now missing locally,
+            # treat as user-deleted and tombstone it to avoid re-download.
+            if rel in downloaded_set and rel not in local:
+                tombstones.add(rel)
+                state_dirty = True
+                continue
+            local_meta = local.get(rel)
+            if needs_transfer(meta, local_meta, tolerance=1.0):
                 print(f"[downloading] {rel} ({meta.size} bytes)")
                 download_file(client, args.bucket, args.prefix, meta, args.dest)
                 print(f"[downloaded ✓] {rel} ({meta.size} bytes)")
                 changed += 1
+                if rel not in downloaded_set:
+                    downloaded_set.add(rel)
+                    state_dirty = True
+                if rel in tombstones:
+                    tombstones.discard(rel)
+                    state_dirty = True
+            else:
+                # File exists locally and is in sync; ensure it's marked as downloaded
+                # so future local deletions are respected without re-download.
+                if local_meta is not None and rel not in downloaded_set:
+                    downloaded_set.add(rel)
+                    state_dirty = True
         if changed == 0:
             print("No new or updated objects.")
         else:
             print("All downloads complete.")
+        if state_dirty:
+            _save_state(args.dest, downloaded_set, tombstones)
     return changed
 
 
