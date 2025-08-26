@@ -873,9 +873,11 @@ def tokenize_ctx_text(
             [
                 [
                     {"role": "system", "content": ""},
-                    {"role": "user", "content": text.strip()},
+                    {"role": "user", "content": ctx.strip()},
                 ]
-                for text in samples["context"]
+                if isinstance(ctx, str)
+                else ctx
+                for ctx in samples["context"]
             ],
             tokenize=True,
             add_generation_prompt=True,

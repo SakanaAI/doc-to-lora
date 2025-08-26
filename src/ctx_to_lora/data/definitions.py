@@ -581,6 +581,25 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    # sft data
+    "openhermes": dict(
+        train=dict(path="HuggingFaceTB/smoltalk", name="openhermes-100k", split="train")
+    ),
+    "smol-magpie-ultra": dict(
+        train=dict(
+            path="HuggingFaceTB/smoltalk", name="smol-magpie-ultra", split="train"
+        )
+    ),
+    "smol-rewrite": dict(
+        train=dict(path="HuggingFaceTB/smoltalk", name="smol-rewrite", split="train")
+    ),
+    "smol-summarize": dict(
+        train=dict(path="HuggingFaceTB/smoltalk", name="smol-summarize", split="train")
+    ),
+    "systemchats": dict(
+        train=dict(path="HuggingFaceTB/smoltalk", name="systemchats-30k", split="train")
+    ),
+    "ctx-q-gsm": dict(train=dict(path="letta-ai/stateful-gsm-symbolic", split="train")),
 }
 
 # add ctx_numbers

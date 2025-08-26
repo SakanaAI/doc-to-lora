@@ -250,6 +250,43 @@ def get_preprocessing_fn(
                 "prompt": sample["instruction"],
                 "response": "```python\n" + sample["code"].strip() + "\n```",
             }
+    elif "openhermes" == ds_name:
+        # system prompt is from a set of predefined prompts → query
+        # user prompt is the content → ctx
+        def f(sample):
+            messages = sample["messages"]
+            if messages[0]["role"] != "system":
+                return {"context": None, "prompt": None, "response": None}
+            ctx = messages[1]["content"]  # user input
+            q = messages[0]["content"]  # system intx
+            response = messages[2]["content"]
+            return {"context": ctx, "prompt": q, "response": response}
+
+    elif "smol-magpie-ultra" == ds_name or "systemchats" == ds_name:
+        # ctx → all history up to the last turn
+        # q → last user input
+        def f(sample):
+            chat_history = sample["messages"][:-2]
+            q = sample["messages"][-2]["content"]
+            response = sample["messages"][-1]["content"]
+            return {"context": chat_history, "prompt": q, "response": response}
+
+    elif "smol-rewrite" == ds_name or "smol-summarize" == ds_name:
+        # user content is a paragraph of text → ctx
+        # system prompt is a paraphrase/summarize instruction → q
+        def f(sample):
+            ctx = sample["messages"][1]["content"]
+            q = sample["messages"][0]["content"]
+            response = sample["messages"][2]["content"]
+            return {"context": ctx, "prompt": q, "response": response}
+
+    elif "ctx-q-gsm" == ds_name:
+
+        def f(sample):
+            ctx = sample["stateful_gsm_symbolic_context"]
+            q = sample["stateful_gsm_symbolic_question"]
+            response = sample["answer"]
+            return {"context": ctx, "prompt": q, "response": response}
 
     if is_eval and (ds_name in EVAL_INTX_TEMPLATES):
         prompt_template = EVAL_INTX_TEMPLATES[ds_name]
