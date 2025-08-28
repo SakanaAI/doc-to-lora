@@ -16,8 +16,11 @@ from q_generation_prompts import (  # get_structuring_seed_prompt,; get_summariz
 )
 from vllm import LLM, SamplingParams
 
+from ctx_to_lora.data.processing import load_and_process_dataset
+
 STOP_STRINGS = {
     "google/gemma-3-12b-it": ["<eos>", "<end_of_turn>"],
+    "google/gemma-3-4b-it": ["<eos>", "<end_of_turn>"],
 }
 
 
@@ -112,14 +115,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vllm_model",
         type=str,
-        default=os.environ.get("vllm_model", "google/gemma-3-12b-it"),
+        default=os.environ.get("vllm_model", "google/gemma-3-4b-it"),
         help="VLLM model to use for generation",
     )
     parser.add_argument(
         "--shard_pattern",
         type=str,
-        required=True,
+        default=None,
         help="Pattern to match shard files (e.g., '000_0000*')",
+    )
+    parser.add_argument(
+        "--ds_names",  # list of names
+        type=str,
+        nargs="+",
+        default=None,
+        help="dataset names",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        help="Dataset split to use (e.g., 'train', 'validation')",
     )
     # parser.add_argument(
     #     "--n_qa_pairs",
@@ -176,6 +192,9 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    assert bool(args.shard_pattern) ^ bool(args.ds_names)
+    if args.ds_names:
+        assert bool(args.split)
 
     weights = [
         args.question_weight,
@@ -203,17 +222,28 @@ if __name__ == "__main__":
     shard_pattern = args.shard_pattern
     # n_qa_pairs = args.n_qa_pairs
 
-    paths = glob(
-        f"./data/raw_datasets/fineweb_edu/sample/100BT/{shard_pattern}.parquet"
-    )
-
-    split = "train[:100]" if args.debug else "train"
-    for path in paths:
-        ds = load_dataset(
-            "parquet",
-            data_files=path,
-            split=split,
+    if args.shard_pattern is not None:
+        paths = glob(
+            f"./data/raw_datasets/fineweb_edu/sample/100BT/{shard_pattern}.parquet"
         )
+    elif args.ds_names:
+        paths = args.ds_names
+    else:
+        raise ValueError("Either shard_pattern or ds_names must be provided.")
+
+    split = "train[:100]" if args.debug else args.split or "train"
+    for path in paths:
+        if args.shard_pattern is not None:
+            ds = load_dataset(
+                "parquet",
+                data_files=path,
+                split=split,
+            )
+        elif args.ds_names:
+            ds = load_and_process_dataset(path, args.split, num_proc=16)
+            ds = ds.rename_column("context", "text")
+
+        print(f"Loaded {len(ds)} samples from {path}")
         ds = ds.filter(
             length_filter,
             fn_kwargs={"min_len": args.min_length, "max_len": args.max_length},

@@ -20,7 +20,6 @@ from ctx_to_lora.data.definitions import (
     DS_KWARGS,
     IGNORE_INDEX,
     RAW_DATA_DIR,
-    REPEAT_PROMPTS,
     SELF_GEN_DATA_DIR,
     TRANSFORMED_DATA_DIR,
 )
@@ -91,10 +90,6 @@ def load_answers(ds_name, split):
     ds = load_dataset(**ds_kwargs, trust_remote_code=True)
     ds = ds.map(extract_ans, num_proc=8, remove_columns=ds.column_names)
     return ds
-
-
-def get_repeat_prompt():
-    return random.choice(REPEAT_PROMPTS)
 
 
 def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
@@ -169,6 +164,7 @@ def load_and_process_dataset(
     ds_name: str,
     split: str,
     num_proc: int,
+    remove_cols: bool = True,
 ):
     logger.info(f"Loading dataset {ds_name} with split {split}...")
     try:
@@ -184,9 +180,11 @@ def load_and_process_dataset(
         raise ValueError(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}"
         )
-    cols_to_remove = [
-        col for col in ds.column_names if col not in COLS_TO_KEEP_PREPROCESSING
-    ]
+    cols_to_remove = None
+    if remove_cols:
+        cols_to_remove = [
+            col for col in ds.column_names if col not in COLS_TO_KEEP_PREPROCESSING
+        ]
     is_eval = split != "train"
     ds = ds.map(
         get_preprocessing_fn(ds_name, is_eval),

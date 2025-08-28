@@ -21,31 +21,71 @@ SELF_GEN_SYSTEM_MSG = (
 )
 
 
-REPEAT_PROMPTS = [
-    "Repeat the information.",
-    "Repeat the information above.",
-    "Repeat the above information.",
-    # "Repeat exactly what was written.",
-    "Duplicate the information.",
-    "Echo the information. Do not output other words.",
-    "Repeat the information provided.",
-    "Copy the information. Reply with just the information.",
-    "Replicate the given information precisely.",
-    "Repeat the entire provided information above.",
-    "Duplicate exactly the provided information.",
-    "Repeat the information that appears above.",
-    # "Reproduce exactly what appears above.",
-    # "Repeat the article.",
-    "Repeat verbatim the given information.",
-    "Output the same information as provided.",
-    "Output an exact copy of the information above.",
-    "Provide a replica of the information.",
-    "Output an identical copy of the information.",
-    "Repeat the information without any changes.",
-    "Repeat the provided information.",
-    "Repeat the provided information above.",
-    "Repeat precisely what is written in the information above.",
+SUMMARIZATION_PROMPTS = [
+    "Summarize the article."
+    "Provide a concise summary capturing the main idea and key detail.",
+    "Write a one-paragraph executive summary of the passage. Avoid fluff.",
+    "Create a bullet list of the core points from the text. No intro line.",
+    "Summarize the content for a general audience with no domain knowledge.",
+    "Produce a headline that best represents the passage.",
+    "Give a headline and a subheadline separated by a newline summarizing the article.",
+    "Write a tweet-length summary (max 240 characters, no hashtags).",
+    "Condense the passage into a plain-language abstract.",
+    "Explain the passage as if speaking to a 10-year-old.",
+    "Summarize the information presented.",
+    "Extract and list the three most critical facts. No extra wording.",
+    "Provide a neutral summary (no opinion words) in one paragraph.",
+    "Summarize emphasizing quantitative data only. Ignore narrative.",
+    "Provide a facts-only summary: list raw data points, no interpretation.",
+    "Summarize by extracting all key figures and associated units only.",
+    "Provide a brief TL;DR starting with 'TL;DR:'.",
+    "Summarize in exactly 25 words. If needed, rephrase to fit.",
+    "Produce a question-and-answer style summary with 3 Q&A pairs capturing essence.",
+    "Provide a summary that only uses the 600 most common English words.",
+    "Create a concise abstract in academic tone.",
+    "Write a marketing-style summary appealing to a broad audience.",
+    "Summarize in the form of a newspaper lead (who, what, when, where, why).",
+    "Write a summary that preserves all numbers and proper nouns verbatim.",
+    "Produce a satirical-style summary (remain respectful).",
+    "Summarize with a formal tone using no contractions.",
+    "Summarize with an informal conversational tone",
+    "Summarize as if reporting to a technical expert (dense, precise).",
+    "Summarize as if explaining to a non-technical stakeholder (clear, simplified).",
+    "Summarize including exactly one direct quote (short) from the text if present.",
+    "Summarize into a structured JSON with keys: topic, key_points (array), tone. Do not add commentary.",
+    "Write a poetic-style 2-line summary (no rhyme required).",
+    "Summarize in exactly 3 bullet points.",
+    "Summarize in question form: pose 2-3 questions that capture essence.",
+    "Summarize as a press release opening paragraph.",
+    "Summarize focusing on benefits to end users.",
+    "Summarize avoiding any jargon; replace technical terms with common words.",
+    "Produce a summary in exactly 2 haiku-style lines (not strict syllables).",
+    "Summarize as if drafting the opening line of an encyclopedia entry.",
 ]
+
+COT_TEMPLATES = [
+    "{input} Think out loud before giving an answer.",
+    "{input} Think step by step to ensure a correct final answer.",
+    "{input} List any assumptions, reason through the steps, then provide the final answer.",
+    "{input} Explain your reasoning clearly first.",
+    "{input} Reason carefully: identify what is known, what is needed, derive intermediate conclusions, then answer.",
+    "{input} Enumerate relevant facts, derive implications, eliminate alternatives, then state the answer.",
+    "{input} Think through possible interpretations, choose the most plausible, reason it out, then answer.",
+    "{input} Consider edge cases or exceptions while reasoning step by step before finalizing your answer.",
+    "{input} List data given, infer what is missing, derive needed values logically, then answer.",
+    "{input} Use logical deduction step by step; avoid jumping to the conclusion. Conclude with the answer.",
+    "{input} Reason transparently: gather, analyze, synthesize, conclude. Final answer after the reasoning.",
+]
+
+STRUCTURING_PROMPTS = [
+    f"Can you structure the information in the {format} format? Be sure to include precise information like any dates, times, names, and numerical values."
+    for format in ["JSON", "YAML", "TOML", "bullet"]
+]
+
+STRUCTURING_PROMPTS += [
+    "Can you structure the information in plain text that is easy to read? Be sure to include precise information like any dates, times, names, and numerical values."
+]
+
 
 # for chunking
 CTX_AFFIXES = {
@@ -120,9 +160,9 @@ DS_KWARGS = {
         ),
     ),
     "hotpot_qa": dict(
-        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train[900:]"),
+        train=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="train"),
         validation=dict(
-            path="hotpotqa/hotpot_qa", name="fullwiki", split="train[:900]"
+            path="hotpotqa/hotpot_qa", name="fullwiki", split="validation[:900]"
         ),
         test=dict(path="hotpotqa/hotpot_qa", name="fullwiki", split="validation"),
     ),
@@ -133,16 +173,15 @@ DS_KWARGS = {
         ),
     ),
     "pwc": dict(
-        train=dict(path="sggetao/PwC", split="train[900:]"),
-        validation=dict(path="sggetao/PwC", split="train[:900]"),
+        train=dict(path="sggetao/PwC", split="train"),
+        validation=dict(path="sggetao/PwC", split="test[:900]"),
         test=dict(path="sggetao/PwC", split="test"),
     ),
     "pwc_compact": dict(
         train=dict(
             path="parquet",
             data_files="data/raw_datasets/pwc_compact/train/ds.parquet",
-            # correspond to skipping to first 900 samples in the original dataset
-            split="train[60:]",
+            split="train",
         ),
     ),
     "pwc_compact_tiny": dict(
@@ -158,8 +197,8 @@ DS_KWARGS = {
         validation=dict(path="sggetao/PwC", split="train[:900]"),
     ),
     "squad": dict(
-        train=dict(path="data/raw_datasets/squad", split="train[900:]"),
-        validation=dict(path="data/raw_datasets/squad", split="train[:900]"),
+        train=dict(path="data/raw_datasets/squad", split="train"),
+        validation=dict(path="data/raw_datasets/squad", split="validation[:1000]"),
         test=dict(path="data/raw_datasets/squad", split="validation"),
         # train=dict(path="rajpurkar/squad", split="train[900:]"),
         # validation=dict(path="rajpurkar/squad", split="train[:900]"),
@@ -565,6 +604,11 @@ DS_KWARGS = {
     ),
     # for negative training and evaluating
     "negative_nq": dict(
+        train=dict(
+            path="json",
+            data_files="data/raw_datasets/negative_natural_questions/train.jsonl",
+            split="train",
+        ),
         validation=dict(
             path="json",
             data_files="data/raw_datasets/negative_natural_questions/validation.jsonl",
@@ -607,6 +651,44 @@ DS_KWARGS = {
         train=dict(path="HuggingFaceTB/smoltalk", name="systemchats-30k", split="train")
     ),
     "ctx-q-gsm": dict(train=dict(path="letta-ai/stateful-gsm-symbolic", split="train")),
+    "automathtext_web": dict(
+        dict(
+            train=dict(
+                path="math-ai/AutoMathText", name="web-0.50-to-1.00", split="train"
+            )
+        )
+    ),
+    "automathtext_code_python": dict(
+        dict(
+            train=dict(
+                path="math-ai/AutoMathText",
+                name="code-python-0.50-to-1.00",
+                split="train",
+            )
+        )
+    ),
+    "automathtext_code_notebook": dict(
+        dict(
+            train=dict(
+                path="math-ai/AutoMathText",
+                name="code-jupyter-notebook-0.50-to-1.00",
+                split="train",
+            )
+        )
+    ),
+    "automathtext_arxiv": dict(
+        dict(
+            train=dict(
+                path="math-ai/AutoMathText", name="arxiv-0.50-to-1.00", split="train"
+            )
+        )
+    ),
+    "codeparrot": dict(
+        dict(train=dict(path="transformersbook/codeparrot", split="train"))
+    ),
+    "programming_books": dict(
+        dict(train=dict(path="open-phi/programming_books_llama", split="train"))
+    ),
 }
 
 # add ctx_numbers

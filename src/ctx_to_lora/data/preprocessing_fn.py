@@ -15,7 +15,7 @@ def closed_qa_prompting(prompt: str):
 
 
 def chat_to_str(messages: list[dict[str, str]]):
-    return "\n\n".join(
+    return "Below is the chat history from the current user.\n\n" + "\n\n".join(
         [
             "Message from: {role}\n{content}".format(
                 **{**m, "role": m["role"].capitalize()}
@@ -97,11 +97,9 @@ def get_preprocessing_fn(
     elif ds_name == "negative_nq":
 
         def f(sample):
-            q = sample["prompt"]
-            prompt = closed_qa_prompting(q) if not is_eval else q
             return {
                 "context": sample["context"],
-                "prompt": prompt,
+                "prompt": sample["prompt"],
                 "response": sample["answer"],
             }
 
@@ -199,6 +197,7 @@ def get_preprocessing_fn(
             }
 
     elif ds_name == "booksum":
+        # TODO: sample from SUMM_PROMPTS once improved data gen branch is merged
         prompt_templates = [
             "Summarization the provided text.",
             "# Summary",
@@ -298,6 +297,33 @@ def get_preprocessing_fn(
             q = sample["stateful_gsm_symbolic_question"]
             response = sample["answer"]
             return {"context": ctx, "prompt": q, "response": response}
+
+    elif ds_name.startswith("automathtext"):
+
+        def f(sample):
+            return {
+                "context": sample["text"],
+                "prompt": "PLACEHOLDER. PLEASE GENERATE QUESTIONS FOR THIS DATASET.",
+                "response": "PLACEHOLDER PLEASE GENERATE QUESTIONS FOR THIS DATASET.",
+            }
+
+    elif "codeparrot" == ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["content"],
+                "prompt": "PLACEHOLDER. PLEASE GENERATE QUESTIONS FOR THIS DATASET.",
+                "response": "PLACEHOLDER. PLEASE GENERATE QUESTIONS FOR THIS DATASET.",
+            }
+
+    elif "programming_books" == ds_name:
+
+        def f(sample):
+            return {
+                "context": sample["markdown"],
+                "prompt": "PLACEHOLDER. PLEASE GENERATE QUESTIONS FOR THIS DATASET.",
+                "response": "PLACEHOLDER. PLEASE GENERATE QUESTIONS FOR THIS DATASET.",
+            }
 
     if is_eval and (ds_name in EVAL_INTX_TEMPLATES):
         prompt_template = EVAL_INTX_TEMPLATES[ds_name]

@@ -11,9 +11,11 @@ from vllm import LLM, SamplingParams
 
 from ctx_to_lora.data.definitions import (
     CLOSED_QA_INTX_TEMPLATES,
+    COT_TEMPLATES,
     RAW_DATA_DIR,
     SELF_GEN_DATA_DIR,
-    SELF_GEN_SYSTEM_MSG,
+    STRUCTURING_PROMPTS,
+    SUMMARIZATION_PROMPTS,
 )
 from ctx_to_lora.data.processing import (
     filter_none,
@@ -31,48 +33,27 @@ STOP_STRINGS = {
 # TODO: !!!!
 # see https://huggingface.co/datasets/YuxinJiang/LTE_train_data/viewer/default/train?row=97&views%5B%5D=train&sql_row=2
 # based on https://arxiv.org/pdf/2402.11905
-SYSTEM_TEMPLATE = (
-    "### SYSTEM INSTRUCTION ###\n"
-    "You are an honest and helpful assistant.\n"
-    # "You must use the information provided in the context for responding to the question.\n"
-    # "If the context does not contain enough information to answer the question, you must say so.\n"
-    # "If that is the case, you can answer based on your knowledge, but you must clearly state that you are doing so.\n"
-    "**DO NOT** hallucinate or make up information.\n"
-    "### END OF SYSTEM INSTRUCTION ###"
+SELF_GEN_SYSTEM_MSG = (
+    # "### SYSTEM INSTRUCTION ###\n"
+    # "You are an honest and helpful assistant.\n"
+    # "**DO NOT** hallucinate or make up information.\n"
+    # "### END OF SYSTEM INSTRUCTION ###"
+    "You are an honest and helpful assistant."
 )
-
-CTX_Q_SEP = "\n\n---\n\n# User\n"
 
 SELF_QA_INTX = (
-    # "---\n\n"
     "# System Instruction\n"
-    "- The information provided is up-to-date information.\n"
+    "- The information provided is up-to-date information and/or the user instruction.\n"
     "- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.\n"
-    "- If the provided information is related to the question, incorporate it in your response."
-    + CTX_Q_SEP
+    "- If the provided information is related to the question, incorporate it in your response.\n"
+    "- If the provided information is an instruction, follow the instruction carefully.\n"
+    "\n---\n\n"
+    "# User Input\n"
 )
 
-PROMPT_TEMPLATE = "{context}" + CTX_Q_SEP + "{question}"
+PRE_CTX = "# Provided Information\n"
 
-PRE_CTX = ""
-PROMPT_TEMPLATE_QA = "# Information\n{context}\n\n---\n\n" + SELF_QA_INTX + "{question}"
-
-
-"""
-
----
-
-# System Instruction
-- The information provided is up-to-date information.
-- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.
-- If the provided information is related to the question, incorporate it in your response.
-
----
-# User
-
-What team is Mbappe playing for?
-
-"""
+PROMPT_TEMPLATE = PRE_CTX + "{context}\n\n---\n\n" + SELF_QA_INTX + "{question}"
 
 MODEL_CTX_LEN = {
     "google/gemma-2-27b-it": 8192,
@@ -104,15 +85,27 @@ def truncate_middle_if_too_long(
     return input_ids
 
 
-def get_prompt(context: str, q: str, use_qa_template: bool) -> str:
-    template = PROMPT_TEMPLATE_QA if use_qa_template else PROMPT_TEMPLATE
-    return template.format(context=context, question=q)
+def get_prompt(context: str, q: str) -> str:
+    return PROMPT_TEMPLATE.format(context=context, question=q)
 
 
-def add_closed_qa_prompt(q: str, closed_qa_prob: float = 0.1) -> str:
-    if random.random() <= closed_qa_prob:
-        q = random.choice(CLOSED_QA_INTX_TEMPLATES).format(input=q)
-    return q
+def augment_prompt(sample, closed_qa_prob, cot_prob):
+    z = random.random()
+    should_add_closed_qa = ("type" not in sample) or (sample["type"] == "question")
+    if should_add_closed_qa and (z < closed_qa_prob):
+        sample["prompts"] = add_closed_qa_prompt(sample["prompts"])
+    elif closed_qa_prob <= z < (closed_qa_prob + cot_prob):
+        sample["prompts"] = add_cot_prompt(sample["prompts"])
+
+    return sample
+
+
+def add_cot_prompt(prompts: list[str]) -> str:
+    return [random.choice(COT_TEMPLATES).format(input=q) for q in prompts]
+
+
+def add_closed_qa_prompt(prompts: list[str]) -> str:
+    return [random.choice(CLOSED_QA_INTX_TEMPLATES).format(input=q) for q in prompts]
 
 
 def load_config(config_path: str) -> dict:
@@ -122,12 +115,47 @@ def load_config(config_path: str) -> dict:
     return config
 
 
-# def check_should_skip(txt: str, vllm_model: str) -> bool:
-#     """Check if the response should be skipped based on stop strings."""
-#     for stop in STOP_STRINGS[vllm_model]:
-#         if stop in txt[-len(stop) :]:
-#             return (txt.split(stop)[0], False)  # Found a valid stop string
-#     return (txt, True)  # No valid stop string found, skip this response
+def add_paraphrasing_prompt(samples, summ_prob: float, struct_prob: float):
+    """Augment batch with summarization / structuring prompts given separate probabilities.
+    The original samples are extended (in-place) with newly created paraphrased variants.
+    """
+    if summ_prob == 0 and struct_prob == 0:
+        return samples
+    n_samples = len(samples["ctx_ids"]) if "ctx_ids" in samples else 0
+    if n_samples == 0:
+        return samples
+
+    n_summ = int(n_samples * summ_prob)
+    n_struct = int(n_samples * struct_prob)
+    all_indices = list(range(n_samples))
+    random.shuffle(all_indices)
+    summ_indices = all_indices[:n_summ]
+    struct_indices = all_indices[n_summ : n_summ + n_struct]
+
+    def _add(kind_indices, prompts_source, prompt_type):
+        out = dict()
+        if not kind_indices:
+            return out
+        for k in samples:
+            if k == "prompts":
+                sampled_prompts = random.choices(prompts_source, k=len(kind_indices))
+                out[k] = [[p] for p in sampled_prompts]
+            elif k == "type":
+                out[k] = [prompt_type] * len(kind_indices)
+            else:
+                out[k] = [samples[k][i] for i in kind_indices]
+        return out
+
+    summ_samples = _add(summ_indices, SUMMARIZATION_PROMPTS, "summarization")
+    struct_samples = _add(struct_indices, STRUCTURING_PROMPTS, "structuring")
+
+    # Extend original samples
+    for k in samples:
+        if summ_indices:
+            samples[k] += summ_samples[k]
+        if struct_indices:
+            samples[k] += struct_samples[k]
+    return samples
 
 
 def get_dataset_configs(
@@ -178,11 +206,7 @@ def get_dataset_configs(
 
 
 def create_messages(
-    ctxs: list[str],
-    questions: list[list[str]],
-    vllm_model: str,
-    system_template: str,
-    use_qa_template: bool,
+    ctxs: list[str], questions: list[list[str]], vllm_model: str, system_template: str
 ) -> list[list[dict]]:
     """Create chat messages for the model."""
     # if "gemma" in vllm_model:
@@ -191,9 +215,7 @@ def create_messages(
         [
             {
                 "role": "user",
-                "content": system_template
-                + "\n\n\n"
-                + get_prompt(ctx, q, use_qa_template),
+                "content": (system_template + "\n\n\n" + get_prompt(ctx, q)).strip(),
             }
         ]
         for ctx, q_list in zip(ctxs, questions)
@@ -218,42 +240,63 @@ def self_generate(
     system_template: str,
     parquet_file: str | None = None,
     do_truncate: bool = False,
-    use_qa_template: bool = True,
-    max_new_tokens: int = 1024,
 ) -> None:
     """Process a single dataset and generate QA pairs."""
 
     shard_name = ""
 
-    # Check for conflicts between CLI args and dataset name
+    # Conflict checks for ds_name-derived overrides
     if ds_name is not None:
+        # temperature & closed_qa already handled later; add new ones
         if "_temp_" in ds_name and args.temp != 0.0:
             raise ValueError(
-                f"Multiple sources of truth for temperature: CLI arg --temp={args.temp} "
-                f"and dataset name contains temp specification. Please use only one."
+                f"Multiple sources of truth for temperature: CLI arg --temp={args.temp} and dataset name contains temp specification."
             )
         if "_closed_qa_prob_" in ds_name and args.closed_qa_prob != 0.0:
             raise ValueError(
-                f"Multiple sources of truth for closed_qa_prob: CLI arg --closed_qa_prob={args.closed_qa_prob} "
-                f"and dataset name contains closed_qa_prob specification. Please use only one."
+                f"Multiple sources of truth for closed_qa_prob: CLI arg --closed_qa_prob={args.closed_qa_prob} and dataset name contains closed_qa_prob specification."
+            )
+        if "_summ_prob_" in ds_name and args.summ_prob != 0.0:
+            raise ValueError(
+                f"Multiple sources of truth for summ_prob: CLI arg --summ_prob={args.summ_prob} and dataset name contains summ_prob specification."
+            )
+        if "_struct_prob_" in ds_name and args.struct_prob != 0.0:
+            raise ValueError(
+                f"Multiple sources of truth for struct_prob: CLI arg --struct_prob={args.struct_prob} and dataset name contains struct_prob specification."
             )
 
-    # Use CLI args as default, override with dataset name if present
+    # Base values from args
     temp = args.temp
     closed_qa_prob = args.closed_qa_prob
+    summ_prob = args.summ_prob
+    struct_prob = args.struct_prob
+    cot_prob = args.cot_prob
 
-    if ds_name is not None and "_temp_" in ds_name:
-        temp_match = re.search(r"_temp_([\d.]+)", ds_name)
-        if temp_match:
-            temp = float(temp_match.group(1))
-    if ds_name is not None and "_closed_qa_prob_" in ds_name:
-        prob_match = re.search(r"_closed_qa_prob_([\d.]+)", ds_name)
-        if prob_match:
-            closed_qa_prob = float(prob_match.group(1))
+    # Overrides from ds_name pattern if present
+    if ds_name is not None:
+        if "_temp_" in ds_name:
+            m = re.search(r"_temp_([\d.]+)", ds_name)
+            if m:
+                temp = float(m.group(1))
+        if "_closed_qa_prob_" in ds_name:
+            m = re.search(r"_closed_qa_prob_([\d.]+)", ds_name)
+            if m:
+                closed_qa_prob = float(m.group(1))
+        if "_summ_prob_" in ds_name:
+            m = re.search(r"_summ_prob_([\d.]+)", ds_name)
+            if m:
+                summ_prob = float(m.group(1))
+        if "_struct_prob_" in ds_name:
+            m = re.search(r"_struct_prob_([\d.]+)", ds_name)
+            if m:
+                struct_prob = float(m.group(1))
+
     print(f"Processing dataset: {ds_name}, split: {split}")
     print(f"Using temperature: {temp}")
     print(f"Using closed QA prompt probability: {closed_qa_prob}")
-    print(f"Use QA template: {use_qa_template}")
+    print(f"Using chain-of-thought prompt probability: {cot_prob}")
+    print(f"Using summarization augmentation probability: {summ_prob}")
+    print(f"Using structuring augmentation probability: {struct_prob}")
 
     if parquet_file:
         print(f"Loading dataset from parquet file: {parquet_file}")
@@ -272,18 +315,19 @@ def self_generate(
         print(f"Loading dataset: {ds_name} with split: {split}")
         kwargs = dict(ds_name=ds_name, split=split)
 
-        ds = load_and_process_dataset(**kwargs, num_proc=8)
+        ds = load_and_process_dataset(**kwargs, num_proc=8, remove_cols=False)
     print(f"Loaded dataset: {ds_name} with split: {split}")
 
     if args.debug:
-        ds = ds.take(10)
+        ds = ds.take(50)
 
     ds = ds.filter(filter_none, batched=False, num_proc=8)
+    print(f"0. {len(ds)=}")
 
     tk = get_tokenizer(args.vllm_model, train=True)
 
-    ctx_q_sep_tokens = tk(CTX_Q_SEP, add_special_tokens=False)["input_ids"]
-    n_qa_sep_tokens = len(ctx_q_sep_tokens)
+    self_qa_intx_tokens = tk(SELF_QA_INTX, add_special_tokens=False)["input_ids"]
+    n_self_qa_intx_tokens = len(self_qa_intx_tokens)
     pre_ctx_tokens = tk(PRE_CTX, add_special_tokens=False)["input_ids"]
     n_pre_ctx_tokens = len(pre_ctx_tokens)
     sys_tokens = tk(system_template.split("\n")[0], add_special_tokens=False)[
@@ -299,15 +343,46 @@ def self_generate(
         keep_in_memory=True,
     )
 
+    ds = ds.map(
+        augment_prompt,
+        fn_kwargs={"closed_qa_prob": closed_qa_prob, "cot_prob": cot_prob},
+        keep_in_memory=True,
+        num_proc=16,
+    )
+
+    ds = ds.map(
+        add_paraphrasing_prompt,
+        batched=True,
+        fn_kwargs={
+            "summ_prob": summ_prob,
+            "struct_prob": struct_prob,
+        },
+        batch_size=50_000,
+        keep_in_memory=True,
+    )
+
     ctxs = [sample["context"] for sample in ds]
-    questions = [
-        [add_closed_qa_prompt(q, closed_qa_prob) for q in sample["prompts"] if q]
-        for sample in ds
-    ]
+
+    questions = ds["prompts"]
+    # for sample in ds:
+    #     if ("type" not in sample) or (
+    #         "type" in sample and sample["type"] == "question"
+    #     ):
+    #         # for generated qa, apply to only "question" type
+    #         questions.append(
+    #             [
+    #                 add_closed_qa_prompt(q, closed_qa_prob)
+    #                 for q in sample["prompts"]
+    #                 if q
+    #             ]
+    #         )
+    #     else:
+    #         questions.append([q for q in sample["prompts"] if q])
+
     print(f"Loaded {len(ctxs)} contexts and {len(questions)} questions")
 
     k = 16
-    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
+    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}_cot_prob_{cot_prob}_summ_prob_{summ_prob}_struct_prob_{struct_prob}/{ds_name}/{split}/ds{shard_name}"
 
     chunk_size = 1_000
     for chunk_idx, start in enumerate(range(0, len(ctxs), chunk_size)):
@@ -316,11 +391,7 @@ def self_generate(
         chunk_ctxs = ctxs[start : start + chunk_size]
         chunk_questions = questions[start : start + chunk_size]
         chunk_messages = create_messages(
-            chunk_ctxs,
-            chunk_questions,
-            args.vllm_model,
-            SELF_GEN_SYSTEM_MSG,
-            use_qa_template,
+            chunk_ctxs, chunk_questions, args.vllm_model, SELF_GEN_SYSTEM_MSG
         )
 
         if do_truncate:
@@ -334,7 +405,7 @@ def self_generate(
                 truncate_middle_if_too_long(
                     ids,
                     max_length=MODEL_CTX_LEN[args.vllm_model],
-                    max_new_tokens=max_new_tokens,
+                    max_new_tokens=1024,
                 )
                 for ids in tokenized_contents["input_ids"]
             ]
@@ -354,8 +425,8 @@ def self_generate(
             llm,
             temp,
             tk,
-            ctx_q_sep_tokens,
-            n_qa_sep_tokens,
+            self_qa_intx_tokens,
+            n_self_qa_intx_tokens,
             sys_tokens,
             n_sys_tokens,
             chunk_ctxs,
@@ -363,7 +434,6 @@ def self_generate(
             chunk_questions,
             chunk_messages,
             k,
-            max_new_tokens,
         )
 
 
@@ -373,8 +443,8 @@ def execute_qa_generation(
     llm,
     temp,
     tk,
-    ctx_q_sep_tokens,
-    n_qa_sep_tokens,
+    self_qa_intx_tokens,
+    n_self_qa_intx_tokens,
     sys_tokens,
     n_sys_tokens,
     ctxs,
@@ -382,12 +452,11 @@ def execute_qa_generation(
     questions,
     messages,
     k,
-    max_tokens,
 ):
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
-            max_tokens=max_tokens,
+            max_tokens=1024,
             logprobs=k,
             temperature=temp,
             seed=42,
@@ -395,8 +464,6 @@ def execute_qa_generation(
             skip_special_tokens=False,
             include_stop_str_in_output=True,
         ),
-        chat_template=tk.chat_template,
-        chat_template_content_format="string",
     )
 
     self_gen_data = {
@@ -459,13 +526,13 @@ def execute_qa_generation(
 
             q_start = None
             for ii in range(
-                len(prompt_ids) - n_qa_sep_tokens,
+                len(prompt_ids) - n_self_qa_intx_tokens,
                 -1,
                 -1,
             ):
-                if prompt_ids[ii : ii + n_qa_sep_tokens] == ctx_q_sep_tokens:
+                if prompt_ids[ii : ii + n_self_qa_intx_tokens] == self_qa_intx_tokens:
                     # found the start of the user input
-                    q_start = ii + n_qa_sep_tokens
+                    q_start = ii + n_self_qa_intx_tokens
                     break
 
             # bos + question + eos + start model turn + response + eos
@@ -523,7 +590,7 @@ def execute_qa_generation(
 
     if args.debug:
         for sample in samples:
-            print(f"context={tk.decode(sample['ctx_ids'])}")
+            # print(f"context={tk.decode(sample['ctx_ids'])}")
             print(f"QA={[tk.decode(ids) for ids in sample['input_ids']]}")
 
             for input_ids, (start, end) in zip(
@@ -531,12 +598,6 @@ def execute_qa_generation(
             ):
                 print(f"start={start}, end={end}")
                 print(f"response={tk.decode(input_ids[start:end])}")
-
-            for input_ids, (start, end) in zip(
-                sample["input_ids"], sample["prompt_start_end"]
-            ):
-                print(f"start={start}, end={end}")
-                print(f"prompt={tk.decode(input_ids[start:end])}")
 
             print(f"logprobs_vals={[x.shape for x in sample['logprobs_vals']]}")
             print(f"logprobs_indices={[x.shape for x in sample['logprobs_indices']]}")
@@ -615,20 +676,27 @@ def parse_args() -> argparse.Namespace:
         help="Probability of using closed QA prompt template (default: 0.0)",
     )
     parser.add_argument(
+        "--cot_prob",
+        type=float,
+        default=0.0,
+        help="Probability of using chain-of-thought prompt template (default: 0.0)",
+    )
+    parser.add_argument(
+        "--summ_prob",
+        type=float,
+        default=0.0,
+        help="Probability of adding a summarization variant (default: 0.0)",
+    )
+    parser.add_argument(
+        "--struct_prob",
+        type=float,
+        default=0.0,
+        help="Probability of adding a structuring variant (default: 0.0)",
+    )
+    parser.add_argument(
         "--do_truncate",
         action="store_true",
         help="Truncate contexts to fit model context length",
-    )
-    parser.add_argument(
-        "--max_new_tokens",
-        type=int,
-        default=1024,
-        help="Maximum number of new tokens to generate (default: 1024)",
-    )
-    parser.add_argument(
-        "--remove_qa_template",
-        action="store_true",
-        help="Remove the QA template from the prompt (default: False)",
     )
     return parser.parse_args()
 
@@ -670,15 +738,7 @@ if __name__ == "__main__":
         for ds_name, split in dataset_configs:
             print(f"Processing dataset: {ds_name}, split: {split}")
             self_generate(
-                ds_name,
-                split,
-                args,
-                llm,
-                system_template=SYSTEM_TEMPLATE,
-                parquet_file=None,
-                do_truncate=args.do_truncate,
-                use_qa_template=not args.remove_qa_template,
-                max_new_tokens=args.max_new_tokens,
+                ds_name, split, args, llm, SELF_GEN_SYSTEM_MSG, args.do_truncate
             )
     else:
         assert args.glob_pattern, (
@@ -693,8 +753,6 @@ if __name__ == "__main__":
                 split=args.split,
                 args=args,
                 llm=llm,
-                system_template=SYSTEM_TEMPLATE,
+                system_template=SELF_GEN_SYSTEM_MSG,
                 do_truncate=args.do_truncate,
-                use_qa_template=not args.remove_qa_template,
-                max_new_tokens=args.max_new_tokens,
             )

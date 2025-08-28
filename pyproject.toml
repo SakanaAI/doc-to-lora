@@ -29,7 +29,7 @@ dependencies = [
     "pandas",
     "plotly",
     "rouge-score",
-    "vllm==0.8.5",
+    "vllm==0.8.4",
     "huggingface-hub[hf-transfer]>=0.32.0",
     "opt-einsum>=3.4.0",
     "kagglehub[hf-datasets]>=0.3.12",
@@ -37,6 +37,7 @@ dependencies = [
     "bitsandbytes>=0.46.1",
     "google-cloud-storage>=3.2.0",
     "wonderwords>=2.2.0",
+    "tokenizers==0.21.0",
 ]
 
 [build-system]
