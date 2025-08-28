@@ -14,6 +14,17 @@ def closed_qa_prompting(prompt: str):
     return template.format(input=prompt)
 
 
+def chat_to_str(messages: list[dict[str, str]]):
+    return "\n\n".join(
+        [
+            "Message from: {role}\n{content}".format(
+                **{**m, "role": m["role"].capitalize()}
+            )
+            for m in messages
+        ]
+    )
+
+
 def get_preprocessing_fn(
     ds_name: str,
     is_eval: bool,
@@ -266,7 +277,7 @@ def get_preprocessing_fn(
         # ctx → all history up to the last turn
         # q → last user input
         def f(sample):
-            chat_history = sample["messages"][:-2]
+            chat_history = chat_to_str(sample["messages"][:-2])
             q = sample["messages"][-2]["content"]
             response = sample["messages"][-1]["content"]
             return {"context": chat_history, "prompt": q, "response": response}
