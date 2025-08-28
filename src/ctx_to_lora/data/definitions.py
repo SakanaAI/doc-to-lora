@@ -477,6 +477,13 @@ DS_KWARGS = {
             split="train",
         ),
     ),
+    "tatqa": dict(
+        train=dict(
+            path="nvidia/ChatQA-Training-Data",
+            name="tatqa",
+            split="train",
+        )
+    ),
     "booksum": dict(
         train=dict(
             path="kmfoda/booksum",

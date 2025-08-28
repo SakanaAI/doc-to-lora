@@ -173,17 +173,16 @@ def get_preprocessing_fn(
             q = closed_qa_prompting(q) if not is_eval else q
             return {"context": ctx, "prompt": q, "response": response}
 
-    elif ds_name in ["narrativeqa", "quoref"]:  # , "ropes"]:
+    elif ds_name in ["narrativeqa", "quoref", "tatqa"]:  # , "ropes"]:
 
         def f(sample):
             response = sample["answers"][0]
             if isinstance(response, list):
                 response = response[0]
             q = sample["messages"][-1]["content"]
-            prompt = closed_qa_prompting(q) if not is_eval else q
             return {
                 "context": sample["document"],
-                "prompt": prompt,
+                "prompt": q,
                 "response": response,
             }
 
@@ -261,6 +260,7 @@ def get_preprocessing_fn(
                 "prompt": sample["instruction"],
                 "response": "```python\n" + sample["code"].strip() + "\n```",
             }
+
     elif "openhermes" == ds_name:
         # system prompt is from a set of predefined prompts → query
         # user prompt is the content → ctx
