@@ -175,6 +175,7 @@ run uv run data/generate_fw_edu_qa_v2.py --shard_pattern "000_00000" --n_qa_pair
 run uv run data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_0*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it;
 run uv run data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_1*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it;
 run uv run data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/000*level_2*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it
+run uv run data/generate_fw_edu_qa_v3.py --n_qa_pairs 3 --shard_pattern '*' --debug --question_weight 1  --use_case_weight 1 --creative_weight 1 --generic_weight 1
 ```
 
 2. Self-generated response QA data (depends on step 0 and 1)
@@ -189,7 +190,6 @@ uv run data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --glob_pattern
 # self-gen data for other ds listed in qa_short_ctx_self_gen_no_fw_qa.yaml
 uv run data/self_generate_qa.py --vllm_model google/gemma-2-2b-it --config configs/qa_short_ctx_self_gen_no_fw_qa.yaml
 ```
-
 
 <!-- 
 ### GSM8k LoRA
