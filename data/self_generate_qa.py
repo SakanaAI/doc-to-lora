@@ -322,7 +322,6 @@ def self_generate(
         ds = ds.take(50)
 
     ds = ds.filter(filter_none, batched=False, num_proc=8)
-    print(f"0. {len(ds)=}")
 
     tk = get_tokenizer(args.vllm_model, train=True)
 
@@ -363,7 +362,7 @@ def self_generate(
 
     ctxs = [sample["context"] for sample in ds]
 
-    questions = ds["prompts"]
+    questions = [q_list for q_list in ds["prompts"] if len(q_list) > 0]
     # for sample in ds:
     #     if ("type" not in sample) or (
     #         "type" in sample and sample["type"] == "question"
