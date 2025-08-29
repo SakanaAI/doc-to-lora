@@ -16,7 +16,7 @@ def lora_forward(
     n_qs: Integer[Tensor, "n_ctx"],
     tot_q: int,
     A: Float[Tensor, "n_ctx r d_in"],
-    B: Float[Tensor, "n_ctx d_out r"],
+    B: Float[Tensor, "n_ctx r d_out"],
     lora_dropout_p: float,
     scaling: float,
     self,
@@ -32,7 +32,7 @@ def lora_forward(
     x = x.to(A.dtype)
     delta_x = F.dropout(x, p=lora_dropout_p, training=self.training)
     delta_x = einsum(A, delta_x, "tot_q r d_in, tot_q s_len d_in -> tot_q s_len r")
-    delta_x = einsum(B, delta_x, "tot_q d_out r, tot_q s_len r -> tot_q s_len d_out")
+    delta_x = einsum(B, delta_x, "tot_q r d_out, tot_q s_len r -> tot_q s_len d_out")
     delta_x = delta_x * scaling
     return (base_out + delta_x).to(base_out.dtype)
 
@@ -44,7 +44,7 @@ def lora_forward_packed(
     seq_lens: Integer[Tensor, "tot_q"],
     tot_len: int,
     A: Float[Tensor, "n_ctx r d_in"],
-    B: Float[Tensor, "n_ctx d_out r"],
+    B: Float[Tensor, "n_ctx r d_out"],
     lora_dropout_p: float,
     scaling: float,
     self,
@@ -69,7 +69,7 @@ def lora_forward_packed(
         repeated_A, delta_x, "tot_len r d_in, bs tot_len d_in -> bs tot_len r"
     )
     delta_x = einsum(
-        repeated_B, delta_x, "tot_len d_out r, bs tot_len r -> bs tot_len d_out"
+        repeated_B, delta_x, "tot_len r d_out, bs tot_len r -> bs tot_len d_out"
     )
     delta_x = delta_x * scaling
 

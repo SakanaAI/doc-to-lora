@@ -196,10 +196,7 @@ def main():
                     " as the context encoder"
                 )
             model = ModulatedPretrainedModel(
-                base_model,
-                hypernet_config,
-                ctx_encoder_args,
-                lora_aggregation=ctx_args.lora_aggregation,
+                base_model, hypernet_config, ctx_encoder_args
             )
 
         else:
@@ -254,6 +251,11 @@ def main():
         # set default chunk size to max length of the ctx encoder
         ctx_args.max_ctx_chunk_len = ctx_model_max_len
 
+    if ctx_args.num_chunk_probs is not None:
+        ctx_args.num_chunk_probs = {
+            int(k): float(v) for k, v in ctx_args.num_chunk_probs.items()
+        }
+
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
         max_qas_len=ctx_args.max_qas_len,
@@ -265,7 +267,7 @@ def main():
         add_ctx_to_chat=add_ctx_to_chat,
         max_ctx_chunk_len=ctx_args.max_ctx_chunk_len,
         min_ctx_chunk_len=ctx_args.min_ctx_chunk_len,
-        random_chunking=ctx_args.random_chunking,
+        num_chunk_probs=ctx_args.num_chunk_probs,
         max_ctx_chunk_num=ctx_args.max_ctx_chunk_num,
         use_kl_loss=ctx_args.use_kl_loss,
     )
@@ -391,7 +393,7 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     os.environ["WANDB_DIR"] = ".wandb/"
-    os.environ["WANDB_PROJECT"] = "ctx_to_lora"
+    os.environ["WANDB_PROJECT"] = os.getenv("WANDB_PROJECT") or "ctx_to_lora"
     os.environ["WANDB_WATCH"] = ""
     os.environ["WANDB_CONSOLE"] = "off"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"

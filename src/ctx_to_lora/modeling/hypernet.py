@@ -3,10 +3,11 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from math import sqrt
+from typing import Any
 
 import torch
-from einops import rearrange, unpack
+from einops import unpack
 from einops.layers.torch import EinMix as Mix
 from jaxtyping import Float, Integer
 from peft import (
@@ -273,24 +274,26 @@ class HyperLoRA(nn.Module):
 
             self.layers = nn.Sequential(*layers)
 
-            d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
+            self.d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
-            # self.bias_a = nn.ParameterDict(
-            #     {
-            #         m: nn.Parameter(
-            #             torch.normal(
-            #                 0, 1 / self.d_in[m], (self.n_layers, self.r, self.d_in[m])
-            #             )
-            #         )
-            #         for m in self.target_modules
-            #     }
-            # )
-            # self.bias_b = nn.ParameterDict(
-            #     {
-            #         m: nn.Parameter(torch.zeros((self.n_layers, self.r, self.d_out[m])))
-            #         for m in self.target_modules
-            #     }
-            # )
+            self.bias_a = nn.ParameterDict(
+                {
+                    m: nn.Parameter(
+                        torch.normal(
+                            0,
+                            0.1 / (self.d_in[m] * self.r) ** 0.5,
+                            (self.n_layers, self.r, self.d_in[m]),
+                        )
+                    )
+                    for m in self.target_modules
+                }
+            )
+            self.bias_b = nn.ParameterDict(
+                {
+                    m: nn.Parameter(torch.zeros((self.n_layers, self.r, self.d_out[m])))
+                    for m in self.target_modules
+                }
+            )
 
             if self.config.use_light_weight_lora:
                 # light-weight lora projection (per layer, per module)
@@ -358,13 +361,13 @@ class HyperLoRA(nn.Module):
                             )
                             param.bias.data[:] = 0
 
-                d_lora = self.config.light_weight_latent_size * 2
+                self.d_lora = self.config.light_weight_latent_size * 2
                 self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
                 self.d_out = {
                     k: self.config.light_weight_latent_size for k in self.d_out
                 }
 
-                logger.info(f"Using light-weight LoRA with d_lora = {d_lora // 2}")
+                logger.info(f"Using light-weight LoRA with d_lora = {self.d_lora // 2}")
 
             n_modules = len(self.target_modules)
             # have to do this otherwise doesnt work with adamw_torch_fused
@@ -378,23 +381,23 @@ class HyperLoRA(nn.Module):
                             self.head = Mix(
                                 "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
                                 weight_shape="n_layers d_latent d_lora",
-                                # bias_shape=None,  # no bias
-                                bias_shape="n_layers r d_lora",
+                                bias_shape=None,  # no bias
+                                # bias_shape="n_layers r d_lora",
                                 n_layers=len(self.layer_indices),
                                 d_latent=self.config.latent_size,
                                 r=self.config.lora_config.r,
-                                d_lora=d_lora,
+                                d_lora=self.d_lora,
                             )
                         else:
                             self.head = Mix(
                                 "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
                                 weight_shape="n_layers d_latent d_lora",
-                                # bias_shape=None,  # no bias
-                                bias_shape="n_layers d_lora",
+                                bias_shape=None,  # no bias
+                                # bias_shape="n_layers d_lora",
                                 n_layers=len(self.layer_indices),
                                 d_latent=self.config.latent_size,
                                 r=self.config.lora_config.r,
-                                d_lora=d_lora,
+                                d_lora=self.d_lora,
                             )
                     # else:
                     #     if self.config.use_per_rank_bias:
@@ -425,25 +428,25 @@ class HyperLoRA(nn.Module):
                             self.head = Mix(
                                 "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
                                 weight_shape="n_layers n_modules d_latent d_lora",
-                                # bias_shape=None,  # no bias
-                                bias_shape="n_layers n_modules r d_lora",
+                                bias_shape=None,  # no bias
+                                # bias_shape="n_layers n_modules r d_lora",
                                 n_layers=len(self.layer_indices),
                                 n_modules=n_modules,
                                 d_latent=self.config.latent_size,
                                 r=self.config.lora_config.r,
-                                d_lora=d_lora,
+                                d_lora=self.d_lora,
                             )
                         else:
                             self.head = Mix(
                                 "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
                                 weight_shape="n_layers n_modules d_latent d_lora",
-                                # bias_shape=None,  # no bias
-                                bias_shape="n_layers n_modules d_lora",
+                                bias_shape=None,  # no bias
+                                # bias_shape="n_layers n_modules d_lora",
                                 n_layers=len(self.layer_indices),
                                 n_modules=n_modules,
                                 d_latent=self.config.latent_size,
                                 r=self.config.lora_config.r,
-                                d_lora=d_lora,
+                                d_lora=self.d_lora,
                             )
                     # else:
                     #     self.head = Mix(
@@ -546,16 +549,16 @@ class HyperLoRA(nn.Module):
         #             hidden_size=self.config.base_hidden_size,
         #         )
 
-    # def get_head_bias(self):
-    #     bias_dict = dict()
-    #     for module in self.target_modules:
-    #         bias_A = self.bias_a[module][None, ...]
-    #         bias_B = self.bias_b[module][None, ...]
+    def get_head_bias(self):
+        bias_dict = dict()
+        for module in self.target_modules:
+            bias_A = self.bias_a[module]
+            bias_B = self.bias_b[module]
 
-    #         # transpose B
-    #         bias_B = rearrange(bias_B, "bs n_layers r d_out -> bs n_layers d_out r")
-    #         bias_dict[module] = dict(A=bias_A, B=bias_B)
-    #     return bias_dict
+            # transpose B
+            # bias_B = rearrange(bias_B, "bs n_layers r d_out -> bs n_layers d_out r")
+            bias_dict[module] = dict(A=bias_A, B=bias_B)
+        return bias_dict
 
     def _to_lora_dict(
         self, flat_loras: Float[Tensor, "bs n_layers n_modules r max_io_dim"]
@@ -581,7 +584,7 @@ class HyperLoRA(nn.Module):
                 "bs n_layers r *",
             )
             # transpose B
-            B = rearrange(B, "bs n_layers r d_out -> bs n_layers d_out r")
+            # B = rearrange(B, "bs n_layers r d_out -> bs n_layers d_out r")
             if self.config.use_light_weight_lora:
                 # A = einsum(
                 #     self.pre_lora_projection[module],
@@ -593,6 +596,7 @@ class HyperLoRA(nn.Module):
                 #     B,
                 #     "d_out d_latent, bs n_layers d_latent r -> bs n_layers d_out r",
                 # )
+                # this is broken?
                 A = self.pre_lora_projection[module](A)
                 B = self.post_lora_projection[module](B)
 
@@ -617,16 +621,19 @@ class HyperLoRA(nn.Module):
         features: Float[Tensor, "bs seq_len feature_dim"],
         attn_mask: Integer[Tensor, "bs seq_len"] | None = None,
         position_ids: Integer[Tensor, "bs seq_len"] | None = None,
+        n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
     ):
-        # [bs, n_layers x n_total_modules x r, feature_dim]
+        # [bs, n_layers, n_total_modules, r, feature_dim]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            # OMG!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             lora_emb, extra_emb = self.aggregator(features, attn_mask, position_ids)
-        # lora_emb, extra_emb = unpack(
-        #     emb,
-        #     [[self.num_modules], [self.num_extra_modules]],
-        #     "bs n_layers * feature_dim",
-        # )
+
+        # TODO: add pos emb
+        # TODO:
+        # concat queries from the same chunks
+        # do self-attn
+        # unpack back to [bs, n_layers, n_total_modules, r, feature_dim]
+        # here bs = sum(n_chunks)
+        # we then
 
         # [bs, n_layers, n_modules, r, max_in_d_outim]
         flat_loras = None
@@ -662,7 +669,6 @@ class ModulatedPretrainedModel(nn.Module):
         use_base_input_as_ctx: bool = False,
         # need non-packed inputs for generation
         use_sequence_packing: bool = True,
-        lora_aggregation: Literal["mean", "sum"] = "sum",
     ):
         assert not use_base_input_as_ctx
         super().__init__()
@@ -672,8 +678,6 @@ class ModulatedPretrainedModel(nn.Module):
         self.ctx_encoder_args = ctx_encoder_args
         self.use_base_input_as_ctx = use_base_input_as_ctx
         self.use_sequence_packing = use_sequence_packing
-        self.lora_aggregation = lora_aggregation
-        self.lora_id = 1
         self.active_adapters = []
 
         self.register_module("base_model", base_model)
@@ -749,6 +753,7 @@ class ModulatedPretrainedModel(nn.Module):
             train=self.base_model.training,
             requires_grad=False,
             use_flash_attn=base_model_attn_impl == "flash_attention_2",
+            use_q_lora=self.ctx_encoder_args.quantize_ctx_encoder,
         )
         self.ctx_encoder = CTX_ENCODER_CLS[self.ctx_encoder_args.ctx_encoder_type](
             encoder_model, self.ctx_encoder_args
@@ -776,30 +781,53 @@ class ModulatedPretrainedModel(nn.Module):
                 self.base_model, self.hypernet.lora_config
             )
             logger.debug(f"peft_weights: {peft_weights}")
-            self.hypernet.head.weight.data[:] = 0
-            self.hypernet.head.bias.data[:] = 0
+            # self.hypernet.head.weight.data[:] = 0
+            r = self.hypernet_config.lora_config.r
+            nn.init.normal_(
+                self.hypernet.head.weight,
+                mean=0,
+                std=2 / sqrt(self.hypernet.config.latent_size + self.hypernet.d_lora),
+                # the head outputs per rank lora --> divide by r to scale down grad
+            )
+            # nn.init.orthogonal_(self.hypernet.head.weight, gain=1.0)
+            # self.hypernet.head.bias.data[:] = 0
 
-            for i, m in enumerate(self.hypernet.target_modules):
-                A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
-                B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
-                if self.hypernet.config.use_light_weight_lora:
-                    A = A[:, : self.hypernet.config.light_weight_latent_size]
-                    B = B[: self.hypernet.config.light_weight_latent_size]
-                if self.hypernet.config.per_rank_gen:
-                    if not self.hypernet.config.use_per_rank_bias:
-                        A = A[0:1]
-                        B = B[:, 0:1]
-                biases = [A, B.T]
+            # for i, m in enumerate(self.hypernet.target_modules):
+            #     w_shape = self.hypernet.head.weight[
+            #         ..., i, :, : self.hypernet.d_in[m]
+            #     ].shape
+            #     self.hypernet.head.weight[..., i, :, : self.hypernet.d_in[m]] = (
+            #         torch.normal(
+            #             mean=0,
+            #             std=1
+            #             / sqrt(
+            #                 self.hypernet.config.latent_size + self.hypernet.d_in[m]
+            #             ),
+            #             size=w_shape,
+            #         )
+            #     )
+            #     A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
+            #     B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
+            #     if self.hypernet.config.use_light_weight_lora:
+            #         A = A[:, : self.hypernet.config.light_weight_latent_size]
+            #         B = B[: self.hypernet.config.light_weight_latent_size]
+            #     if self.hypernet.config.per_rank_gen:
+            #         if not self.hypernet.config.use_per_rank_bias:
+            #             A = A[0:1]
+            #             B = B[:, 0:1]
+            #     biases = [A, B.T]
 
-                # bias-hyperinit
-                # init weights to zeros and bias to the base weights
-                bias_cat = torch.cat(biases, dim=1)
-                # scale the biases by the output size
-                # e.g., rank=16 gives bigger (2x?) gradient magnitudes at initialization
-                # compared to rank=8
-                r = self.hypernet_config.lora_config.r
-                bias_cat = bias_cat / r
-                self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
+            #     # bias-hyperinit
+            #     # init weights to zeros and bias to the base weights
+            #     bias_cat = torch.cat(biases, dim=1)
+            #     # scale the biases by the output size
+            #     # e.g., rank=16 gives bigger (2x?) gradient magnitudes at initialization
+            #     # compared to rank=8
+            #     r = self.hypernet_config.lora_config.r
+            #     bias_cat = bias_cat / r
+            #     self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
+
+        # self.hypernet.head.bias.requires_grad = False
 
     def state_dict(self, *args, **kwargs):
         # we assume ctx_encoder and base model is frozen here
@@ -935,8 +963,7 @@ class ModulatedPretrainedModel(nn.Module):
         generated_loras = combine_lora(
             generated_loras,
             n_ctx_chunks,
-            aggregation=self.lora_aggregation,
-            # lora_bias=self.hypernet.get_head_bias(),
+            lora_bias=self.hypernet.get_head_bias(),
         )
 
         # input_ids in model_inputs_kwargs contains only
@@ -998,7 +1025,6 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
         n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
         n_queries: Integer[Tensor, "n_ctx"] | None = None,
-        lora_aggregation: Literal["mean", "sum"] = "sum",
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
@@ -1009,8 +1035,7 @@ class ModulatedPretrainedModel(nn.Module):
         generated_loras = combine_lora(
             generated_loras,
             n_ctx_chunks,
-            aggregation=lora_aggregation,
-            # lora_bias=self.hypernet.get_head_bias(),
+            lora_bias=self.hypernet.get_head_bias(),
         )
 
         # apply lora hook to the base model

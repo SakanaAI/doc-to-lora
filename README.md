@@ -43,19 +43,24 @@ WANDB_MODE=disabled run uv run train.py configs/context_numbers_10_self_gen.yaml
 ### Synthetic
 ctx numbers
 ```bash
-WANDB_MODE=disabled run uv run train.py configs/gemma-3-1b-it/toy_exp/ctx_numbers_64_128.yaml  --model_name_or_path=google/gemma-3-1b-it --num_train_epochs=3 --per_device_train_batch_size=-1 --gradient_accumulation_steps=2 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=100 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --use_sequence_packing=True --max_packed_inp_len=2048 --max_packed_ctx_len=2048 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=per_layer_activations --n_latent_queries=8 --use_kl_loss=False --eval_on_start=True
+WANDB_MODE=disabled run uv run train.py configs/gemma-3-1b-it/toy_exp/ctx_numbers_64_128.yaml  --model_name_or_path=google/gemma-3-1b-it --num_train_epochs=3 --per_device_train_batch_size=-1 --gradient_accumulation_steps=2 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=100 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=0 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.0 --use_sequence_packing=True --max_packed_inp_len=2048 --max_packed_ctx_len=2048 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=per_layer_activations --n_latent_queries=8 --use_kl_loss=False --eval_on_start=True
+```
+
+ctx magic num
+```bash
+ WANDB_PROJECT=ctx-magic-num srun --partition=aiscilow --gpus=1 --unbuffered uv run train.py configs/toy_exp/ctx_magic_number_32_256.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=1 --per_device_train_batch_size=-1 --gradient_accumulation_steps=32 --per_device_eval_batch_size=16 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --num_pre_head_layers=1 --lora_r=8 --eval_steps=100 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=0 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --use_sequence_packing=True --max_packed_inp_len=2048 --max_packed_ctx_len=2048 --dataloader_num_workers=0 --dataloader_prefetch_factor=None --eval_on_start=False --ctx_encoder_type=early_exit --n_latent_queries=208 --use_kl_loss=False --eval_on_start=True --lora_r=8 --max_ctx_chunk_len=512 --min_ctx_chunk_len=25 --num_chunk_probs='{"1":"0.5", "2":"0.125", "3":"0.0625", "4":"0.0625", "5":"0.0625", "6":"0.0625", "7":"0.0625", "8":"0.0625"}' --max_val_samples_per_ds=100 --seed=1
 ```
 
 
 <!-- ### FWQA-v2 Level-0 Tiny
 ```bash
 WANDB_MODE=disabled run uv run train.py configs/fw_qa_v2_level_0_tiny.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=5 --per_device_train_batch_size=64 --gradient_accumulation_steps=8 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=8 --num_latent_factor=1 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --max_packed_inp_len=24000 --max_packed_ctx_len=48000 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --logging_steps=50
-```
+``` -->
 
 ### Squad only
 ```bash
-WANDB_MODE=disabled uv run train.py configs/squad.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=5 --per_device_train_batch_size=64 --gradient_accumulation_steps=8 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_self_attends_per_block=8 --num_latent_factor=1 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=5 --use_light_weight_lora=False --add_negative_prompt=False --add_repeat_prompt=False --use_sequence_packing=True --max_packed_inp_len=16000 --max_packed_ctx_len=32000 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --logging_steps=10
-``` -->
+WANDB_PROJECT=ctx-squad-test run uv run train.py configs/squad.yaml --model_name_or_path=google/gemma-2-2b-it --num_train_epochs=5 --per_device_train_batch_size=-1 --gradient_accumulation_steps=16 --per_device_eval_batch_size=64 --exp_setup=hyper_lora --aggregator_type=perceiver --target_modules=down_proj --num_blocks=8 --num_self_attn_per_block=0 --ctx_encoder_type=per_layer_activations --n_latent_queries=8 --num_pre_head_layers=1 --lora_r=8 --eval_steps=1000 --save_steps=1000 --learning_rate=4e-5 --lora_dropout=0.0 --neftune_noise_alpha=1 --use_sequence_packing=True --max_packed_inp_len=4096 --max_packed_ctx_len=4096 --per_rank_gen=True --per_layer_processing=True --gen_lora_l1_reg_coef=0.1 --logging_steps=10 --max_ctx_chunk_len=-1
+```
 
 
 ### Synthetic data generation
@@ -66,8 +71,8 @@ uv run data/generate_fav_num.py
 # new num repeat
 uv run data/generate_ctx_numbers.py
 
-# kv (8-char uuid keys, 4-digit values)
-# uv run data/generate_ctx_kv.py --key-type uuid --value-type digits
+# ctx magic num (NIAH)
+uv run data/generate_ctx_magic_number.py --tokenizer-name google/gemma-2-2b-it
 ```
 
 Self-gen for the number toy dataset
@@ -213,19 +218,28 @@ run python train.py configs/...yaml ... --from_pretrained_checkpoint=train_outpu
 ```
 
 ### Evaluation
+ctx magic num
+```bash
+# base model
+WANDB_MODE=disabled uv run run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets ctx_magic_number_32_1024 ctx_magic_number_1024_2048 ctx_magic_number_2048_3072 ctx_magic_number_3072_4096 ctx_magic_number_4096_5120 ctx_magic_number_5120_6144 ctx_magic_number_6144_7168 ctx_magic_number_7168_8192 ctx_magic_number_8192_9216 ctx_magic_number_9216_10240 ctx_magic_number_10240_11264 ctx_magic_number_11264_12288 ctx_magic_number_12288_13312 ctx_magic_number_13312_14336 ctx_magic_number_14336_15360 ctx_magic_number_15360_16384 --split test --eval_batch_size_gen=16
+
+# hypernet w/ 1024 max chunk size
+WANDB_MODE=disabled uv run run_eval.py --checkpoint_path train_outputs/runs/Aug26_05-46-31_slurm0-aiscinodeset-1_81810_f78c9c91/checkpoint-1000/pytorch_model.bin --datasets ctx_magic_number_32_1024 ctx_magic_number_1024_2048 ctx_magic_number_2048_3072 ctx_magic_number_3072_4096 ctx_magic_number_4096_5120 ctx_magic_number_5120_6144 ctx_magic_number_6144_7168 ctx_magic_number_7168_8192 ctx_magic_number_8192_9216 ctx_magic_number_9216_10240 ctx_magic_number_10240_11264 ctx_magic_number_11264_12288 ctx_magic_number_12288_13312 ctx_magic_number_13312_14336 ctx_magic_number_14336_15360 ctx_magic_number_15360_16384 --max_ctx_chunk_len=1024 --split test
+```
+
 LongBench
 ```bash
 # generative
 WANDB_MODE=disabled uv run run_eval.py --checkpoint_path train_outputs/runs/.../pytorch_model.bin --datasets negative_nq triviaqa_retrieved squad longbench_e --split test
 
 # hypernet checkpoint
-WANDB_MODE=disabled run uv run run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad ropes drop longbench/gov_report_e longbench/multifieldqa_en_e longbench/2wikimqa_e --split test --max_ctx_chunk_len -1 --lora_aggregation sum --eval_batch_size_gen 8
+WANDB_MODE=disabled run uv run run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad ropes drop longbench/gov_report_e longbench/multifieldqa_en_e longbench/2wikimqa_e --split test --max_ctx_chunk_len -1 --eval_batch_size_gen 8
 
 # squad only
 WANDB_MODE=disabled run uv run run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad --split test
 
 # chunking
-WANDB_MODE=disabled run uv run run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad --split validation --max_ctx_chunk_len 100 --max_val_samples_per_ds 10 --lora_aggregation mean
+WANDB_MODE=disabled run uv run run_eval.py --checkpoint_path train_outputs/runs/Aug02_07-51-08_slurm0-a3nodeset-9_76501_7fdab5ea/checkpoint-50000/pytorch_model.bin --datasets squad --split validation --max_ctx_chunk_len 100 --max_val_samples_per_ds 10
 
 # base model
 WANDB_MODE=disabled uv run run_eval.py --model_name_or_path google/gemma-2-2b-it --datasets negative_nq triviaqa_retrieved squad longbench_e --split test --eval_batch_size 2

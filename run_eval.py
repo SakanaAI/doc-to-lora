@@ -67,12 +67,6 @@ if __name__ == "__main__":
         help="Maximum length of context chunk for evaluation",
     )
     parser.add_argument(
-        "--lora_aggregation",
-        choices=["mean", "sum"],
-        default="sum",
-        help="LoRA aggregation method",
-    )
-    parser.add_argument(
         "--max_new_tokens",
         type=int,
         default=256,
@@ -86,6 +80,11 @@ if __name__ == "__main__":
 
     cli_args = vars(parser.parse_args())
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
+
+    if cli_args["model_name_or_path"]:
+        assert cli_args["max_ctx_chunk_len"] <= 0, (
+            f"Evaluating base model shouldn't be used with `max_ctx_chunk_len`"
+        )
 
     eval_batch_size_gen = cli_args.pop("eval_batch_size_gen")
     eval_batch_size = cli_args.pop("eval_batch_size")

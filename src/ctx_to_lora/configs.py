@@ -380,12 +380,9 @@ class CtxTrainingArguments:
             "they will be split up into multiple samples."
         },
     )
-    lora_aggregation: Literal["mean", "sum"] = field(
-        default="sum", metadata={"help": "LoRA aggregation method."}
-    )
-    random_chunking: bool = field(
-        default=False,
-        metadata={"help": "Whether to use random chunking during training."},
+    num_chunk_probs: dict = field(
+        default=None,
+        metadata={"help": "Probability distribution over chunk nums."},
     )
     max_ctx_chunk_len: int = field(
         default=-1,
@@ -400,8 +397,8 @@ class CtxTrainingArguments:
             "help": "Min context chunk length. Used only with random chunking training"
         },
     )
-    max_ctx_chunk_num: int = field(
-        default=-1,
+    max_ctx_chunk_num: int | None = field(
+        default=None,
         metadata={"help": "Max number of context chunks per sample."},
     )
     max_packed_inp_len: int | None = field(
@@ -533,6 +530,9 @@ class CtxEncoderArguments:
             "help": "Layer index for context encoder. "
             "Default to L//4 where L is the number of layers of the ctx model"
         },
+    )
+    quantize_ctx_encoder: bool = field(
+        default=False, metadata={"help": "Wheter to quantize the ctx encoder."}
     )
 
 

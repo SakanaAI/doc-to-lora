@@ -7,6 +7,7 @@ from glob import glob
 from hashlib import sha256
 from math import ceil, isclose
 from os import path
+from random import choices
 from typing import Any
 
 import datasets
@@ -210,7 +211,7 @@ def get_tokenized_dataset(
     ctx_tokenizer: PreTrainedTokenizerBase,
     max_ctx_chunk_len: int,
     min_ctx_chunk_len: int,
-    random_chunking: bool,
+    num_chunk_probs: dict[int, float] | None,
     max_ctx_chunk_num: int,
     add_ctx_to_chat: bool,
     use_kl_loss: bool,
@@ -236,7 +237,7 @@ def get_tokenized_dataset(
         add_ctx_to_chat=add_ctx_to_chat,
         max_ctx_chunk_len=max_ctx_chunk_len,
         min_ctx_chunk_len=min_ctx_chunk_len,
-        random_chunking=random_chunking,
+        num_chunk_probs=num_chunk_probs,
         max_ctx_chunk_num=max_ctx_chunk_num,
         need_ctx_ids=need_ctx_ids,
         split=split,
@@ -308,7 +309,7 @@ def construct_and_tokenize_ctx_qa(
     need_ctx_ids,
     max_ctx_chunk_len,
     min_ctx_chunk_len,
-    random_chunking,
+    num_chunk_probs,
     max_ctx_chunk_num,
     ds,
     split,
@@ -376,16 +377,16 @@ def construct_and_tokenize_ctx_qa(
         # with some big caveats, e.g., losing order info
         split_ctx_kwargs = {
             "max_chunk_len": max_ctx_chunk_len,
-            "min_chunk_len": min_ctx_chunk_len
-            if min_ctx_chunk_len > 0
-            else max_ctx_chunk_len,
-            "random_chunking": random_chunking,
+            "min_chunk_len": min_ctx_chunk_len,
+            "num_chunk_probs": num_chunk_probs,
             "max_num_split": max_ctx_chunk_num,
             "model_name_or_path": tokenizer.name_or_path,
             "is_train": is_train,
         }
         logging.info(f"Chunking context with {split_ctx_kwargs=}")
-        tokenized_ds = tokenized_ds.map(split_too_long_ctx, fn_kwargs=split_ctx_kwargs)
+        tokenized_ds = tokenized_ds.map(
+            split_too_long_ctx, fn_kwargs=split_ctx_kwargs, num_proc=16
+        )
         logging.info(
             f"Avg. num chunks per ctx: {np.mean(list(map(len, tokenized_ds['ctx_ids'])))}"
         )
@@ -405,14 +406,14 @@ def construct_and_tokenize_ctx_qa(
     if "train" not in split:
         # squeeze since we always have one query per sample in eval
         tokenized_ds = tokenized_ds.map(squeeze_tokens, num_proc=num_proc)
-        tokenized_ds = tokenized_ds.map(
-            truncate_middle_if_too_long,
-            fn_kwargs={
-                "max_length": base_model_max_len,
-                "columns": ["input_ids", "labels"],
-                "max_new_tokens": max_new_tokens,
-            },
-        )
+        # tokenized_ds = tokenized_ds.map(
+        #     truncate_middle_if_too_long,
+        #     fn_kwargs={
+        #         "max_length": base_model_max_len,
+        #         "columns": ["input_ids", "labels"],
+        #         "max_new_tokens": max_new_tokens,
+        #     },
+        # )
         tokenized_ds = tokenized_ds.map(
             add_length_info,
             fn_kwargs={"columns": ["input_ids"]},
@@ -575,11 +576,11 @@ def convert_ctx_prompt_response_to_messages(
 def split_too_long_ctx(
     sample: dict[str, Any],
     model_name_or_path: str,
+    num_chunk_probs: dict[int, float] | None,
     max_chunk_len: int,
     min_chunk_len: int,
-    max_num_split: int,
+    max_num_split: int | None,
     is_train: bool,
-    random_chunking: bool,
 ) -> dict[str, Any]:
     """
     Split context into smaller chunks if it exceeds the maximum length.
@@ -589,47 +590,52 @@ def split_too_long_ctx(
         max_chunk_len: Maximum length for each context chunk
         max_num_split: Maximum number of splits allowed
 
-        # Training
-        random_chunking: Wheter to use stochastic chunking with
-                         `min_chunk_len` to `max_chunk_len` sizes
-        min_chunk_len: Minimum length for each context chunk (used when `random_chunking=True`)
-
     Returns:
         Dictionary with split context data
     """
 
     chunk_len = max_chunk_len
-    if is_train:
-        # TODO: for training, we might wanna sort the context by num chunks
-        # since merging a batch of chunked loras need padded in the rank axis
-        # e.g., ctx1 has 5 chunks (rank-48), ctx2 has 10 chunks (rank-88)
+    ctx_ids = sample["ctx_ids"]
+    # Early exits
+    if chunk_len <= 0 and max_num_split is None:
+        return {"ctx_ids": [ctx_ids]}
 
-        # e.g., even if the ctx is not too long, we still split it randomly?
-        # say 0-4k is max len for one split,
-        # for some ctx shorter than 4k, we leave it as is
-        # for some we split to smaller chunks
-        if random_chunking:
-            chunk_len = random.randint(min_chunk_len, max_chunk_len)
+    n_chunks = None  # will be sampled (train) or derived (eval)
+    if is_train and num_chunk_probs is not None:
+        # Adjust theoretical upper bound based on min_chunk_len if provided
+        if min_chunk_len:
+            max_num_split = ceil(len(ctx_ids) / min_chunk_len)
+        # New logic: sample number of chunks from num_chunk_probs (after filtering)
+
+        # Keep only feasible chunk counts <= max_num_split and > 0
+        if max_num_split is not None:
+            filt = {k: v for k, v in num_chunk_probs.items() if 0 < k <= max_num_split}
+        else:
+            filt = num_chunk_probs
+
+        # Ensure each chunk will not exceed max_chunk_len; enforce minimum required chunks
+        min_required = (
+            max(1, ceil(len(ctx_ids) / max_chunk_len)) if max_chunk_len > 0 else 1
+        )
+        # Remove options that would yield chunk length > max_chunk_len
+        filt = {k: v for k, v in filt.items() if k >= min_required}
+        n_chunks = choices(list(filt.keys()), weights=list(filt.values()), k=1)[0]
+
+    # Derive n_chunks if not sampled (e.g., eval or fallback)
+    if n_chunks is None:
+        n_chunks = ceil(len(ctx_ids) / chunk_len)
+    # Safety: at least 1
+    n_chunks = max(1, n_chunks)
+    if n_chunks == 1:
+        return {"ctx_ids": [ctx_ids]}
+
+    avg_len = ceil(len(ctx_ids) / n_chunks)
+    chunks = [ctx_ids[i : i + avg_len] for i in range(0, len(ctx_ids), avg_len)]
 
     ctx_affixes = CTX_AFFIXES[model_name_or_path]
     prefix = ctx_affixes["prefix"]
     suffix = ctx_affixes["suffix"]
-    ctx_ids = sample["ctx_ids"]
-
-    if chunk_len <= 0 and max_num_split <= 0:
-        return {"ctx_ids": [ctx_ids]}
-
-    if len(ctx_ids) <= chunk_len:
-        return {"ctx_ids": [ctx_ids]}
-
-    # uniform chunking
-    n_chunks = ceil(len(ctx_ids) / chunk_len)
-    avg_len = ceil(len(ctx_ids) / n_chunks)
-
-    # Split the context into smaller chunks
-    chunks = [ctx_ids[i : i + avg_len] for i in range(0, len(ctx_ids), avg_len)]
-
-    # this would exceed the avg_len a bit
+    # Apply affixes
     chunks[0] = chunks[0] + suffix
     for i in range(1, len(chunks) - 1):
         chunks[i] = prefix + chunks[i] + suffix

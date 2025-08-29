@@ -728,7 +728,6 @@ def evaluate(
     args: Namespace,
     split: str,
     max_ctx_chunk_len: int,
-    lora_aggregation: str,
     max_new_tokens: int,
     generative: bool,
 ) -> dict[str, dict]:
@@ -789,8 +788,8 @@ def evaluate(
         max_qas_per_sample=1,
         max_ctx_chunk_len=max_ctx_chunk_len,
         min_ctx_chunk_len=-1,
-        random_chunking=False,
-        max_ctx_chunk_num=-1,
+        num_chunk_probs=None,
+        max_ctx_chunk_num=None,
         base_model_max_len=model.base_model.config.max_position_embeddings,
         tokenizer=tokenizer,
         ctx_model_max_len=ctx_model_max_len,
@@ -868,8 +867,6 @@ def evaluate(
 
     if max_ctx_chunk_len > 0:
         model.generate = model.generate_with_multi_loras
-        print(f"Using {lora_aggregation} for aggregation generated LoRAs.")
-        model.generate = partial(model.generate, lora_aggregation=lora_aggregation)
 
     trainer_kwargs = {
         "model": model,
@@ -922,7 +919,6 @@ def run_eval(
     eval_batch_size: int = 8,
     max_val_samples_per_ds: int = -1,
     max_ctx_chunk_len: int = -1,
-    lora_aggregation: str = "sum",
     remove_context: bool = False,
     max_new_tokens: int = 256,
     generative: bool = False,
@@ -992,7 +988,6 @@ def run_eval(
         args,
         split,
         max_ctx_chunk_len,
-        lora_aggregation,
         max_new_tokens,
         generative=generative,
     )

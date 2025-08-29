@@ -695,6 +695,9 @@ DS_KWARGS = {
 tok_bins = [(64, 128), (128, 256), (256, 512)] + [
     (512 + 256 * i, 512 + 256 * (i + 1)) for i in range(14)
 ]
+tok_bins += [(32, 128), (128, 256), (256, 512), (512, 1024), (32, 1024)] + [
+    (1024 * i, 1024 * (i + 1)) for i in range(1, 16)
+]
 for toy_ds_name in ["ctx_numbers", "ctx_kv", "ctx_magic_number"]:
     for tok_bin in tok_bins:
         DS_KWARGS[f"{toy_ds_name}_{tok_bin[0]}_{tok_bin[1]}"] = dict(
