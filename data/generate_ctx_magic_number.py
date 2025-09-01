@@ -168,6 +168,7 @@ def main():
     tok_bins = [(32, 128), (128, 256), (256, 512), (512, 1024), (32, 1024)] + [
         (1024 * i, 1024 * (i + 1)) for i in range(1, 16)
     ]
+    tok_bins += [(2**14 + 2**12 * (i), 2**14 + 2**12 * (i + 1)) for i in range(4)]
     if args.only_first_n_bins is not None:
         tok_bins = tok_bins[: args.only_first_n_bins]
 

@@ -19,6 +19,7 @@ wandb/
 *outputs/
 plots/
 *.out
+*.err
 *.pt
 *.pth
 *.bin
