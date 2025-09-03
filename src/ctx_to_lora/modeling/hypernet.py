@@ -650,9 +650,8 @@ class HyperLoRA(nn.Module):
         flat_loras = None
         if self.target_modules:
             lora_emb = self.layers(lora_emb)
-            d = lora_emb.shape[-1]
             norm = torch.norm(lora_emb, dim=-1, keepdim=True)
-            norm_lora_emb = lora_emb / norm * sqrt(d)  # is this too big??
+            norm_lora_emb = lora_emb / norm
             flat_loras = self.head(norm_lora_emb)
 
         flat_layernorms = None
@@ -801,7 +800,7 @@ class ModulatedPretrainedModel(nn.Module):
             nn.init.normal_(
                 self.hypernet.head.weight,
                 mean=0,
-                std=1
+                std=0.5
                 / sqrt(self.hypernet.config.latent_size + self.hypernet.d_lora * r),
                 # the head outputs per rank lora --> divide by r to scale down grad
             )
