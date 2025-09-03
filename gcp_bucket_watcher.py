@@ -26,6 +26,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 try:
     from google.cloud import storage  # type: ignore
@@ -42,6 +43,39 @@ class ObjectMeta:  # Unified meta for local + remote
     size: int  # bytes
 
 
+def parse_time_string(time_str: str) -> float:
+    """Parse human-readable time string to timestamp.
+
+    Supports formats:
+    - ISO format: 2024-01-15T10:30:00 or 2024-01-15 10:30:00
+    - Date only: 2024-01-15 (assumes 00:00:00)
+    - Unix timestamp: 1705315800
+    """
+    # Try parsing as unix timestamp first
+    try:
+        return float(time_str)
+    except ValueError:
+        pass
+
+    # Try various datetime formats
+    formats = [
+        "%Y-%m-%dT%H:%M:%S",  # 2024-01-15T10:30:00
+        "%Y-%m-%d %H:%M:%S",  # 2024-01-15 10:30:00
+        "%Y-%m-%dT%H:%M",  # 2024-01-15T10:30
+        "%Y-%m-%d %H:%M",  # 2024-01-15 10:30
+        "%Y-%m-%d",  # 2024-01-15
+    ]
+
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(time_str, fmt)
+            return dt.timestamp()
+        except ValueError:
+            continue
+
+    raise ValueError(f"Unable to parse time string: {time_str}")
+
+
 def parse_globs(spec: str | None) -> list[str]:
     if not spec:
         return []
@@ -49,12 +83,18 @@ def parse_globs(spec: str | None) -> list[str]:
 
 
 def should_skip(
-    rel_path: str, includes: Sequence[str], excludes: Sequence[str]
+    rel_path: str,
+    includes: Sequence[str],
+    excludes: Sequence[str],
+    meta: ObjectMeta | None = None,
+    from_time: float | None = None,
 ) -> bool:
     base = os.path.basename(rel_path)
     if excludes and any(fnmatch.fnmatch(base, p) for p in excludes):
         return True
     if includes and not any(fnmatch.fnmatch(base, p) for p in includes):
+        return True
+    if from_time is not None and meta is not None and meta.updated < from_time:
         return True
     return False
 
@@ -156,7 +196,7 @@ def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
     changed = 0
     if args.upload:  # local -> remote (original tolerance 2s)
         for rel, meta in local.items():
-            if should_skip(rel, includes, excludes):
+            if should_skip(rel, includes, excludes, meta, args.from_time):
                 continue
             remote_meta = remote.get(rel)
             # For uploads we consider a file up-to-date if sizes match and the remote
@@ -186,7 +226,7 @@ def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
         downloaded_set, tombstones = _load_state(args.dest)
         state_dirty = False
         for rel, meta in remote.items():
-            if should_skip(rel, includes, excludes):
+            if should_skip(rel, includes, excludes, meta, args.from_time):
                 continue
             # Respect user-deleted files (tombstones)
             if rel in tombstones:
@@ -198,6 +238,14 @@ def sync_cycle(args: argparse.Namespace, client: storage.Client) -> int:
                 state_dirty = True
                 continue
             local_meta = local.get(rel)
+
+            # Skip if local file is newer than remote (avoid overwriting newer local files)
+            if local_meta and local_meta.updated > meta.updated + 1.0:  # 1s tolerance
+                if rel not in downloaded_set:
+                    downloaded_set.add(rel)
+                    state_dirty = True
+                continue
+
             if needs_transfer(meta, local_meta, tolerance=1.0):
                 print(f"[downloading] {rel} ({meta.size} bytes)")
                 download_file(client, args.bucket, args.prefix, meta, args.dest)
@@ -253,12 +301,25 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     p.add_argument("--include", help="Comma separated glob(s) to include (default all)")
     p.add_argument("--exclude", help="Comma separated glob(s) to exclude")
+    p.add_argument(
+        "--from-time",
+        help="Only sync files modified after this time (e.g. '2024-01-15', '2024-01-15T10:30:00', or unix timestamp)",
+    )
     p.add_argument("--credentials", help="Path to service account JSON (optional)")
     return p.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+
+    # Parse from_time if provided
+    if args.from_time:
+        try:
+            args.from_time = parse_time_string(args.from_time)
+        except ValueError as e:
+            print(f"Error parsing --from-time: {e}", file=sys.stderr)
+            return 1
+
     client = build_client(args)
     os.makedirs(args.dest, exist_ok=True)
     try:
