@@ -492,6 +492,9 @@ class HypernetArguments:
         default=False,
         metadata={"help": "Whether to use per-rank generation."},
     )
+    use_bias: bool = field(
+        default=True, metadata={"help": "Whether to include data-dependent LoRA"}
+    )
     use_per_rank_bias: bool = field(
         default=False, metadata={"help": "Whether to use per-rank bias."}
     )
