@@ -306,6 +306,19 @@ class HyperLoRA(nn.Module):
                 }
             )
 
+            self.scaler_A = nn.ParameterDict(
+                {
+                    m: nn.Parameter(torch.ones((1, self.n_layers, self.r, 1)))
+                    for m in self.target_modules
+                }
+            )
+            self.scaler_B = nn.ParameterDict(
+                {
+                    m: nn.Parameter(torch.zeros((1, self.n_layers, self.r, 1)))
+                    for m in self.target_modules
+                }
+            )
+
             if self.config.use_light_weight_lora:
                 # light-weight lora projection (per layer, per module)
                 # self.pre_lora_projection = nn.ParameterDict(
@@ -596,6 +609,10 @@ class HyperLoRA(nn.Module):
             )
             # transpose B
             # B = rearrange(B, "bs n_layers r d_out -> bs n_layers d_out r")
+
+            # apparently doing A * self.scaler_A is slow due to broadcasting
+            A = torch.einsum("ijkl,ijkl->ijkl", A, self.scaler_A[module])
+            B = torch.einsum("ijkl,ijkl->ijkl", B, self.scaler_B[module])
             if self.config.use_light_weight_lora:
                 # A = einsum(
                 #     self.pre_lora_projection[module],
@@ -690,6 +707,7 @@ class ModulatedPretrainedModel(nn.Module):
         self.ctx_encoder_args = ctx_encoder_args
         self.use_base_input_as_ctx = use_base_input_as_ctx
         self.use_sequence_packing = use_sequence_packing
+        self.model_accepts_loss_kwargs = True
         self.active_adapters = []
 
         self.register_module("base_model", base_model)
@@ -975,56 +993,59 @@ class ModulatedPretrainedModel(nn.Module):
                 ctx_ids, ctx_attn_mask, ctx_position_ids
             )
 
-        generated_loras = combine_lora(
-            generated_loras,
-            n_ctx_chunks,
-            lora_bias=self.hypernet.get_head_bias(),
-        )
+        if generated_loras is not None:
+            generated_loras = combine_lora(
+                generated_loras,
+                n_ctx_chunks,
+                lora_bias=self.hypernet.get_head_bias(),
+            )
 
-        # input_ids in model_inputs_kwargs contains only
-        # prompt + response (for hypernet training)
-        position_ids = (
-            model_inputs_kwargs["position_ids"]
-            if "position_ids" in model_inputs_kwargs
-            else None
-        )
-        # with (
-        #     apply_generated_loras(
-        #         self.base_model,
-        #         generated_loras,
-        #         self.hypernet.layer_indices,
-        #         position_ids,
-        #         self.training,
-        #     ),
-        #     apply_generated_layernorm(
-        #         self.base_model,
-        #         generated_layernorms,
-        #         self.hypernet.layer_indices,
-        #         position_ids,
-        #         self.training,
-        #     ),
-        # ):
-        #     model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
+            # input_ids in model_inputs_kwargs contains only
+            # prompt + response (for hypernet training)
+            position_ids = (
+                model_inputs_kwargs["position_ids"]
+                if "position_ids" in model_inputs_kwargs
+                else None
+            )
+            # with (
+            #     apply_generated_loras(
+            #         self.base_model,
+            #         generated_loras,
+            #         self.hypernet.layer_indices,
+            #         position_ids,
+            #         self.training,
+            #     ),
+            #     apply_generated_layernorm(
+            #         self.base_model,
+            #         generated_layernorms,
+            #         self.hypernet.layer_indices,
+            #         position_ids,
+            #         self.training,
+            #     ),
+            # ):
+            #     model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
-        if n_queries is None:
-            if ctx_position_ids is None:
-                n_queries = torch.ones(
-                    ctx_ids.shape[0], dtype=torch.int32, device=self.device
-                )
-            else:
-                # quite redundant (we do cu_seqlens many places)
-                # TODO: compute cu_seqlens here and propagate that
-                n_queries = torch.ones(
-                    (ctx_position_ids == 0).sum(), dtype=torch.int32, device=self.device
-                )
+            if n_queries is None:
+                if ctx_position_ids is None:
+                    n_queries = torch.ones(
+                        ctx_ids.shape[0], dtype=torch.int32, device=self.device
+                    )
+                else:
+                    # quite redundant (we do cu_seqlens many places)
+                    # TODO: compute cu_seqlens here and propagate that
+                    n_queries = torch.ones(
+                        (ctx_position_ids == 0).sum(),
+                        dtype=torch.int32,
+                        device=self.device,
+                    )
 
-        apply_lora_to_layers(
-            self.base_model,
-            self.hypernet.layer_indices,
-            generated_loras,
-            n_queries,
-            position_ids,
-        )
+            apply_lora_to_layers(
+                self.base_model,
+                self.hypernet.layer_indices,
+                generated_loras,
+                n_queries,
+                position_ids,
+            )
         model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
         if return_generated_lora:
@@ -1133,42 +1154,44 @@ class ModulatedPretrainedModel(nn.Module):
                 ctx_ids, ctx_attn_mask, ctx_position_ids
             )
 
-        # generated_loras = combine_lora(
-        #     generated_loras,
-        #     n_chunks=n_ctx_chunks,
-        #     aggregation="sum",
-        #     lora_bias=self.hypernet.get_head_bias(),
-        # )
+        if generated_loras is not None:
+            generated_loras = combine_lora(
+                generated_loras,
+                n_ctx_chunks,
+                lora_bias=self.hypernet.get_head_bias(),
+            )
 
-        # # for generation the ctx_ids are batched not packed
-        # ctx_ids_list = torch.split(ctx_ids, n_ctx_chunks, dim=0)
+            # # for generation the ctx_ids are batched not packed
+            # ctx_ids_list = torch.split(ctx_ids, n_ctx_chunks, dim=0)
 
-        # apply lora hook to the base model
-        # TODO: we dont this position_ids for generation?
-        position_ids = (
-            model_inputs_kwargs["position_ids"]
-            if "position_ids" in model_inputs_kwargs
-            else None
-        )
-        if n_queries is None:
-            if ctx_position_ids is None:
-                n_queries = torch.ones(
-                    ctx_ids.shape[0], dtype=torch.int32, device=self.device
-                )
-            else:
-                # quite redundant (we do cu_seqlens many places)
-                # TODO: compute cu_seqlens here and propagate that
-                n_queries = torch.ones(
-                    (ctx_position_ids == 0).sum(), dtype=torch.int32, device=self.device
-                )
+            # apply lora hook to the base model
+            # TODO: we dont this position_ids for generation?
+            position_ids = (
+                model_inputs_kwargs["position_ids"]
+                if "position_ids" in model_inputs_kwargs
+                else None
+            )
+            if n_queries is None:
+                if ctx_position_ids is None:
+                    n_queries = torch.ones(
+                        ctx_ids.shape[0], dtype=torch.int32, device=self.device
+                    )
+                else:
+                    # quite redundant (we do cu_seqlens many places)
+                    # TODO: compute cu_seqlens here and propagate that
+                    n_queries = torch.ones(
+                        (ctx_position_ids == 0).sum(),
+                        dtype=torch.int32,
+                        device=self.device,
+                    )
 
-        apply_lora_to_layers(
-            self.base_model,
-            self.hypernet.layer_indices,
-            generated_loras,
-            n_queries,
-            position_ids,
-        )
+            apply_lora_to_layers(
+                self.base_model,
+                self.hypernet.layer_indices,
+                generated_loras,
+                n_queries,
+                position_ids,
+            )
         model_outputs = self.base_model.generate(
             *model_inputs_args, **model_inputs_kwargs
         )
