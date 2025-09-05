@@ -115,5 +115,4 @@ if __name__ == "__main__":
             print("=" * 80)
             clear_gpu()
             watcher.update(file)
-
-        watcher.save_state()
+            watcher.save_state()
