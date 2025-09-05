@@ -103,7 +103,7 @@ gsutil -m rsync -r data/raw_datasets/self_gen gs://ctx-to-lora/data/raw_datasets
 mkdir -p data/raw_datasets/self_gen
 gsutil -m rsync -r gs://ctx-to-lora/data/raw_datasets/self_gen data/raw_datasets/self_gen
 
-# self-gen eval
+# download only self-gen eval
 mkdir -p data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/fw_qa_v2/min_0_to_2000/train/
 gsutil -m cp -r gs://ctx-to-lora/data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/fw_qa_v2/min_0_to_2000/train/*level_0_val*.parquet data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/fw_qa_v2/min_0_to_2000/train/
 ```
