@@ -164,13 +164,19 @@ class DistillationTrainer(ModulatedModelTrainer):
         ##### KL loss
         outputs_logits = outputs.logits[label_pos[0], label_pos[1] - 1]  # shift back 1
 
-        teacher_logp = torch.full_like(outputs_logits, -torch.inf)
-        teacher_logp.scatter_(1, indices, target_logp)
-        # reduction = "batchmean" if num_items_in_batch is None else "sum"
+        logq_full_denom = torch.logsumexp(outputs_logits, dim=-1, keepdim=True)  # (N,1)
+        selected_logits = outputs_logits.gather(1, indices)  # (N,K)
+        # log softmax at selected indices
+        logq_selected = selected_logits - logq_full_denom
+        p = target_logp.exp()
+        loss = -(p * logq_selected).sum(dim=-1)
 
-        p = teacher_logp.exp()
-        logq = nn.functional.log_softmax(outputs_logits, dim=-1)
-        loss = -torch.sum(p * logq, dim=-1)
+        # teacher_logp = torch.full_like(outputs_logits, -torch.inf)
+        # teacher_logp.scatter_(1, indices, target_logp)
+        # # reduction = "batchmean" if num_items_in_batch is None else "sum"
+        # p = teacher_logp.exp()
+        # logq = nn.functional.log_softmax(outputs_logits, dim=-1)
+        # loss = -torch.sum(p * logq, dim=-1)
 
         if self.use_per_ctx_average_loss:
             loss = per_ctx_loss_kl(inputs, labels, loss)
