@@ -428,7 +428,7 @@ class CtxTrainingArguments:
         metadata={"help": "Whether to use KL loss."},
     )
     use_per_ctx_average_loss: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to use per-context average loss."},
     )
     gen_lora_l1_reg_coef: float = field(
