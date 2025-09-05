@@ -3,14 +3,87 @@ import logging
 import torch
 from torch import nn
 from transformers import Trainer
-from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
-from transformers.trainer import _is_peft_model
 from transformers.trainer_pt_utils import get_parameter_names
 from transformers.trainer_utils import IntervalStrategy
 
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 
 logger = logging.getLogger()
+
+
+def per_ctx_loss_ce(inputs, labels, loss):
+    # loss still has masked out elem (0 at labels=-100)
+    n_queries_per_ctx = inputs["n_queries"].tolist()
+
+    position_ids = inputs["position_ids"].squeeze(0)
+    # account only label positions
+    label_mask = labels.squeeze(0) != -100
+    label_pos_ids = label_mask * position_ids
+    label_pos_ids_diff = label_pos_ids.diff(
+        append=torch.tensor([0], device=position_ids.device)
+    )
+
+    # assumes the input starts with non-assistant tokens
+    start_label_pos = torch.where((label_pos_ids_diff > 0) * ~label_mask)[0]
+    end_label_pos = torch.where((label_pos_ids_diff < 0) * label_mask)[0]
+
+    label_seq_lens = end_label_pos - start_label_pos
+
+    # these stack and split can be optimized but let's keep it simple
+    # mean across tokens of each q
+    qa_losses = torch.stack(
+        [
+            loss[start : start + llen].mean()
+            for start, llen in zip(start_label_pos, label_seq_lens)
+        ]
+    )
+
+    # mean across queries of each ctx
+    per_ctx_losses = [ql.mean() for ql in torch.split(qa_losses, n_queries_per_ctx)]
+
+    # per-ctx loss
+    loss = torch.stack(per_ctx_losses)
+    return loss
+
+
+def per_ctx_loss_kl(inputs, labels, loss):
+    # loss is compact (label indices selected)
+    n_queries_per_ctx = inputs["n_queries"].tolist()
+
+    position_ids = inputs["position_ids"].squeeze(0)
+    # account only label positions
+    label_mask = labels.squeeze(0) != -100
+    label_pos_ids = label_mask * position_ids
+    label_pos_ids_diff = label_pos_ids.diff(
+        append=torch.tensor([0], device=position_ids.device)
+    )
+    # assumes the input starts with non-assistant tokens
+    start_label_pos = torch.where((label_pos_ids_diff > 0) * ~label_mask)[0]
+    end_label_pos = torch.where((label_pos_ids_diff < 0) * label_mask)[0]
+
+    label_seq_lens = end_label_pos - start_label_pos
+
+    # find equiv start indices in the already sliced loss vector
+    cu_label_seq_lens = torch.cumsum(label_seq_lens, dim=0)
+    start_indices = torch.cat(
+        (
+            torch.tensor([0], device=cu_label_seq_lens.device),
+            cu_label_seq_lens[:-1],
+        )
+    )
+
+    # these stack and split can be optimized but let's keep it simple
+    # mean across tokens of each q
+    qa_losses = torch.stack(
+        [loss[start:end].mean() for start, end in zip(start_indices, cu_label_seq_lens)]
+    )
+
+    # mean across queries of each ctx
+    per_ctx_losses = [ql.mean() for ql in torch.split(qa_losses, n_queries_per_ctx)]
+
+    # per-ctx loss
+    loss = torch.stack(per_ctx_losses)
+    return loss
 
 
 class ModulatedModelTrainer(Trainer):
@@ -36,14 +109,21 @@ class ModulatedModelTrainer(Trainer):
             num_items_in_batch = dict()
             num_items_in_batch["ctx"] = torch.tensor(
                 sum([batch["n_ctx_chunks"].numel() for batch in batch_samples])
-            )
+            ).to(device)
+            # should we avg over num chunks?
+            # num_items_in_batch["ctx"] = sum(
+            #     [(batch["ctx_position_ids"] == 0).sum() for batch in batch_samples]
+            # )
             num_items_in_batch["labels"] = sum(
                 [(batch["labels"].ne(-100)).sum() for batch in batch_samples]
-            )
+            ).to(device)
 
         if num_items_in_batch is not None:
             if self.args.average_tokens_across_devices:
-                num_items_in_batch = self.accelerator.gather(num_items_in_batch).sum()
+                for k in num_items_in_batch:
+                    num_items_in_batch[k] = self.accelerator.gather(
+                        num_items_in_batch[k]
+                    ).sum()
 
             if torch.is_tensor(num_items_in_batch):
                 num_items_in_batch = num_items_in_batch.to(device)
@@ -68,6 +148,7 @@ class DistillationTrainer(ModulatedModelTrainer):
         # meaning that we should always scale the loss wrt `num_items_in_batch`
         # (average over the number of items in the accumulated batch)
 
+        is_train = num_items_in_batch is not None
         labels = inputs.pop("labels", None)
         label_pos = torch.where(labels != -100)
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
@@ -92,45 +173,9 @@ class DistillationTrainer(ModulatedModelTrainer):
         loss = -torch.sum(p * logq, dim=-1)
 
         if self.use_per_ctx_average_loss:
-            n_queries_per_ctx = inputs["n_queries"].tolist()
+            loss = per_ctx_loss_kl(inputs, labels, loss)
 
-            position_ids = inputs["position_ids"].squeeze(0)
-            # account only label positions
-            label_mask = labels.squeeze(0) != -100
-            label_pos_ids = label_mask * position_ids
-            label_pos_ids_diff = label_pos_ids.diff(
-                append=torch.tensor([0], device=position_ids.device)
-            )
-            start_label_pos = torch.where((label_pos_ids_diff > 0) * ~label_mask)[0]
-            end_label_pos = torch.where((label_pos_ids_diff < 0) * label_mask)[0]
-
-            label_seq_lens = end_label_pos - start_label_pos
-            cu_label_seq_lens = torch.cumsum(label_seq_lens, dim=0)
-            start_indices = torch.cat(
-                (
-                    torch.tensor([0], device=cu_label_seq_lens.device),
-                    cu_label_seq_lens[:-1],
-                )
-            )
-
-            # these stack and split can be optimized but let's keep it simple
-            # mean across tokens of each q
-            qa_losses = torch.stack(
-                [
-                    loss[start:end].mean()
-                    for start, end in zip(start_indices, cu_label_seq_lens)
-                ]
-            )
-
-            # mean across queries of each ctx
-            per_ctx_losses = [
-                ctx.mean() for ctx in torch.split(qa_losses, n_queries_per_ctx)
-            ]
-
-            # mean across contexts
-            loss = torch.stack(per_ctx_losses)
-
-        if num_items_in_batch is not None:
+        if is_train:
             if self.use_per_ctx_average_loss:
                 loss = loss.sum() / num_items_in_batch["ctx"]
             else:
@@ -157,15 +202,15 @@ class DistillationTrainer(ModulatedModelTrainer):
         for module, lora in gen_loras.items():
             l1_norm += lora["A"].abs().sum(0).mean() + lora["B"].abs().sum(0).mean()
         l1_norm /= n_modules
-        if num_items_in_batch is not None:
+        if is_train:
             # during eval `num_items_in_batch` will be None
             l1_norm /= num_items_in_batch["ctx"]
 
         total_loss = loss + self.gen_lora_l1_reg_coef * l1_norm
         #####
 
-        scaler = self.args.gradient_accumulation_steps
-        if self.args.average_tokens_across_devices and num_items_in_batch is not None:
+        scaler = self.args.gradient_accumulation_steps if is_train else 1
+        if self.args.average_tokens_across_devices and is_train:
             total_loss *= self.accelerator.num_processes
             scaler *= self.accelerator.num_processes
 
@@ -185,9 +230,40 @@ class DistillationTrainer(ModulatedModelTrainer):
         return (total_loss, outputs) if return_outputs else total_loss
 
 
+def causal_lm_ce_loss(
+    logits,
+    labels,
+    vocab_size: int,
+    num_items_in_batch: torch.Tensor | None = None,
+    ignore_index: int = -100,
+    shift_labels: torch.Tensor | None = None,
+    **kwargs,
+) -> torch.Tensor:
+    # Upcast to float if we need to compute the loss to avoid potential precision issues
+    logits = logits.float()
+
+    if shift_labels is None:
+        # Shift so that tokens < n predict n
+        labels = nn.functional.pad(labels, (0, 1), value=ignore_index)
+        shift_labels = labels[..., 1:].contiguous()
+
+    # Flatten the tokens
+    logits = logits.view(-1, vocab_size)
+    shift_labels = shift_labels.view(-1)
+    # Enable model parallelism
+    shift_labels = shift_labels.to(logits.device)
+    # loss = fixed_cross_entropy(
+    #     logits, shift_labels, num_items_in_batch, ignore_index, **kwargs
+    # )
+    loss = nn.functional.cross_entropy(logits, shift_labels, reduction="none")
+
+    return loss
+
+
 class CrossEntropyTrainer(ModulatedModelTrainer):
     def __init__(self, *args, **kwargs):
         self.gen_lora_l1_reg_coef = kwargs.pop("gen_lora_l1_reg_coef", 0.0)
+        self.use_per_ctx_average_loss = kwargs.pop("use_per_ctx_average_loss", False)
         super().__init__(*args, **kwargs)
 
     def compute_loss(
@@ -198,48 +274,68 @@ class CrossEntropyTrainer(ModulatedModelTrainer):
         By default, all models return the loss in the first element.
         Subclass and override for custom behavior.
         """
-        if (
-            self.label_smoother is not None or self.compute_loss_func is not None
-        ) and "labels" in inputs:
-            labels = inputs.pop("labels")
-        else:
-            labels = None
 
-        loss_kwargs = {}
-        if num_items_in_batch is not None:
-            loss_kwargs["num_items_in_batch"] = num_items_in_batch["labels"]
-        inputs = {**inputs, **loss_kwargs}
+        is_train = num_items_in_batch is not None
+        labels = inputs.pop("labels", None)
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
-        # Save past state if it exists
-        if self.args.past_index >= 0:
-            self._past = outputs[self.args.past_index]
+        # [1, tot_seq_len]
+        logits = outputs.logits
 
-        if labels is not None:
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            if _is_peft_model(unwrapped_model):
-                model_name = unwrapped_model.base_model.model._get_name()
+        # [tot_seq_len]
+        loss = causal_lm_ce_loss(logits, labels, self.model.vocab_size)
+
+        if self.use_per_ctx_average_loss:
+            loss = per_ctx_loss_ce(inputs, labels, loss)
+
+        if is_train:
+            if self.use_per_ctx_average_loss:
+                loss = loss.sum() / num_items_in_batch["ctx"]
             else:
-                model_name = unwrapped_model._get_name()
-            # User-defined compute_loss function
-            if self.compute_loss_func is not None:
-                loss = self.compute_loss_func(
-                    outputs, labels, num_items_in_batch=num_items_in_batch["labels"]
-                )
-            elif model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = self.label_smoother(outputs, labels, shift_labels=True)
-            else:
-                loss = self.label_smoother(outputs, labels)
+                loss = loss.sum() / num_items_in_batch["labels"]
         else:
-            if isinstance(outputs, dict) and "loss" not in outputs:
-                raise ValueError(
-                    "The model did not return a loss from the inputs, "
-                    "only the following keys: "
-                    f"{','.join(outputs.keys())}. "
-                    "For reference, the inputs it received are "
-                    f"{','.join(inputs.keys())}."
-                )
-            # We don't use .loss here since the model may return tuples instead of ModelOutput.
-            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+            # eval
+            loss = loss.mean()
+
+        #####
+        # if is_train:
+        #     if self.use_per_ctx_average_loss:
+        #         loss_kwargs["num_items_in_batch"] = num_items_in_batch["ctx"]
+        #     else:
+        #         loss_kwargs["num_items_in_batch"] = num_items_in_batch["labels"]
+        # inputs = {**inputs, **loss_kwargs}
+        # outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
+
+        # # Save past state if it exists
+        # if self.args.past_index >= 0:
+        #     self._past = outputs[self.args.past_index]
+
+        # if labels is not None:
+        #     unwrapped_model = self.accelerator.unwrap_model(model)
+        #     if _is_peft_model(unwrapped_model):
+        #         model_name = unwrapped_model.base_model.model._get_name()
+        #     else:
+        #         model_name = unwrapped_model._get_name()
+        #     # User-defined compute_loss function
+        #     if self.compute_loss_func is not None:
+        #         loss = self.compute_loss_func(
+        #             outputs, labels, num_items_in_batch=num_items_in_batch["labels"]
+        #         )
+        #     elif model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+        #         loss = self.label_smoother(outputs, labels, shift_labels=True)
+        #     else:
+        #         loss = self.label_smoother(outputs, labels)
+        # else:
+        #     if isinstance(outputs, dict) and "loss" not in outputs:
+        #         raise ValueError(
+        #             "The model did not return a loss from the inputs, "
+        #             "only the following keys: "
+        #             f"{','.join(outputs.keys())}. "
+        #             "For reference, the inputs it received are "
+        #             f"{','.join(inputs.keys())}."
+        #         )
+        #     # We don't use .loss here since the model may return tuples instead of ModelOutput.
+        #     loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+        #####
 
         ##### unpack gen lora dict and compute regularization loss
         l1_norm = 0
@@ -247,15 +343,15 @@ class CrossEntropyTrainer(ModulatedModelTrainer):
         for module, lora in gen_loras.items():
             l1_norm += lora["A"].abs().sum(0).mean() + lora["B"].abs().sum(0).mean()
         l1_norm /= n_modules
-        if num_items_in_batch is not None:
+        if is_train:
             # during eval `num_items_in_batch` will be None
             l1_norm /= num_items_in_batch["ctx"]
 
         total_loss = loss + self.gen_lora_l1_reg_coef * l1_norm
         #####
 
-        scaler = self.args.gradient_accumulation_steps
-        if self.args.average_tokens_across_devices and num_items_in_batch is not None:
+        scaler = self.args.gradient_accumulation_steps if is_train else 1
+        if self.args.average_tokens_across_devices and is_train:
             total_loss *= self.accelerator.num_processes
             scaler *= self.accelerator.num_processes
 
@@ -317,19 +413,19 @@ def train_model(
     is_modulated_model = isinstance(model, ModulatedPretrainedModel)
     trainer_cls = Trainer
     if is_modulated_model:
-        logger.info("Training with modulated model. Using CrossEntropyTrainer.")
+        logger.info("Training with modulated model.")
         trainer_cls = CrossEntropyTrainer
         trainer_kwargs["gen_lora_l1_reg_coef"] = training_args.gen_lora_l1_reg_coef
+        trainer_kwargs["use_per_ctx_average_loss"] = (
+            training_args.use_per_ctx_average_loss
+        )
         del training_args.gen_lora_l1_reg_coef
+        del training_args.use_per_ctx_average_loss
 
         if training_args.use_kl_loss:
             logger.info("Training with distillation loss. Using DistillationTrainer.")
-            trainer_kwargs["use_per_ctx_average_loss"] = (
-                training_args.use_per_ctx_average_loss
-            )
             trainer_cls = DistillationTrainer
             del training_args.use_kl_loss
-            del training_args.use_per_ctx_average_loss
 
     if training_args.auto_find_batch_size:
         # set the batch size to some high number

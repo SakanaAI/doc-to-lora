@@ -800,6 +800,10 @@ class ModulatedPretrainedModel(nn.Module):
     def generation_config(self):
         return self.base_model.generation_config
 
+    @property
+    def vocab_size(self):
+        return self.base_model.vocab_size
+
     def get_input_embeddings(self):
         return self.base_model.get_input_embeddings()
 
