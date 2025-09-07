@@ -537,6 +537,13 @@ DS_KWARGS = {
             split="test",
         ),
     ),
+    "bookqa": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/fw_qa_v3/min_0_to_20000/booksum_level_0.parquet",
+            split="train",
+        )
+    ),
     "gov_report": dict(
         train=dict(
             path="ccdv/govreport-summarization",
@@ -550,6 +557,13 @@ DS_KWARGS = {
             path="ccdv/govreport-summarization",
             split="test",
         ),
+    ),
+    "gov_report_qa": dict(
+        train=dict(
+            path="parquet",
+            data_files="data/raw_datasets/fw_qa_v3/min_0_to_20000/gov_report_level_0.parquet",
+            split="train",
+        )
     ),
     # "wikitext-2": dict(
     #     train=dict(
@@ -684,7 +698,7 @@ DS_KWARGS = {
         )
     ),
     "codeparrot": dict(
-        dict(train=dict(path="transformersbook/codeparrot", split="train"))
+        dict(train=dict(path="transformersbook/codeparrot", split="train[:2000000]"))
     ),
     "programming_books": dict(
         dict(train=dict(path="open-phi/programming_books_llama", split="train"))

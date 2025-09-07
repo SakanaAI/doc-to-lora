@@ -1,44 +1,66 @@
 import os
 
-from datasets import Dataset, load_dataset
-from tqdm import tqdm
+from datasets import load_dataset
+
+
+def process_sample(sample):
+    """Process a single sample and return the processed data or None if invalid."""
+    ctx = " ".join(
+        [
+            token
+            for is_html, token in zip(
+                sample["document"]["tokens"]["is_html"],
+                sample["document"]["tokens"]["token"],
+            )
+            if not is_html
+        ]
+    ).strip()
+
+    if not ctx:
+        return {"prompt": None, "context": None, "answer": None}
+
+    answers = []
+    for answer in sample["annotations"]["short_answers"]:
+        answers += answer["text"]
+
+    if not answers:
+        return {"prompt": None, "context": None, "answer": None}
+
+    answer = answers[0].strip()
+    if not answer:
+        return {"prompt": None, "context": None, "answer": None}
+
+    prompt = sample["question"]["text"].capitalize().strip() + " ?"
+    return {"prompt": prompt, "context": ctx, "answer": answer.capitalize()}
+
+
+def shift_contexts(examples):
+    """Shift contexts by one position to create negative examples."""
+    contexts = examples["context"]
+    shifted_contexts = contexts[1:] + contexts[:1]
+    examples["context"] = shifted_contexts
+    return examples
+
 
 if __name__ == "__main__":
     ds = load_dataset("google-research-datasets/natural_questions")
     ds = ds.shuffle(seed=42)
-    for split in ["train", "validation"]:
-        out = []
-        for i, sample in enumerate(tqdm(ds[split])):
-            ctx = " ".join(
-                [
-                    token
-                    for is_html, token in zip(
-                        sample["document"]["tokens"]["is_html"],
-                        sample["document"]["tokens"]["token"],
-                    )
-                    if not is_html
-                ]
-            ).strip()
-            if not ctx:
-                continue
-            answers = []
-            for answer in sample["annotations"]["short_answers"]:
-                answers += answer["text"]
-            if not answers:
-                continue
-            answer = answers[0].strip()
-            if not answer:
-                continue
-            prompt = sample["question"]["text"].capitalize().strip() + " ?"
-            out.append(dict(prompt=prompt, context=ctx, answer=answer.capitalize()))
-            # if i >= 10:
-            #     break
-        shifted_ctxs = [d["context"] for d in out]
-        shifted_ctxs = shifted_ctxs[1:] + shifted_ctxs[:1]
-        for d, shifted_ctx in zip(out, shifted_ctxs):
-            d["context"] = shifted_ctx
-        new_ds = Dataset.from_list(out)
-        print(new_ds)
+
+    for split in ["validation", "train"]:
+        # Process samples in parallel using map
+        processed_ds = ds[split].map(
+            process_sample, remove_columns=ds[split].column_names, num_proc=16
+        )
+
+        # Filter out None values
+        processed_ds = processed_ds.filter(lambda x: x["context"] is not None)
+
+        # Shift contexts to create negative examples
+        processed_ds = processed_ds.map(
+            shift_contexts, batched=True, batch_size=len(processed_ds)
+        )
+
+        print(processed_ds)
         save_dir = "data/raw_datasets/negative_natural_questions"
         os.makedirs(save_dir, exist_ok=True)
-        new_ds.to_json(f"{save_dir}/{split}.jsonl")
+        processed_ds.to_json(f"{save_dir}/{split}.jsonl")

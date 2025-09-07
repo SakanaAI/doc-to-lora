@@ -3,8 +3,6 @@ import gc
 from datasets import Dataset, load_dataset
 from tqdm import tqdm
 
-from ctx_to_lora.data.preprocessing_fn import closed_qa_prompting
-
 if __name__ == "__main__":
     ds_name = "allenai/ropes"
 
@@ -18,7 +16,7 @@ if __name__ == "__main__":
             bg_txt = sample["background"]
             situation_txt = sample["situation"]
             ctx = ctx_template.format(background=bg_txt, situation=situation_txt)
-            q = closed_qa_prompting(sample["question"])
+            q = sample["question"]
             if ctx not in ctx_qa_dict:
                 ctx_qa_dict[ctx] = {"prompts": [], "responses": []}
             ctx_qa_dict[ctx]["prompts"].append(q)
