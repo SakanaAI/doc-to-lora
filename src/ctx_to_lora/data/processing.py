@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import random
 from collections.abc import Callable
 from glob import glob
 from hashlib import sha256
@@ -508,6 +507,12 @@ def get_sft_prompt_formatting_fn(
             return_assistant_tokens_mask=True,
             return_dict=True,
         )
+
+        if tokenizer.name_or_path == "google/gemma-2-2b-it":
+            # HACK: add bos at the beginning (see `Known Issues` in README.md)
+            for tok_ids in tokens["input_ids"]:
+                tok_ids = [tokenizer.bos_token_id] + tok_ids
+
         labels = []
         for tok_ids, masks in zip(tokens["input_ids"], tokens["assistant_masks"]):
             o = [id_ if mask else IGNORE_INDEX for id_, mask in zip(tok_ids, masks)]

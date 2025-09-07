@@ -53,7 +53,8 @@ SELF_QA_INTX = (
 
 PRE_CTX = "# Provided Information\n"
 
-PROMPT_TEMPLATE = PRE_CTX + "{context}\n\n---\n\n" + SELF_QA_INTX + "{question}"
+QA_PROMPT_TEMPLATE = PRE_CTX + "{context}\n\n---\n\n" + SELF_QA_INTX + "{question}"
+PROMPT_TEMPLATE = "{context}\n\n{question}"
 
 MODEL_CTX_LEN = {
     "google/gemma-2-27b-it": 8192,
@@ -85,8 +86,10 @@ def truncate_middle_if_too_long(
     return input_ids
 
 
-def get_prompt(context: str, q: str) -> str:
-    return PROMPT_TEMPLATE.format(context=context, question=q)
+# TODO: self-gen for magic ctx num
+def get_prompt(context: str, q: str, remove_qa_template: bool) -> str:
+    prompt = QA_PROMPT_TEMPLATE if not remove_qa_template else PROMPT_TEMPLATE
+    return prompt.format(context=context, question=q)
 
 
 def augment_prompt(sample, closed_qa_prob, cot_prob):
@@ -206,7 +209,11 @@ def get_dataset_configs(
 
 
 def create_messages(
-    ctxs: list[str], questions: list[list[str]], vllm_model: str, system_template: str
+    ctxs: list[str],
+    questions: list[list[str]],
+    vllm_model: str,
+    system_template: str,
+    remove_qa_template: bool,
 ) -> list[list[dict]]:
     """Create chat messages for the model."""
     # if "gemma" in vllm_model:
@@ -215,7 +222,9 @@ def create_messages(
         [
             {
                 "role": "user",
-                "content": (system_template + "\n\n\n" + get_prompt(ctx, q)).strip(),
+                "content": (
+                    system_template + "\n\n\n" + get_prompt(ctx, q, remove_qa_template)
+                ).strip(),
             }
         ]
         for ctx, q_list in zip(ctxs, questions)
@@ -326,6 +335,8 @@ def self_generate(
     tk = get_tokenizer(args.vllm_model, train=True)
 
     self_qa_intx_tokens = tk(SELF_QA_INTX, add_special_tokens=False)["input_ids"]
+    if args.remove_qa_template:
+        self_qa_intx_tokens = tk("\n\n", add_special_tokens=False)["input_ids"]
     n_self_qa_intx_tokens = len(self_qa_intx_tokens)
     pre_ctx_tokens = tk(PRE_CTX, add_special_tokens=False)["input_ids"]
     n_pre_ctx_tokens = len(pre_ctx_tokens)
@@ -390,7 +401,11 @@ def self_generate(
         chunk_ctxs = ctxs[start : start + chunk_size]
         chunk_questions = questions[start : start + chunk_size]
         chunk_messages = create_messages(
-            chunk_ctxs, chunk_questions, args.vllm_model, SELF_GEN_SYSTEM_MSG
+            chunk_ctxs,
+            chunk_questions,
+            args.vllm_model,
+            SELF_GEN_SYSTEM_MSG,
+            args.remove_qa_template,
         )
 
         if do_truncate:
@@ -404,7 +419,7 @@ def self_generate(
                 truncate_middle_if_too_long(
                     ids,
                     max_length=MODEL_CTX_LEN[args.vllm_model],
-                    max_new_tokens=1024,
+                    max_new_tokens=args.max_new_tokens,
                 )
                 for ids in tokenized_contents["input_ids"]
             ]
@@ -455,7 +470,7 @@ def execute_qa_generation(
     completions = llm.chat(
         messages,
         sampling_params=SamplingParams(
-            max_tokens=1024,
+            max_tokens=args.max_new_tokens,
             logprobs=k,
             temperature=temp,
             seed=42,
@@ -697,6 +712,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Truncate contexts to fit model context length",
     )
+    parser.add_argument(
+        "--remove_qa_template",
+        action="store_true",
+        help="Remove QA template formatting from prompts",
+    )
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=256,
+        help="Maximum number of new tokens to generate (default: 256)",
+    )
     return parser.parse_args()
 
 
@@ -737,7 +763,7 @@ if __name__ == "__main__":
         for ds_name, split in dataset_configs:
             print(f"Processing dataset: {ds_name}, split: {split}")
             self_generate(
-                ds_name, split, args, llm, SELF_GEN_SYSTEM_MSG, args.do_truncate
+                ds_name, split, args, llm, SELF_GEN_SYSTEM_MSG, None, args.do_truncate
             )
     else:
         assert args.glob_pattern, (

@@ -1,6 +1,7 @@
 import itertools
 import os
 import time
+from argparse import Namespace
 from glob import glob
 
 import wandb
@@ -72,6 +73,7 @@ if __name__ == "__main__":
             run_dir = file.split("/checkpoint")[0]
             run_name = run_dir.split("/")[-1]
             print(f"Evaluating {file}")
+            args = Namespace(**yaml.unsafe_load(open(f"{run_dir}/args.yaml")))
             curstep = int(file.split("checkpoint-")[1].split("/")[0])
             wandb_kwargs = {
                 "project": os.getenv("WANDB_PROJECT"),
@@ -85,26 +87,28 @@ if __name__ == "__main__":
             # TODO: have to change this for bigger models
             eval_batch_size = 8
             eval_batch_size_gen = 8
-            try:
-                # metrics = run_eval(
-                #     checkpoint_path=file,
-                #     eval_batch_size=eval_batch_size,
-                #     split="validation",
-                #     generative=False,
-                # )
-                metrics = {}
-            except FileNotFoundError as e:
-                print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
-                continue
+            metrics = {}
+
+            # try:
+            #     # metrics = run_eval(
+            #     #     checkpoint_path=file,
+            #     #     eval_batch_size=eval_batch_size,
+            #     #     split="validation",
+            #     #     generative=False,
+            #     # )
+            # except FileNotFoundError as e:
+            #     print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
+            #     continue
             try:
                 gen_metrics = run_eval(
                     checkpoint_path=file,
-                    eval_batch_size=eval_batch_size_gen,
                     split="validation",
+                    eval_batch_size=eval_batch_size_gen,
+                    max_ctx_chunk_len=args.max_ctx_chunk_len,
                     generative=True,
                 )
             except FileNotFoundError as e:
-                print(f"Error evaluating {file}: {e}. The checkpoint might be deleted.")
+                print(f"The checkpoint might be deleted. Error evaluating {file}: {e}.")
                 gen_metrics = {}
                 file = ""
             metrics.update(gen_metrics)

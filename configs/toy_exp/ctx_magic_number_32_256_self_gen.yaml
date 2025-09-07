@@ -1,0 +1,18 @@
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+
+use_kl_loss: true
+
+# data
+train_ds_names:
+- self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.0_summ_prob_0.0_struct_prob_0.0/ctx_magic_number_32_128
+- self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.0_summ_prob_0.0_struct_prob_0.0/ctx_magic_number_128_256
+
+val_ds_names:
+- ctx_magic_number_32_128
+- ctx_magic_number_128_256
+
+

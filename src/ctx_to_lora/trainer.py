@@ -153,6 +153,9 @@ class DistillationTrainer(ModulatedModelTrainer):
         label_pos = torch.where(labels != -100)
         outputs, (gen_loras, _) = model(**inputs, return_generated_lora=True)
 
+        if "logprobs_vals" not in inputs:
+            return (torch.tensor(0.0), outputs) if return_outputs else torch.tensor(0.0)
+
         target_logp = inputs.pop("logprobs_vals").squeeze(0)
         indices = inputs.pop("logprobs_indices").squeeze(0)
 

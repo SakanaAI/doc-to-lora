@@ -284,3 +284,12 @@ srv
 # copy-paste the relative path from the root
 # e.g., http://localhost:8001/train_outputs/runs/May08_13-56-31_slurm0-a3nodeset-5_59383_906acb28/eval-results-105000/comparator.json
 ```
+
+## :warning: Known Issues
+For the ICLR version, we use two `<bos>` tokens for `gemma-2-2b-it`.
+This is because of a bug from `vllm` which we didn't realize until very close to the deadline (7 Sep 2025) (see https://github.com/vllm-project/vllm/pull/16081).
+This bug causes the self-generated data to have two `<bos>` tokens (only the `input_ids` not `ctx_ids`)
+
+NOTE: previously we were using `vllm==0.8.5` which does not have the double `<bos>` problem.
+However it has another bug that randomly causes some detokenization error (see https://github.com/vllm-project/vllm/issues/17448)
+Therefore we, not knowing about the double `<bos>` bug, degraded `vllm` to `0.8.4`.
