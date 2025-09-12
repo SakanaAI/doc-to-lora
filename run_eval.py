@@ -99,6 +99,11 @@ if __name__ == "__main__":
         default=None,
         help="Number of generated queries to use for context distillation.",
     )
+    parser.add_argument(
+        "--use_iterative_mode",
+        action="store_true",
+        help="Use iterative mode LoRA layer-by-layer generation",
+    )
 
     cli_args = vars(parser.parse_args())
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))

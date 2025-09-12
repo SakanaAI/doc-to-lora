@@ -771,6 +771,7 @@ def evaluate(
             use_flash_attn=True,
             use_sequence_packing=False,  # for generation
         )
+        model.enable_iterative_mode(args.use_iterative_mode)
         add_tracker(model.base_model.generate, "generate")
         add_tracker(model.generate_weights, "generate_weights")
         add_tracker(model.combine_lora, "combine_lora")
@@ -1004,6 +1005,7 @@ def run_eval(
     cd_update_iterations: int = 10,
     cd_use_gen_q: bool = False,
     num_gen_q: int = 20,
+    use_iterative_mode: bool = False,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
@@ -1047,6 +1049,7 @@ def run_eval(
         # modulated model doesn't see ctx by default
         # but remove_context has to be false for correct file naming
         args.remove_context = False
+        args.use_iterative_mode = use_iterative_mode
     else:
         args = Namespace(
             model_name_or_path=model_name_or_path,

@@ -644,6 +644,10 @@ class HyperLoRA(nn.Module):
         )
         return {k: v for k, v in zip(self.extra_modules, layernorms)}
 
+    def enable_iterative_mode(self, x: bool):
+        self.iterative_mode = x
+        self.aggregator.enable_iterative_mode(x)
+
     def forward(
         self,
         features: Float[Tensor, "bs seq_len feature_dim"],
@@ -653,15 +657,22 @@ class HyperLoRA(nn.Module):
     ):
         # [bs, n_layers, n_total_modules, r, feature_dim]
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            lora_emb, extra_emb = self.aggregator(features, attn_mask, position_ids)
+            if self.aggregator.layer_to_layer and self.iterative_mode:
+                # iterative inference
+                # features: [bs num_layers seq_len feature_dim]
+                bs, n_layers = features.shape[0:2]
+                lora_emb = torch.empty(
+                    (bs, n_layers, self.num_modules, self.r, self.config.latent_size),
+                    device=features.device,
+                )
+                for i in range(n_layers):
+                    lora_emb[:, i], _ = self.aggregator(
+                        features[:, i], attn_mask, position_ids
+                    )
 
-        # TODO: add pos emb
-        # TODO:
-        # concat queries from the same chunks
-        # do self-attn
-        # unpack back to [bs, n_layers, n_total_modules, r, feature_dim]
-        # here bs = sum(n_chunks)
-        # we then
+            else:
+                # batched inference
+                lora_emb, _ = self.aggregator(features, attn_mask, position_ids)
 
         # [bs, n_layers, n_modules, r, max_in_d_outim]
         flat_loras = None
@@ -672,10 +683,10 @@ class HyperLoRA(nn.Module):
             flat_loras = self.head(norm_lora_emb)
 
         flat_layernorms = None
-        if self.num_extra_modules:
-            # [bs, n_layers, n_extra_modules, base_hidden_size]
-            extra_emb = self.extra_layers(extra_emb)
-            flat_layernorms = self.extra_head(extra_emb)
+        # if self.num_extra_modules:
+        #     # [bs, n_layers, n_extra_modules, base_hidden_size]
+        #     extra_emb = self.extra_layers(extra_emb)
+        #     flat_layernorms = self.extra_head(extra_emb)
 
         return flat_loras, flat_layernorms
 
@@ -951,6 +962,9 @@ class ModulatedPretrainedModel(nn.Module):
         return self.hypernet.generate_weights(
             ctx_features, ctx_attn_mask, ctx_position_ids
         )
+
+    def enable_iterative_mode(self, x: bool):
+        self.hypernet.enable_iterative_mode(x)
 
     def forward(
         self,
