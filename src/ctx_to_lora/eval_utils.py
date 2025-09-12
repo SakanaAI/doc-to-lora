@@ -4,6 +4,7 @@ import os
 import re
 import string
 import sys
+import time
 from argparse import Namespace
 from collections import Counter, defaultdict
 from dataclasses import fields
@@ -14,6 +15,7 @@ import pandas as pd
 import torch
 import yaml
 from datasets import disable_caching
+from peft import get_peft_model
 from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
@@ -25,11 +27,13 @@ from transformers.trainer_utils import find_executable_batch_size
 from ctx_to_lora.data.collator import eval_collator, generation_collator
 from ctx_to_lora.data.definitions import (
     CLOSED_QA_DATASETS,
+    CTX_AFFIXES,
     LONGBENCH_E_TASKS,
     LONGBENCH_TASKS,
     MULTI_ANSWER_DATASETS,
 )
 from ctx_to_lora.data.processing import get_tokenized_dataset, load_answers
+from ctx_to_lora.data.self_gen_template import SELF_QA_INTX
 from ctx_to_lora.metrics import (
     LENGTH_BINS,
     Evaluator,
@@ -39,10 +43,18 @@ from ctx_to_lora.metrics import (
     compute_prefix_matching,
     compute_rouge,
 )
-from ctx_to_lora.model_loading import get_model, get_tokenizer
+from ctx_to_lora.model_loading import get_lora_config, get_model, get_tokenizer
 from ctx_to_lora.modeling import hypernet
+from ctx_to_lora.modeling.context_distillation import CtxDistillModel
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
-from ctx_to_lora.utils import clear_gpu, concat_list, setup_logging
+from ctx_to_lora.tracker.tracker import (
+    add_tracker,
+    print_global_tracker_stats,
+    print_tracker_stats,
+    reset_trackers,
+    save_tracker_stats_csv,
+)
+from ctx_to_lora.utils import clear_gpu, concat_list, get_run_name, setup_logging
 
 logger = logging.getLogger()
 
@@ -522,7 +534,13 @@ def decode_test_result(
         input_toks = sample["input_ids"][:start_idx]
 
         gen_toks = pred_toks[np.argmax(pred_toks != tokenizer.pad_token_id) :]
-        gen_toks = gen_toks[start_idx:]
+        # gen_toks = gen_toks[start_idx:]
+        suffix = np.array(CTX_AFFIXES[tokenizer.name_or_path]["suffix"])
+        # iterate over gen_toks and take the answer after the suffix
+        for i in range(len(gen_toks) - len(suffix), -1, -1):
+            if all(gen_toks[i : i + len(suffix)] == suffix):
+                gen_toks = gen_toks[i + len(suffix) :]
+                break
         gen_toks = np.where(gen_toks == -100, tokenizer.pad_token_id, gen_toks)
 
         d["input"] = tokenizer.decode(input_toks, skip_special_tokens=False)
@@ -543,7 +561,6 @@ def decode_test_result(
     return out
 
 
-@torch.inference_mode()
 def eval_generation(
     eval_trainer,
     tokenizer,
@@ -681,7 +698,6 @@ def eval_generation(
     return out
 
 
-@torch.no_grad()
 def eval_teacher_forcing(
     eval_trainer, datasets, split, remove_context
 ) -> dict[str, dict]:
@@ -736,6 +752,12 @@ def evaluate(
     ctx_name = None
     model_kwargs = dict(attn_implementation="flash_attention_2")
 
+    tokenizer = get_tokenizer(args.model_name_or_path, train=False)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    use_cd = False
+
     if model_name_or_path is None:
         try:
             state_dict = torch.load(checkpoint_path, weights_only=False)
@@ -749,6 +771,10 @@ def evaluate(
             use_flash_attn=True,
             use_sequence_packing=False,  # for generation
         )
+        add_tracker(model.base_model.generate, "generate")
+        add_tracker(model.generate_weights, "generate_weights")
+        add_tracker(model.combine_lora, "combine_lora")
+        add_tracker(model.apply_lora_to_layers, "apply_lora_to_layers")
     else:
         model = get_model(
             model_name_or_path,
@@ -757,12 +783,40 @@ def evaluate(
             model_kwargs=model_kwargs,
             use_flash_attn=True,
         )
+        add_tracker(model.generate, "generate")
+        if use_cd := getattr(args, "use_cd", False):
+            peft_config = get_lora_config(
+                model_name_or_path,
+                lora_r=8,
+                lora_dropout=0,
+                target_modules=["down_proj"],
+            )
+            peft_config.lora_alpha = 16
+            peft_model = get_peft_model(model, peft_config)
+            q_model = get_model(
+                "google/gemma-3-4b-it", train=False, requires_grad=False
+            )
+            model = CtxDistillModel(
+                peft_model,
+                prefix_tokens=torch.tensor(
+                    CTX_AFFIXES[model_name_or_path]["prefix"], device=model.device
+                ),
+                pad_token_id=tokenizer.pad_token_id,
+                update_iterations=args.cd_update_iterations,
+                q_model=q_model,  # peft_model if args.cd_use_gen_q else None,
+                num_gen_q=args.num_gen_q,
+                tokenizer=tokenizer,
+            )
+            add_tracker(model._distill_context, "distill_context")
+            add_tracker(model.generate_questions, "generate_questions")
+            add_tracker(model.teacher_generate, "teacher_generate")
+            add_tracker(model.student_generate, "student_generate")
 
-    tokenizer = get_tokenizer(args.model_name_or_path, train=False)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
     base_model = (
-        model.base_model if isinstance(model, ModulatedPretrainedModel) else model
+        model.base_model
+        if isinstance(model, ModulatedPretrainedModel)
+        or isinstance(model, CtxDistillModel)
+        else model
     )
     base_model.config.pad_token_id = tokenizer.pad_token_id
     base_model.generation_config.pad_token_id = tokenizer.pad_token_id
@@ -775,7 +829,7 @@ def evaluate(
 
     add_ctx_to_chat = (
         not isinstance(model, ModulatedPretrainedModel) and not args.remove_context
-    )
+    ) or isinstance(model, CtxDistillModel)
     ctx_model_max_len = (
         model.ctx_encoder.config.max_position_embeddings
         if isinstance(model, ModulatedPretrainedModel)
@@ -798,6 +852,7 @@ def evaluate(
         use_kl_loss=False,
         max_new_tokens=max_new_tokens,
         set_format="pt",
+        add_self_distill_template=use_cd,  # only for eval
     )
 
     datasets = dict()
@@ -868,6 +923,20 @@ def evaluate(
     if max_ctx_chunk_len > 0:
         model.generate = model.generate_with_multi_loras
 
+    if isinstance(model, CtxDistillModel):
+        sep_seq = (
+            tokenizer(
+                SELF_QA_INTX.strip("\n"), add_special_tokens=False, return_tensors="pt"
+            )
+            .input_ids[0]
+            .to(model.device)
+        )
+        model.generate = partial(
+            model.generate,
+            ctx_inp_sep_seq=sep_seq,
+            reset=True,
+        )
+
     trainer_kwargs = {
         "model": model,
         "args": eval_trainer_args,
@@ -895,17 +964,26 @@ def evaluate(
             out.update(metrics)
     else:
         eval_trainer = CustomSeq2SeqTrainer(**trainer_kwargs)
-        metrics = eval_generation(
-            eval_trainer,
-            tokenizer,
-            ctx_tokenizer,
-            datasets,
-            answers,
-            split,
-            args.remove_context,
-            gen_kwargs,
-        )
-        out.update(metrics)
+        for ds_name, ds in datasets.items():
+            metrics = eval_generation(
+                eval_trainer,
+                tokenizer,
+                ctx_tokenizer,
+                {ds_name: ds},
+                answers,
+                split,
+                args.remove_context,
+                gen_kwargs,
+            )
+            out.update(metrics)
+
+            print_tracker_stats()
+            print_global_tracker_stats()
+            ds_suffix = "_no_context" if args.remove_context else ""
+            save_tracker_stats_csv(
+                f"{args.logging_dir}/{split}_{ds_name}{ds_suffix}_tracked_stats.csv"
+            )
+            reset_trackers()
 
     clear_gpu()
     return out
@@ -922,11 +1000,17 @@ def run_eval(
     remove_context: bool = False,
     max_new_tokens: int = 256,
     generative: bool = False,
+    use_cd: bool = False,
+    cd_update_iterations: int = 10,
+    cd_use_gen_q: bool = False,
+    num_gen_q: int = 20,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
+    if use_cd and eval_batch_size != 1:
+        raise ValueError("When using context distillation, eval_batch_size must be 1.")
 
     disable_caching()
     set_seed(42)
@@ -943,6 +1027,9 @@ def run_eval(
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
 
+    slurm_job_id = f"_{os.getenv('SLURM_JOB_ID')}" if os.getenv("SLURM_JOB_ID") else ""
+    run_name = get_run_name(seed_str=time.strftime("%Y%m%d-%H%M%S") + slurm_job_id)
+
     if checkpoint_path:
         checkpoint_dir = "/".join(checkpoint_path.split("/")[:-1])
         run_dir = "/".join(checkpoint_path.split("/")[:-2])
@@ -954,8 +1041,8 @@ def run_eval(
         print(f"checkpoint_path: {checkpoint_path}")
         print(f"run_dir: {run_dir}")
 
-        args.output_dir = f"{run_dir}/eval-results-{cur_it}"
-        args.logging_dir = f"{run_dir}/eval-results-{cur_it}"
+        args.output_dir = f"{run_dir}/eval-results-{cur_it}/{run_name}"
+        args.logging_dir = f"{run_dir}/eval-results-{cur_it}/{run_name}"
         args.run_name = run_dir.split("/")[-1]
         # modulated model doesn't see ctx by default
         # but remove_context has to be false for correct file naming
@@ -963,16 +1050,22 @@ def run_eval(
     else:
         args = Namespace(
             model_name_or_path=model_name_or_path,
-            output_dir=f"eval_results/{model_name_or_path}",
-            logging_dir=f"eval_results/{model_name_or_path}",
-            run_name=f"eval_results/{model_name_or_path}",
+            output_dir=f"eval_results/{model_name_or_path}/{run_name}",
+            logging_dir=f"eval_results/{model_name_or_path}/{run_name}",
+            run_name=f"eval_results/{model_name_or_path}/{run_name}",
             val_ds_names=[],
             test_ds_names=[],
             remove_context=remove_context,
         )
+        if use_cd:
+            args.use_cd = use_cd
+            args.cd_update_iterations = cd_update_iterations
+            args.cd_use_gen_q = cd_use_gen_q
+            args.num_gen_q = num_gen_q
     if max_val_samples_per_ds > 0:
         args.max_val_samples_per_ds = max_val_samples_per_ds
     setup_logging(args.logging_dir)
+    logger.debug(f"CMD: {' '.join(os.sys.argv)}")
 
     # Override dataset names if provided via CLI
     if datasets:

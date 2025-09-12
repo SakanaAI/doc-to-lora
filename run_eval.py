@@ -77,6 +77,28 @@ if __name__ == "__main__":
         action="store_true",
         help="Remove context when evaluating the base model.",
     )
+    parser.add_argument(
+        "--use_cd",
+        action="store_true",
+        help="Use context distillation model for evaluation.",
+    )
+    parser.add_argument(
+        "--cd_update_iterations",
+        type=int,
+        default=20,
+        help="Number of update iterations for context distillation during evaluation",
+    )
+    parser.add_argument(
+        "--cd_use_gen_q",
+        action="store_true",
+        help="Use generated queries for context distillation training.",
+    )
+    parser.add_argument(
+        "--num_gen_q",
+        type=int,
+        default=None,
+        help="Number of generated queries to use for context distillation.",
+    )
 
     cli_args = vars(parser.parse_args())
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))

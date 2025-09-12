@@ -25,6 +25,7 @@ from ctx_to_lora.data.definitions import (
 )
 from ctx_to_lora.data.packing import pack_batch
 from ctx_to_lora.data.preprocessing_fn import get_preprocessing_fn
+from ctx_to_lora.data.self_gen_template import QA_PROMPT_TEMPLATE
 from ctx_to_lora.utils import check_is_iterable, concat_list
 
 logger = logging.getLogger()
@@ -215,6 +216,7 @@ def get_tokenized_dataset(
     add_ctx_to_chat: bool,
     use_kl_loss: bool,
     max_new_tokens: int = 256,
+    add_self_distill_template: bool = False,
     set_format: str | None = None,
 ) -> dict[str, Any]:
     if max_qas_len > 0:
@@ -280,6 +282,7 @@ def get_tokenized_dataset(
         ds=ds,
         tokenizer=tokenizer,
         ctx_tokenizer=ctx_tokenizer,
+        add_self_distill_template=add_self_distill_template,
         num_proc=num_proc,
         **tokenize_kwargs,
     )
@@ -313,6 +316,7 @@ def construct_and_tokenize_ctx_qa(
     ds,
     split,
     max_new_tokens,
+    add_self_distill_template=False,
     set_format=None,
     num_proc=None,
 ):
@@ -326,14 +330,24 @@ def construct_and_tokenize_ctx_qa(
         # add "messages_list" field
         ds = ds.map(
             convert_ctx_prompt_response_to_messages,
-            fn_kwargs={"add_ctx_to_chat": add_ctx_to_chat},
+            fn_kwargs={
+                "add_ctx_to_chat": add_ctx_to_chat,
+                "add_self_distill_template": add_self_distill_template,
+            },
             num_proc=16,
         )
         # add `input_ids`, `attention_mask`, `labels`
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
         logging.debug("Tokenizing inputs")
+        # HACK: check magic num niah dataset
+        prepend_bos = True  # see known issues in readme
+        sample = ds[0]
+        inp_txt = sample["prompts"][0]
+        if inp_txt == "What is the special magic number? Reply with only the number.":
+            logger.info("Detected Niah dataset, not prepending BOS")
+            prepend_bos = False
         tokenized_ds = ds.map(
-            get_sft_prompt_formatting_fn(tokenizer),
+            get_sft_prompt_formatting_fn(tokenizer, prepend_bos),
             batched=True,
             batch_size=100_000,
         )
@@ -384,11 +398,16 @@ def construct_and_tokenize_ctx_qa(
         }
         logging.info(f"Chunking context with {split_ctx_kwargs=}")
         tokenized_ds = tokenized_ds.map(
-            split_too_long_ctx, fn_kwargs=split_ctx_kwargs, num_proc=16
+            split_too_long_ctx,
+            fn_kwargs=split_ctx_kwargs,
+            num_proc=16,
         )
+
+        logging.info(f"Num samples after ctx chunking: {len(tokenized_ds)}")
         logging.info(
-            f"Avg. num chunks per ctx: {np.mean(list(map(len, tokenized_ds['ctx_ids'])))}"
+            f"Avg. num chunks per ctx: {np.mean(tokenized_ds['n_ctx_chunks'])}"
         )
+        tokenized_ds = tokenized_ds.remove_columns(["n_ctx_chunks"])
 
         split_qa_kwargs = {
             "max_qas_len": max_qas_len,
@@ -469,6 +488,7 @@ def get_labels_from_input_ids(sample: dict[str, Any]) -> dict[str, Any]:
 
 def get_sft_prompt_formatting_fn(
     tokenizer: PreTrainedTokenizerBase,
+    prepend_bos: bool,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """
     Get a function that formats examples for supervised fine-tuning.
@@ -508,10 +528,13 @@ def get_sft_prompt_formatting_fn(
             return_dict=True,
         )
 
-        if tokenizer.name_or_path == "google/gemma-2-2b-it":
+        if prepend_bos:
             # HACK: add bos at the beginning (see `Known Issues` in README.md)
-            for tok_ids in tokens["input_ids"]:
-                tok_ids = [tokenizer.bos_token_id] + tok_ids
+            for i, (tok_ids, assistant_masks) in enumerate(
+                zip(tokens["input_ids"], tokens["assistant_masks"])
+            ):
+                tokens["input_ids"][i] = [tokenizer.bos_token_id] + tok_ids
+                tokens["assistant_masks"][i] = [0] + assistant_masks
 
         labels = []
         for tok_ids, masks in zip(tokens["input_ids"], tokens["assistant_masks"]):
@@ -535,6 +558,7 @@ def get_sft_prompt_formatting_fn(
 def convert_ctx_prompt_response_to_messages(
     example: dict[str, Any],
     add_ctx_to_chat: bool,
+    add_self_distill_template: bool = False,
 ) -> dict[str, Any]:
     """
     Convert context/prompt/response format to chat messages format.
@@ -565,7 +589,12 @@ def convert_ctx_prompt_response_to_messages(
     for prompt, response in zip(example[prompt_field], example[res_field]):
         user_msg = prompt.strip()
         if add_ctx_to_chat:
-            user_msg = example["context"].strip() + "\n\n" + user_msg
+            if add_self_distill_template:
+                user_msg = QA_PROMPT_TEMPLATE.format(
+                    context=example["context"].strip(), question=user_msg
+                )
+            else:
+                user_msg = example["context"].strip() + "\n\n" + user_msg
 
         messages_list.append(
             [
@@ -603,7 +632,7 @@ def split_too_long_ctx(
     ctx_ids = sample["ctx_ids"]
     # Early exits
     if chunk_len <= 0 and max_num_split is None:
-        return {"ctx_ids": [ctx_ids]}
+        return {"ctx_ids": [ctx_ids], "n_ctx_chunks": 1}
 
     n_chunks = None  # will be sampled (train) or derived (eval)
     if is_train and num_chunk_probs is not None:
@@ -632,7 +661,7 @@ def split_too_long_ctx(
     # Safety: at least 1
     n_chunks = max(1, n_chunks)
     if n_chunks == 1:
-        return {"ctx_ids": [ctx_ids]}
+        return {"ctx_ids": [ctx_ids], "n_ctx_chunks": 1}
 
     avg_len = ceil(len(ctx_ids) / n_chunks)
     chunks = [ctx_ids[i : i + avg_len] for i in range(0, len(ctx_ids), avg_len)]
@@ -646,7 +675,7 @@ def split_too_long_ctx(
         chunks[i] = prefix + chunks[i] + suffix
     chunks[-1] = prefix + chunks[-1]
 
-    return {"ctx_ids": chunks}
+    return {"ctx_ids": chunks, "n_ctx_chunks": len(chunks)}
 
 
 def split_too_long_qas(
@@ -934,7 +963,10 @@ def pack(
     else:
         train_ds = interleave_datasets(
             list(ds_dict.values()),
-            probabilities=get_ds_prob(train_ds_lens, total_samples),
+            # probabilities=get_ds_prob(
+            #     train_ds_lens, total_samples
+            # ),
+            probabilities=[l / total_samples for l in train_ds_lens],
             seed=seed,
             stopping_strategy="all_exhausted",
         )

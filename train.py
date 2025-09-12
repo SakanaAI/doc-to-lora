@@ -302,6 +302,11 @@ def main():
                 tokenized_ds[split][ds_name] = ds
 
     train_ds = tokenized_ds["train"]
+    if data_args.max_train_samples_per_ds is not None:
+        for ds_name, ds in train_ds.items():
+            if data_args.max_train_samples_per_ds >= len(ds):
+                continue
+            train_ds[ds_name] = ds.take(data_args.max_train_samples_per_ds)
     logging.info(f"train_ds: {train_ds}")
 
     val_ds = dict()

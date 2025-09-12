@@ -292,4 +292,4 @@ This bug causes the self-generated data to have two `<bos>` tokens (only the `in
 
 NOTE: previously we were using `vllm==0.8.5` which does not have the double `<bos>` problem.
 However it has another bug that randomly causes some detokenization error (see https://github.com/vllm-project/vllm/issues/17448)
-Therefore we, not knowing about the double `<bos>` bug, degraded `vllm` to `0.8.4`.
+Therefore we, not knowing about the double `<bos>` bug, recently downgraded `vllm` to `0.8.4`.

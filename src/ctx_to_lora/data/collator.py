@@ -125,7 +125,6 @@ def generation_collator(inp_list, tokenizer):
     )
 
     if "ctx_ids" in inp_list[0]:
-        # TODO: handle chunked ctx_ids
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
         ctx_ids = [example.pop("ctx_ids") for example in inp_list]

@@ -456,6 +456,10 @@ class DataArguments:
         default=None,
         metadata={"help": "Test dataset names."},
     )
+    max_train_samples_per_ds: int | None = field(
+        default=None,
+        metadata={"help": "Maximum number of training samples per dataset."},
+    )
     max_val_samples_per_ds: int | None = field(
         default=1000,
         metadata={"help": "Maximum number of validation samples per dataset."},

@@ -1103,6 +1103,14 @@ class ModulatedPretrainedModel(nn.Module):
         )
         return model_outputs
 
+    def combine_lora(self, *args, **kwargs):
+        # for timing
+        return combine_lora(*args, **kwargs)
+
+    def apply_lora_to_layers(self, *args, **kwargs):
+        # for timing
+        return apply_lora_to_layers(*args, **kwargs)
+
     @torch.inference_mode()
     def generate(
         self,
@@ -1159,7 +1167,7 @@ class ModulatedPretrainedModel(nn.Module):
             )
 
         if generated_loras is not None:
-            generated_loras = combine_lora(
+            generated_loras = self.combine_lora(
                 generated_loras,
                 n_ctx_chunks,
                 lora_bias=self.hypernet.get_head_bias(),

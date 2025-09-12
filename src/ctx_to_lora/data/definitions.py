@@ -10,16 +10,6 @@ TRANSFORMED_DATA_DIR = "data/processed_datasets"
 RAW_DATA_DIR = "data/raw_datasets/"
 SELF_GEN_DATA_DIR = f"{RAW_DATA_DIR}/self_gen/"
 
-# see https://huggingface.co/datasets/YuxinJiang/LTE_train_data/viewer/default/train?row=97&views%5B%5D=train&sql_row=2
-# based on https://arxiv.org/pdf/2402.11905
-SELF_GEN_SYSTEM_MSG = (
-    "### SYSTEM INSTRUCTION ###\n"
-    "You are an honest and helpful assistant.\n"
-    "You must use the information provided in the context for responding to the question.\n"
-    "**DO NOT** hallucinate or make up information.\n"
-    "### END OF SYSTEM INSTRUCTION ###"
-)
-
 
 SUMMARIZATION_PROMPTS = [
     "Summarize the article."
