@@ -61,6 +61,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--max_test_samples_per_ds",
+        type=int,
+        default=1000,
+        help=(
+            "Maximum number of validation samples per dataset. "
+            "If -1, uses values from checkpoint config."
+        ),
+    )
+    parser.add_argument(
         "--max_ctx_chunk_len",
         type=int,
         default=-1,
@@ -103,6 +112,17 @@ if __name__ == "__main__":
         "--use_iterative_mode",
         action="store_true",
         help="Use iterative mode LoRA layer-by-layer generation",
+    )
+    parser.add_argument(
+        "--use_llmlingua",
+        action="store_true",
+        help="Use LLMLingua compression for evaluation",
+    )
+    parser.add_argument(
+        "--llmlingua_compression_rate",
+        type=float,
+        default=0.9,
+        help="Compression rate for LLMLingua",
     )
 
     cli_args = vars(parser.parse_args())

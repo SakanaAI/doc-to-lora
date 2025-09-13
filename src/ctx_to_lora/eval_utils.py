@@ -43,10 +43,16 @@ from ctx_to_lora.metrics import (
     compute_prefix_matching,
     compute_rouge,
 )
-from ctx_to_lora.model_loading import get_lora_config, get_model, get_tokenizer
+from ctx_to_lora.model_loading import (
+    get_lora_config,
+    get_model,
+    get_model_and_tokenizer,
+    get_tokenizer,
+)
 from ctx_to_lora.modeling import hypernet
 from ctx_to_lora.modeling.context_distillation import CtxDistillModel
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
+from ctx_to_lora.modeling.llm_lingua import LLMLinguaModel
 from ctx_to_lora.tracker.tracker import (
     add_tracker,
     print_global_tracker_stats,
@@ -757,6 +763,7 @@ def evaluate(
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     use_cd = False
+    ctx_model_max_len = None
 
     if model_name_or_path is None:
         try:
@@ -771,6 +778,7 @@ def evaluate(
             use_flash_attn=True,
             use_sequence_packing=False,  # for generation
         )
+        ctx_model_max_len = model.ctx_encoder.config.max_position_embeddings
         model.enable_iterative_mode(args.use_iterative_mode)
         add_tracker(model.base_model.generate, "generate")
         add_tracker(model.generate_weights, "generate_weights")
@@ -794,29 +802,50 @@ def evaluate(
             )
             peft_config.lora_alpha = 16
             peft_model = get_peft_model(model, peft_config)
-            q_model = get_model(
-                "google/gemma-3-4b-it", train=False, requires_grad=False
+            sep_seq = (
+                tokenizer(
+                    SELF_QA_INTX.strip("\n"),
+                    add_special_tokens=False,
+                    return_tensors="pt",
+                )
+                .input_ids[0]
+                .to(model.device)
             )
-            model = CtxDistillModel(
-                peft_model,
+            ctx_distill_kwargs = dict(
                 prefix_tokens=torch.tensor(
                     CTX_AFFIXES[model_name_or_path]["prefix"], device=model.device
                 ),
+                ctx_inp_sep_seq=sep_seq,
                 pad_token_id=tokenizer.pad_token_id,
                 update_iterations=args.cd_update_iterations,
-                q_model=q_model,  # peft_model if args.cd_use_gen_q else None,
-                num_gen_q=args.num_gen_q,
                 tokenizer=tokenizer,
             )
+            if args.cd_use_gen_q:
+                q_model, q_tokenizer = get_model_and_tokenizer(
+                    "google/gemma-3-4b-it",
+                    train=False,
+                    requires_grad=False,
+                )
+                ctx_distill_kwargs["q_model"] = q_model
+                ctx_distill_kwargs["q_tokenizer"] = q_tokenizer
+                ctx_distill_kwargs["num_gen_q"] = args.num_gen_q
+            model = CtxDistillModel(peft_model, **ctx_distill_kwargs)
+
             add_tracker(model._distill_context, "distill_context")
             add_tracker(model.generate_questions, "generate_questions")
             add_tracker(model.teacher_generate, "teacher_generate")
             add_tracker(model.student_generate, "student_generate")
+        elif use_llmlingua := getattr(args, "use_llmlingua", False):
+            model = LLMLinguaModel(model, tokenizer, args.llmlingua_compression_rate)
+            ctx_model_max_len = model.base_model.config.max_position_embeddings
+            add_tracker(model.base_model.generate, "generate")
+            add_tracker(model.compress, "prompt_compress")
 
     base_model = (
         model.base_model
         if isinstance(model, ModulatedPretrainedModel)
         or isinstance(model, CtxDistillModel)
+        or isinstance(model, LLMLinguaModel)
         else model
     )
     base_model.config.pad_token_id = tokenizer.pad_token_id
@@ -829,13 +858,12 @@ def evaluate(
             ctx_tokenizer.pad_token_id = ctx_tokenizer.eos_token_id
 
     add_ctx_to_chat = (
-        not isinstance(model, ModulatedPretrainedModel) and not args.remove_context
+        not (
+            isinstance(model, ModulatedPretrainedModel)
+            or isinstance(model, LLMLinguaModel)
+        )
+        and not args.remove_context
     ) or isinstance(model, CtxDistillModel)
-    ctx_model_max_len = (
-        model.ctx_encoder.config.max_position_embeddings
-        if isinstance(model, ModulatedPretrainedModel)
-        else None
-    )
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
@@ -878,8 +906,17 @@ def evaluate(
             if ds_name in answers:
                 answers[ds_name] = answers[ds_name].select(val_indices)
 
-        print(f"Datasets: {datasets}")
-        print(f"Answers: {answers}")
+    max_test_samples_per_ds = getattr(args, "max_test_samples_per_ds", 0)
+    if split == "test" and max_test_samples_per_ds > 0:
+        print(f"Truncating all test ds to {max_test_samples_per_ds} samples")
+        for ds_name, ds in datasets.items():
+            test_indices = np.random.permutation(len(ds))[:max_test_samples_per_ds]
+            datasets[ds_name] = ds.select(test_indices)
+            if ds_name in answers:
+                answers[ds_name] = answers[ds_name].select(test_indices)
+
+    print(f"Datasets: {datasets}")
+    print(f"Answers: {answers}")
 
     gen_kwargs = dict(
         do_sample=False,
@@ -924,19 +961,13 @@ def evaluate(
     if max_ctx_chunk_len > 0:
         model.generate = model.generate_with_multi_loras
 
-    if isinstance(model, CtxDistillModel):
-        sep_seq = (
-            tokenizer(
-                SELF_QA_INTX.strip("\n"), add_special_tokens=False, return_tensors="pt"
-            )
-            .input_ids[0]
-            .to(model.device)
-        )
-        model.generate = partial(
-            model.generate,
-            ctx_inp_sep_seq=sep_seq,
-            reset=True,
-        )
+    # if isinstance(model, CtxDistillModel):
+
+    #     model.generate = partial(
+    #         model.generate,
+    #         ctx_inp_sep_seq=sep_seq,
+    #         reset=True,
+    #     )
 
     trainer_kwargs = {
         "model": model,
@@ -997,6 +1028,7 @@ def run_eval(
     split: str = "validation",
     eval_batch_size: int = 8,
     max_val_samples_per_ds: int = -1,
+    max_test_samples_per_ds: int = -1,
     max_ctx_chunk_len: int = -1,
     remove_context: bool = False,
     max_new_tokens: int = 256,
@@ -1006,12 +1038,14 @@ def run_eval(
     cd_use_gen_q: bool = False,
     num_gen_q: int = 20,
     use_iterative_mode: bool = False,
+    use_llmlingua: bool = False,
+    llmlingua_compression_rate: float = 0.9,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
-    if use_cd and eval_batch_size != 1:
+    if (use_cd or use_llmlingua) and eval_batch_size != 1:
         raise ValueError("When using context distillation, eval_batch_size must be 1.")
 
     disable_caching()
@@ -1065,8 +1099,13 @@ def run_eval(
             args.cd_update_iterations = cd_update_iterations
             args.cd_use_gen_q = cd_use_gen_q
             args.num_gen_q = num_gen_q
+        if use_llmlingua:
+            args.use_llmlingua = use_llmlingua
+            args.llmlingua_compression_rate = llmlingua_compression_rate
     if max_val_samples_per_ds > 0:
         args.max_val_samples_per_ds = max_val_samples_per_ds
+    if max_test_samples_per_ds > 0:
+        args.max_test_samples_per_ds = max_test_samples_per_ds
     setup_logging(args.logging_dir)
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
 

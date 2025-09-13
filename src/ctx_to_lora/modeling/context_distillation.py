@@ -130,11 +130,15 @@ class CtxDistillModel(nn.Module):
         self,
         base_model: PeftModel,
         prefix_tokens: Integer[Tensor, "n"],
+        ctx_inp_sep_seq: Integer[Tensor, "m"],
         pad_token_id: int,
         update_iterations: int,
-        q_model: PreTrainedModel | None = None,
-        num_gen_q: int | None = None,
+        reset: bool = True,
         tokenizer=None,
+        q_model: PreTrainedModel | None = None,
+        q_tokenizer=None,
+        num_gen_q: int | None = None,
+        reprompt_ctx: bool = False,
     ):
         super().__init__()
         self.register_module("base_model", base_model)
@@ -145,9 +149,13 @@ class CtxDistillModel(nn.Module):
             )
             self.num_gen_q = num_gen_q
         self.register_buffer("prefix_tokens", prefix_tokens)
+        self.register_buffer("ctx_inp_sep_seq", ctx_inp_sep_seq)
         self.tokenizer = tokenizer
+        self.q_tokenizer = q_tokenizer
         self.pad_token_id = pad_token_id
         self.update_iterations = update_iterations
+        self.reprompt_ctx = reprompt_ctx
+        self.reset = reset
         self.device = base_model.device
         self.to(self.device)
 
@@ -177,7 +185,7 @@ class CtxDistillModel(nn.Module):
         )
 
     def reset_lora(self):
-        print("Resetiing LoRA")
+        print("Resetting LoRA")
         for layer in get_peft_layers(self.base_model, self.peft_config):
             layer.reset_lora_parameters(self.adapter_name, init_lora_weights=True)
         self._init_optim()
@@ -265,8 +273,6 @@ class CtxDistillModel(nn.Module):
         # n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
         # n_queries: Integer[Tensor, "n_ctx"] | None = None,
         *model_inputs_args: Any,
-        ctx_inp_sep_seq: Integer[Tensor, "l"],
-        reset: bool,
         **model_inputs_kwargs: dict[str, Any],
     ):
         # where to get the questions???
@@ -275,17 +281,15 @@ class CtxDistillModel(nn.Module):
 
         # update peft module with CD (if labels provided)
 
-        if reset:
+        if self.reset:
             self.reset_lora()
 
         # teacher tokens
-        if model_inputs_args:
-            ctx_inp_ids = model_inputs_args[0]
-        else:
-            ctx_inp_ids = model_inputs_kwargs.pop("input_ids")
+        orig_ctx_inp_ids = model_inputs_kwargs.pop("input_ids")
+        ctx_inp_ids = orig_ctx_inp_ids.clone()
         _, orig_inp_ids = ctx_inp_split(
             ctx_inp_ids,
-            ctx_inp_sep_seq,
+            self.ctx_inp_sep_seq,
             self.pad_token_id,
             self.prefix_tokens,
             padding_side="left",
@@ -295,7 +299,7 @@ class CtxDistillModel(nn.Module):
         if self.q_model is not None:
             # Extract context-only portion after separator (remove prefix tokens from first row)
             ctx_ids_full, _ = ctx_inp_split(
-                ctx_inp_ids, ctx_inp_sep_seq, self.pad_token_id
+                ctx_inp_ids, self.ctx_inp_sep_seq, self.pad_token_id
             )  # [bs, var_len]
             ctx_ids = ctx_ids_full[0, len(self.prefix_tokens) :]
             ctx_txt = self.tokenizer.decode(ctx_ids, skip_special_tokens=True)
@@ -303,7 +307,7 @@ class CtxDistillModel(nn.Module):
             messages_list = [
                 build_messages(ctx_txt, 1, 1, 1, 1) for _ in range(self.num_gen_q)
             ]
-            q_inputs = self.tokenizer.apply_chat_template(
+            q_inputs = self.q_tokenizer.apply_chat_template(
                 messages_list,
                 tokenize=True,
                 add_special_tokens=False,
@@ -322,11 +326,13 @@ class CtxDistillModel(nn.Module):
                     max_new_tokens=256,
                     do_sample=True,
                     top_p=0.95,
-                    temperature=1.0,  # high temp for diverse questions
+                    temperature=2.0,  # high temp for diverse questions
                 )
             # Slice off the prompt portion
             gen_only = question_outputs[:, q_inputs["input_ids"].shape[-1] :]
-            questions = self.tokenizer.batch_decode(gen_only, skip_special_tokens=True)
+            questions = self.q_tokenizer.batch_decode(
+                gen_only, skip_special_tokens=True
+            )
             questions = [q.split("Message:")[-1].strip() for q in questions]
 
             ctx_inp_messages = [
@@ -346,8 +352,6 @@ class CtxDistillModel(nn.Module):
             encoded_ctx_inp = {k: v.to(self.device) for k, v in encoded_ctx_inp.items()}
             ctx_inp_ids = encoded_ctx_inp["input_ids"]
             ctx_inp_attention_mask = encoded_ctx_inp["attention_mask"]
-
-        # TODO: check labels + loss calculation + padding
 
         # sample responses first
         ctx_inp_res_ids = self.teacher_generate(
@@ -373,7 +377,7 @@ class CtxDistillModel(nn.Module):
         # student tokens
         _, inp_res_ids = ctx_inp_split(
             ctx_inp_res_ids,
-            ctx_inp_sep_seq,
+            self.ctx_inp_sep_seq,
             self.pad_token_id,
             self.prefix_tokens,
             padding_side="left",
@@ -415,12 +419,18 @@ class CtxDistillModel(nn.Module):
         # # inp_ids = torch.cat([self.prefix_tokens.expand(bs, -1), inp_ids], dim=-1)
         # # inp_ids = inp_res_ids[:, :-res_len]
         # print(self.tokenizer.batch_decode(inp_ids))
-        inp_attention_mask = torch.where(orig_inp_ids != self.pad_token_id, 1, 0).long()
         model_inputs_kwargs.pop("attention_mask", None)
         model_inputs_kwargs.pop("input_ids", None)
-        model_outputs = self.student_generate(
-            orig_inp_ids, attention_mask=inp_attention_mask, **model_inputs_kwargs
-        )
+        if self.reprompt_ctx:
+            attention_mask = torch.where(orig_ctx_inp_ids != self.pad_token_id, 1, 0)
+            model_outputs = self.student_generate(
+                orig_ctx_inp_ids, attention_mask=attention_mask, **model_inputs_kwargs
+            )
+        else:
+            attention_mask = torch.where(orig_inp_ids != self.pad_token_id, 1, 0).long()
+            model_outputs = self.student_generate(
+                orig_inp_ids, attention_mask=attention_mask, **model_inputs_kwargs
+            )
         return model_outputs
 
 
@@ -429,12 +439,19 @@ if __name__ == "__main__":
     from ctx_to_lora.model_loading import get_lora_config, get_model_and_tokenizer
 
     model_name = "google/gemma-2-2b-it"
+    q_model_name = "google/gemma-3-4b-it"
     peft_config = get_lora_config(
         model_name, r=8, target_modules=["down_proj"], lora_dropout=0.0
     )
     peft_config.lora_alpha = 16
     model, tokenizer = get_model_and_tokenizer(
         model_name,
+        train=False,
+        requires_grad=False,
+        peft_config=peft_config,
+    )
+    q_model, q_tokenizer = get_model_and_tokenizer(
+        q_model_name,
         train=False,
         requires_grad=False,
         peft_config=peft_config,
@@ -459,26 +476,29 @@ if __name__ == "__main__":
     prefix_tokens = CTX_AFFIXES[model_name]["prefix"]
     prefix_tokens = torch.tensor(prefix_tokens, dtype=torch.long)
 
-    cd_model = CtxDistillModel(
-        base_model=model,
-        prefix_tokens=prefix_tokens,
-        pad_token_id=tokenizer.pad_token_id,
-        update_iterations=200,
-        q_model=model,
-        num_gen_q=20,
-        tokenizer=tokenizer,
-    )
-
     sep_ids = (
         tokenizer(sep_text.strip("\n"), add_special_tokens=False, return_tensors="pt")
         .input_ids[0]
         .to(model.device)
     )
 
+    cd_model = CtxDistillModel(
+        base_model=model,
+        prefix_tokens=prefix_tokens,
+        ctx_inp_sep_seq=sep_ids,
+        pad_token_id=tokenizer.pad_token_id,
+        update_iterations=200,
+        q_model=q_model,
+        q_tokenizer=q_tokenizer,
+        num_gen_q=20,
+        tokenizer=tokenizer,
+        reprompt_ctx=True,
+    )
+
     with torch.no_grad():
         for _ in range(1):
             base_model_res = model.generate(
-                encoded["input_ids"],
+                input_ids=encoded["input_ids"],
                 attention_mask=encoded["attention_mask"],
                 max_new_tokens=256,
                 do_sample=False,
@@ -488,10 +508,8 @@ if __name__ == "__main__":
             )
 
             outputs = cd_model.generate(
-                encoded["input_ids"],
+                input_ids=encoded["input_ids"],
                 attention_mask=encoded["attention_mask"],
-                ctx_inp_sep_seq=sep_ids,
-                reset=True,
                 max_new_tokens=256,
                 do_sample=False,
             )

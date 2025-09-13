@@ -225,6 +225,7 @@ class HyperLoRA(nn.Module):
         # or via a perceiver w/ bottleneck size = n_modules * n_layers
         self.config = config
         logger.debug(f"HyperLoRA config: {self.config}")
+        self.iterative_mode = False
         self._init_model()
 
     def _init_model(self):
