@@ -23,38 +23,19 @@ from ctx_to_lora.data.processing import (
     load_and_process_dataset,
     tokenize_ctx_text,
 )
+from ctx_to_lora.data.self_gen_template import (
+    PRE_CTX,
+    PROMPT_TEMPLATE,
+    QA_PROMPT_TEMPLATE,
+    SELF_GEN_SYSTEM_MSG,
+    SELF_QA_INTX,
+)
 from ctx_to_lora.model_loading import get_tokenizer
 from ctx_to_lora.utils import clear_gpu
 
 STOP_STRINGS = {
     "google/gemma-2-2b-it": ["<eos>", "<end_of_turn>"],
 }
-
-# TODO: !!!!
-# see https://huggingface.co/datasets/YuxinJiang/LTE_train_data/viewer/default/train?row=97&views%5B%5D=train&sql_row=2
-# based on https://arxiv.org/pdf/2402.11905
-SELF_GEN_SYSTEM_MSG = (
-    # "### SYSTEM INSTRUCTION ###\n"
-    # "You are an honest and helpful assistant.\n"
-    # "**DO NOT** hallucinate or make up information.\n"
-    # "### END OF SYSTEM INSTRUCTION ###"
-    "You are an honest and helpful assistant."
-)
-
-SELF_QA_INTX = (
-    "# System Instruction\n"
-    "- The information provided is up-to-date information and/or the user instruction.\n"
-    "- When the provided information is not relevant to the question, ***ignore*** it and answer the question based on your knowledge.\n"
-    "- If the provided information is related to the question, incorporate it in your response.\n"
-    "- If the provided information is an instruction, follow the instruction carefully.\n"
-    "\n---\n\n"
-    "# User Input\n"
-)
-
-PRE_CTX = "# Provided Information\n"
-
-QA_PROMPT_TEMPLATE = PRE_CTX + "{context}\n\n---\n\n" + SELF_QA_INTX + "{question}"
-PROMPT_TEMPLATE = "{context}\n\n{question}"
 
 MODEL_CTX_LEN = {
     "google/gemma-2-27b-it": 8192,
