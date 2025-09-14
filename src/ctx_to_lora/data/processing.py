@@ -224,6 +224,7 @@ def get_tokenized_dataset(
             f"`max_qas_len` should be <= {base_model_max_len=}, got {max_qas_len=}"
         )
     logger.info(f"Loading dataset {ds_name} with split {split}...")
+    # TODO: fix this to allow using both ctx_ids and add_ctx_ids
     need_ctx_ids = not add_ctx_to_chat and bool(ctx_model_max_len)
 
     load_and_process_kwargs = dict(
@@ -340,12 +341,12 @@ def construct_and_tokenize_ctx_qa(
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
         logging.debug("Tokenizing inputs")
         # HACK: check magic num niah dataset
-        prepend_bos = True  # see known issues in readme
-        sample = ds[0]
-        inp_txt = sample["prompts"][0]
-        if inp_txt == "What is the special magic number? Reply with only the number.":
-            logger.info("Detected Niah dataset, not prepending BOS")
-            prepend_bos = False
+        prepend_bos = False  # see known issues in readme
+        # sample = ds[0]
+        # inp_txt = sample["prompts"][0]
+        # if inp_txt == "What is the special magic number? Reply with only the number.":
+        #     logger.info("Detected Niah dataset, not prepending BOS")
+        #     prepend_bos = False
         tokenized_ds = ds.map(
             get_sft_prompt_formatting_fn(tokenizer, prepend_bos),
             batched=True,
@@ -963,10 +964,8 @@ def pack(
     else:
         train_ds = interleave_datasets(
             list(ds_dict.values()),
-            # probabilities=get_ds_prob(
-            #     train_ds_lens, total_samples
-            # ),
-            probabilities=[l / total_samples for l in train_ds_lens],
+            probabilities=get_ds_prob(train_ds_lens, total_samples),
+            # probabilities=[l / total_samples for l in train_ds_lens],
             seed=seed,
             stopping_strategy="all_exhausted",
         )
