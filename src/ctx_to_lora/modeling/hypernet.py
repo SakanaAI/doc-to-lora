@@ -1129,7 +1129,6 @@ class ModulatedPretrainedModel(nn.Module):
     @torch.inference_mode()
     def generate(
         self,
-        # TODO: allow more than one LoRA per sample (multi-lora)
         ctx_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,
         ctx_attn_mask: Integer[Tensor, "n_chunks ctx_length"] | None = None,
         ctx_position_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,

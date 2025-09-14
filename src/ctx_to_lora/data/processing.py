@@ -225,7 +225,9 @@ def get_tokenized_dataset(
         )
     logger.info(f"Loading dataset {ds_name} with split {split}...")
     # TODO: fix this to allow using both ctx_ids and add_ctx_ids
-    need_ctx_ids = not add_ctx_to_chat and bool(ctx_model_max_len)
+    need_ctx_ids = (
+        ctx_model_max_len is not None
+    )  # not add_ctx_to_chat and bool(ctx_model_max_len)
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,

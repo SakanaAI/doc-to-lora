@@ -118,6 +118,16 @@ if __name__ == "__main__":
         default=0.9,
         help="Compression rate for LLMLingua",
     )
+    parser.add_argument(
+        "--use_t2l",
+        action="store_true",
+        help="Use Text-to-LoRA model for evaluation",
+    )
+    parser.add_argument(
+        "--add_ctx_to_input",
+        action="store_true",
+        help="Add ctx to base model's input",
+    )
 
     cli_args = vars(parser.parse_args())
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))

@@ -17,6 +17,7 @@ import yaml
 from datasets import disable_caching
 from peft import get_peft_model
 from transformers import (
+    PreTrainedModel,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     Trainer,
@@ -53,6 +54,7 @@ from ctx_to_lora.modeling import hypernet
 from ctx_to_lora.modeling.context_distillation import CtxDistillModel
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 from ctx_to_lora.modeling.llm_lingua import LLMLinguaModel
+from ctx_to_lora.modeling.text_to_lora import TextToLoRA
 from ctx_to_lora.tracker.tracker import (
     add_tracker,
     print_global_tracker_stats,
@@ -764,6 +766,7 @@ def evaluate(
 
     use_cd = False
     ctx_model_max_len = None
+    base_model = None
 
     if model_name_or_path is None:
         try:
@@ -785,14 +788,14 @@ def evaluate(
         add_tracker(model.combine_lora, "combine_lora")
         add_tracker(model.apply_lora_to_layers, "apply_lora_to_layers")
     else:
-        model = get_model(
+        model = base_model = get_model(
             model_name_or_path,
             train=False,
             requires_grad=False,
             model_kwargs=model_kwargs,
             use_flash_attn=True,
         )
-        add_tracker(model.generate, "generate")
+        add_tracker(base_model.generate, "generate")
         if use_cd := getattr(args, "use_cd", False):
             peft_config = get_lora_config(
                 model_name_or_path,
@@ -801,7 +804,7 @@ def evaluate(
                 target_modules=["down_proj"],
             )
             peft_config.lora_alpha = 16
-            peft_model = get_peft_model(model, peft_config)
+            peft_model = get_peft_model(base_model, peft_config)
             sep_seq = (
                 tokenizer(
                     SELF_QA_INTX.strip("\n"),
@@ -809,16 +812,17 @@ def evaluate(
                     return_tensors="pt",
                 )
                 .input_ids[0]
-                .to(model.device)
+                .to(base_model.device)
             )
             ctx_distill_kwargs = dict(
                 prefix_tokens=torch.tensor(
-                    CTX_AFFIXES[model_name_or_path]["prefix"], device=model.device
+                    CTX_AFFIXES[model_name_or_path]["prefix"], device=base_model.device
                 ),
                 ctx_inp_sep_seq=sep_seq,
                 pad_token_id=tokenizer.pad_token_id,
                 update_iterations=args.cd_update_iterations,
                 tokenizer=tokenizer,
+                reprompt_ctx=args.add_ctx_to_input,
             )
             if args.cd_use_gen_q:
                 q_model, q_tokenizer = get_model_and_tokenizer(
@@ -835,18 +839,27 @@ def evaluate(
             add_tracker(model.teacher_generate, "teacher_generate")
             add_tracker(model.student_generate, "student_generate")
         elif use_llmlingua := getattr(args, "use_llmlingua", False):
-            model = LLMLinguaModel(model, tokenizer, args.llmlingua_compression_rate)
+            model = LLMLinguaModel(
+                base_model, tokenizer, args.llmlingua_compression_rate
+            )
             ctx_model_max_len = model.base_model.config.max_position_embeddings
             add_tracker(model.base_model.generate, "generate")
             add_tracker(model.compress, "prompt_compress")
 
-    base_model = (
-        model.base_model
-        if isinstance(model, ModulatedPretrainedModel)
-        or isinstance(model, CtxDistillModel)
-        or isinstance(model, LLMLinguaModel)
-        else model
-    )
+        elif use_t2l := getattr(args, "use_t2l", False):
+            model = TextToLoRA(
+                base_model.name_or_path,
+                prefix_tokens=torch.tensor(
+                    CTX_AFFIXES[model_name_or_path]["prefix"], device=base_model.device
+                ),
+                device=base_model.device,
+            )
+            ctx_model_max_len = model.base_model.config.max_position_embeddings
+            add_tracker(model.base_model.generate, "base_model.generate")
+            add_tracker(model.generate_weights, "generate_weights")
+
+    if base_model is None:
+        base_model = model.base_model
     base_model.config.pad_token_id = tokenizer.pad_token_id
     base_model.generation_config.pad_token_id = tokenizer.pad_token_id
 
@@ -857,12 +870,10 @@ def evaluate(
             ctx_tokenizer.pad_token_id = ctx_tokenizer.eos_token_id
 
     add_ctx_to_chat = (
-        not (
-            isinstance(model, ModulatedPretrainedModel)
-            or isinstance(model, LLMLinguaModel)
-        )
-        and not args.remove_context
-    ) or isinstance(model, CtxDistillModel)
+        (isinstance(model, PreTrainedModel) and not args.remove_context)
+        or isinstance(model, CtxDistillModel)
+        or args.add_ctx_to_input
+    )
 
     _get_tokenized_dataset = partial(
         get_tokenized_dataset,
@@ -1038,13 +1049,20 @@ def run_eval(
     use_iterative_mode: bool = False,
     use_llmlingua: bool = False,
     llmlingua_compression_rate: float = 0.9,
+    use_t2l: bool = False,
+    add_ctx_to_input: bool = False,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
-    if (use_cd or use_llmlingua) and eval_batch_size != 1:
-        raise ValueError("When using context distillation, eval_batch_size must be 1.")
+    if (use_cd or use_llmlingua or use_t2l) and eval_batch_size != 1:
+        raise ValueError("When using a baseline method, eval_batch_size must be 1.")
+
+    if use_llmlingua and add_ctx_to_input:
+        raise ValueError(
+            "LLMLingua always adds compressed context to input by default."
+        )
 
     disable_caching()
     set_seed(42)
@@ -1099,10 +1117,13 @@ def run_eval(
         if use_llmlingua:
             args.use_llmlingua = use_llmlingua
             args.llmlingua_compression_rate = llmlingua_compression_rate
+        if use_t2l:
+            args.use_t2l = use_t2l
     if max_val_samples_per_ds > 0:
         args.max_val_samples_per_ds = max_val_samples_per_ds
     if max_test_samples_per_ds > 0:
         args.max_test_samples_per_ds = max_test_samples_per_ds
+    args.add_ctx_to_input = add_ctx_to_input
     setup_logging(args.logging_dir)
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
 
