@@ -103,12 +103,6 @@ if __name__ == "__main__":
         help="Use generated queries for context distillation training.",
     )
     parser.add_argument(
-        "--num_gen_q",
-        type=int,
-        default=None,
-        help="Number of generated queries to use for context distillation.",
-    )
-    parser.add_argument(
         "--use_iterative_mode",
         action="store_true",
         help="Use iterative mode LoRA layer-by-layer generation",

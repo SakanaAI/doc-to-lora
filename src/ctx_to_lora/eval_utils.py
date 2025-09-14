@@ -828,7 +828,6 @@ def evaluate(
                 )
                 ctx_distill_kwargs["q_model"] = q_model
                 ctx_distill_kwargs["q_tokenizer"] = q_tokenizer
-                ctx_distill_kwargs["num_gen_q"] = args.num_gen_q
             model = CtxDistillModel(peft_model, **ctx_distill_kwargs)
 
             add_tracker(model._distill_context, "distill_context")
@@ -1036,7 +1035,6 @@ def run_eval(
     use_cd: bool = False,
     cd_update_iterations: int = 10,
     cd_use_gen_q: bool = False,
-    num_gen_q: int = 20,
     use_iterative_mode: bool = False,
     use_llmlingua: bool = False,
     llmlingua_compression_rate: float = 0.9,
@@ -1098,7 +1096,6 @@ def run_eval(
             args.use_cd = use_cd
             args.cd_update_iterations = cd_update_iterations
             args.cd_use_gen_q = cd_use_gen_q
-            args.num_gen_q = num_gen_q
         if use_llmlingua:
             args.use_llmlingua = use_llmlingua
             args.llmlingua_compression_rate = llmlingua_compression_rate
