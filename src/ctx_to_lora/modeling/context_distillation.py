@@ -1,5 +1,6 @@
+import gc
 import logging
-import random
+import re
 from typing import Any
 
 import torch
@@ -11,13 +12,11 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 from ctx_to_lora.data.definitions import CTX_AFFIXES
-from ctx_to_lora.data.q_generation_prompts import (
-    PROMPT_TEMPLATE,
-    SYSTEM_PROMPT,
-    get_creative_seed_prompt,
-    get_generic_seed_prompt,
-    get_question_seed_prompt,
-    get_use_case_seed_prompt,
+from ctx_to_lora.data.q_generation_template import (
+    Q_GEN_PROMPT_TEMPLATE,
+    Q_GEN_PROMPT_TEMPLATE_REPEAT,
+    Q_GEN_SYSTEM_TEMPLATE,
+    STOP_STRINGS,
 )
 from ctx_to_lora.data.self_gen_template import SELF_QA_INTX
 from ctx_to_lora.utils import log_num_train_params
@@ -25,35 +24,87 @@ from ctx_to_lora.utils import log_num_train_params
 logger = logging.getLogger()
 
 
-def build_messages(
-    context: str,
-    question_weight: float,
-    use_case_weight: float,
-    creative_weight: float,
-    generic_weight: float,
-) -> list[dict]:
-    # Create list of instruction functions with their weights
-    instruction_options = [
-        ("question", get_question_seed_prompt, question_weight),
-        ("use_case", get_use_case_seed_prompt, use_case_weight),
-        ("creative", get_creative_seed_prompt, creative_weight),
-        ("generic", get_generic_seed_prompt, generic_weight),
-    ]
+def get_q_gen_prompt(context, n_qa_pairs):
+    prompt = Q_GEN_PROMPT_TEMPLATE.format(context=context, n_qa_pairs=n_qa_pairs)
+    return prompt
 
-    q_types, functions, weights = zip(*instruction_options)
 
-    chosen_idx = random.choices(range(len(instruction_options)), weights=weights)[0]
+def get_q_gen_prompt_repeat(context, qa_pairs, n_qa_pairs):
+    example_qa_pairs = ""
+    for i, (q, a) in enumerate(qa_pairs, 1):
+        example_qa_pairs += f"Question {i}: {q}\nAnswer {i}: {a}\n"
+    prompt = Q_GEN_PROMPT_TEMPLATE_REPEAT.format(
+        context=context,
+        qa_pairs=example_qa_pairs,
+        n_qa_pairs=n_qa_pairs,
+    )
+    return prompt
 
-    function = functions[chosen_idx]
 
-    custom_instruction = function()
+def check_should_skip(txt: str, vllm_model: str) -> bool:
+    """Check if the response should be skipped based on stop strings."""
+    for stop in STOP_STRINGS[vllm_model]:
+        if stop in txt[-len(stop) :]:
+            return (txt.split(stop)[0], False)  # Found a valid stop string
+    return (txt, True)  # No valid stop string found, skip this response
+
+
+def postprocess_qa_pairs(res_txt: str):
+    """
+    Postprocesses the QA pairs from the response text.
+
+    Args:
+        res_txt: The response text.
+        n_qa_pairs: The number of QA pairs.
+
+    Returns:
+        A tuple of two lists, the first containing the questions and the second containing the answers.
+    """
+    # capture everything after each "Question {number}:" until "Answer"
+    q_pattern = r"Question \d+:(.*?)(?=Answer|$)"  # thanks chatgpt
+    questions = re.findall(q_pattern, res_txt, flags=re.S)
+
+    a_pattern = r"Answer \d+:(.*?)(?=Question|$)"  # thanks chatgpt
+    answers = re.findall(a_pattern, res_txt, flags=re.S)
+
+    if len(questions) != len(answers):
+        print(f"Warning---number of questions and answers do not match")
+        print(f"Number of questions: {len(questions)}")
+        print(f"Number of answers: {len(answers)}")
+
+    out_q = []
+    out_a = []
+    n_skips = 0
+    if (len(questions) > 0) and (len(answers) > 0):
+        n_gen_pairs = min(len(questions), len(answers))
+        has_left_over = n_gen_pairs < len(questions) or n_gen_pairs < len(answers)
+        for i in range(n_gen_pairs):
+            response = answers[i].strip()
+            question = questions[i].strip()
+            if not response or not question:
+                print(f"Skipping empty question or answer at index {i}")
+                continue
+            if (not has_left_over) and (i == n_gen_pairs - 1):
+                response, skip = check_should_skip(response, "google/gemma-3-12b-it")
+                if skip:
+                    print(f"Skipping due to missing stop string")
+                    n_skips += 1
+                    continue
+            out_q.append(question.strip())
+            out_a.append(response.strip())
+    print(f"Skipped {n_skips} responses due to missing stop strings")
+
+    return out_q, out_a
+
+
+def build_messages(ctx_text: str, level: int, example_qa_pairs: list = None):
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": Q_GEN_SYSTEM_TEMPLATE},
         {
             "role": "user",
-            "content": PROMPT_TEMPLATE.format(
-                context=context, instruction=custom_instruction
-            ),
+            "content": get_q_gen_prompt(ctx_text, 5)
+            if level == 0
+            else get_q_gen_prompt_repeat(ctx_text, example_qa_pairs, 5),
         },
     ]
     return messages
@@ -137,17 +188,11 @@ class CtxDistillModel(nn.Module):
         tokenizer=None,
         q_model: PreTrainedModel | None = None,
         q_tokenizer=None,
-        num_gen_q: int | None = None,
         reprompt_ctx: bool = False,
     ):
         super().__init__()
         self.register_module("base_model", base_model)
         self.register_module("q_model", q_model)
-        if q_model is not None:
-            assert num_gen_q is not None, (
-                "num_gen_q must be provided if q_model is used"
-            )
-            self.num_gen_q = num_gen_q
         self.register_buffer("prefix_tokens", prefix_tokens)
         self.register_buffer("ctx_inp_sep_seq", ctx_inp_sep_seq)
         self.tokenizer = tokenizer
@@ -158,6 +203,7 @@ class CtxDistillModel(nn.Module):
         self.reset = reset
         self.device = base_model.device
         self.to(self.device)
+        self.q_gen_rounds = 4
 
         self.peft_config = base_model.peft_config["default"]
         self.adapter_name = "default"
@@ -255,7 +301,8 @@ class CtxDistillModel(nn.Module):
             self.eval()
 
     def generate_questions(self, *args, **kwargs):
-        return self.q_model.generate(*args, **kwargs)
+        questions = self.q_model.generate(*args, **kwargs)
+        return questions
 
     def teacher_generate(self, *args, **kwargs):
         # rename for separate timing
@@ -267,20 +314,9 @@ class CtxDistillModel(nn.Module):
 
     def generate(
         self,
-        # ctx_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,
-        # ctx_attn_mask: Integer[Tensor, "n_chunks ctx_length"] | None = None,
-        # ctx_position_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,
-        # n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
-        # n_queries: Integer[Tensor, "n_ctx"] | None = None,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
-        # where to get the questions???
-        # TODO: contex indep variant
-        # self.generate_questions(ctx_ids)
-
-        # update peft module with CD (if labels provided)
-
         if self.reset:
             self.reset_lora()
 
@@ -297,43 +333,47 @@ class CtxDistillModel(nn.Module):
         ctx_inp_attention_mask = model_inputs_kwargs.pop("attention_mask")
 
         if self.q_model is not None:
+            self.q_model.to(self.base_model.device)
             # Extract context-only portion after separator (remove prefix tokens from first row)
             ctx_ids_full, _ = ctx_inp_split(
                 ctx_inp_ids, self.ctx_inp_sep_seq, self.pad_token_id
             )  # [bs, var_len]
             ctx_ids = ctx_ids_full[0, len(self.prefix_tokens) :]
             ctx_txt = self.tokenizer.decode(ctx_ids, skip_special_tokens=True)
+            questions = []
+            answers = []
             # Build multiple instruction variants
-            messages_list = [
-                build_messages(ctx_txt, 1, 1, 1, 1) for _ in range(self.num_gen_q)
-            ]
-            q_inputs = self.q_tokenizer.apply_chat_template(
-                messages_list,
-                tokenize=True,
-                add_special_tokens=False,
-                padding=True,
-                truncation=False,
-                add_generation_prompt=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
-            q_inputs = {k: v.to(self.device) for k, v in q_inputs.items()}
-
-            with torch.no_grad():
-                question_outputs = self.generate_questions(
-                    input_ids=q_inputs["input_ids"],
-                    attention_mask=q_inputs.get("attention_mask", None),
-                    max_new_tokens=256,
-                    do_sample=True,
-                    top_p=0.95,
-                    temperature=2.0,  # high temp for diverse questions
+            for lvl in range(self.q_gen_rounds):
+                messages = build_messages(
+                    ctx_txt, lvl, zip(questions, answers) if lvl > 0 else None
                 )
-            # Slice off the prompt portion
-            gen_only = question_outputs[:, q_inputs["input_ids"].shape[-1] :]
-            questions = self.q_tokenizer.batch_decode(
-                gen_only, skip_special_tokens=True
-            )
-            questions = [q.split("Message:")[-1].strip() for q in questions]
+                q_inputs = self.q_tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_special_tokens=False,
+                    padding=False,
+                    truncation=False,
+                    add_generation_prompt=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                )
+                q_inputs = {k: v.to(self.q_model.device) for k, v in q_inputs.items()}
+
+                with torch.no_grad():
+                    question_outputs = self.generate_questions(
+                        input_ids=q_inputs["input_ids"],
+                        attention_mask=q_inputs["attention_mask"],
+                        max_new_tokens=1024,
+                        do_sample=False,
+                        temperature=0.0,
+                        eos_token_id=106,  # <end_of_turn> for gemma-3-12b-it
+                    )
+                # Slice off the prompt portion
+                gen_only = question_outputs[:, q_inputs["input_ids"].shape[-1] :]
+                res = self.q_tokenizer.batch_decode(gen_only, skip_special_tokens=False)
+                gen_q_list, gen_a_list = postprocess_qa_pairs(res[0])
+                questions += gen_q_list
+                answers += gen_a_list
 
             ctx_inp_messages = [
                 [{"role": "user", "content": f"{ctx_txt}\n\n{SELF_QA_INTX}\n\n{q}"}]
@@ -352,6 +392,9 @@ class CtxDistillModel(nn.Module):
             encoded_ctx_inp = {k: v.to(self.device) for k, v in encoded_ctx_inp.items()}
             ctx_inp_ids = encoded_ctx_inp["input_ids"]
             ctx_inp_attention_mask = encoded_ctx_inp["attention_mask"]
+            self.q_model.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
 
         # sample responses first
         ctx_inp_res_ids = self.teacher_generate(
@@ -439,7 +482,7 @@ if __name__ == "__main__":
     from ctx_to_lora.model_loading import get_lora_config, get_model_and_tokenizer
 
     model_name = "google/gemma-2-2b-it"
-    q_model_name = "google/gemma-3-4b-it"
+    q_model_name = "google/gemma-3-12b-it"
     peft_config = get_lora_config(
         model_name, r=8, target_modules=["down_proj"], lora_dropout=0.0
     )
@@ -490,9 +533,8 @@ if __name__ == "__main__":
         update_iterations=200,
         q_model=q_model,
         q_tokenizer=q_tokenizer,
-        num_gen_q=20,
         tokenizer=tokenizer,
-        reprompt_ctx=True,
+        reprompt_ctx=False,
     )
 
     with torch.no_grad():
