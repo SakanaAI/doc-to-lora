@@ -242,12 +242,68 @@ def get_preprocessing_fn(
                 "response": sample["generated_solution"],
             }
 
-    elif "gsm8k" in ds_name:
+    elif ds_name == "gsm8k":
+        instruction_prompt = (
+            "Provide the reasoning steps before giving the final integer answer."
+        )
 
         def f(sample):
+            question = sample["question"]
+            last_dot_index = question.rfind(".")
+
+            context = question[: last_dot_index + 1]
+            prompt = question[last_dot_index + 1 :].lstrip()
+
             return {
-                "context": sample["question"],
-                "prompt": sample["question"],
+                "prompt": prompt + "\n" + instruction_prompt,
+                "context": context,
+                "response": sample["answer"],
+            }
+            # return {
+            #     "context": sample["question"],
+            #     "prompt": sample["question"] + "\n" + instruction_prompt,
+            #     "response": sample["answer"],
+            # }
+
+    elif ds_name == "gsm8k_fewshot":
+        N_FEW_SHOT_EXAMPLES = 5
+        few_shot_examples = [
+            {
+                "question": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?",
+                "target": "Natalia sold 48/2 = 24 clips in May.\nNatalia sold 48+24 = 72 clips altogether in April and May.\n#### 72",
+            },
+            {
+                "question": "Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?",
+                "target": "Weng earns 12/60 = 0.2 per minute.\nWorking 50 minutes, she earned 0.2 x 50 = $10.\n#### 10",
+            },
+            {
+                "question": "Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?",
+                "target": "In the beginning, Betty has only 100 / 2 = 50.\nBetty's grandparents gave her 15 * 2 = $30.\nThis means, Betty needs 100 - 50 - 30 - 15 = 5 more.\n#### 5",
+            },
+            {
+                "question": "Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?",
+                "target": "Maila read 12 x 2 = 24 pages today.\nSo she was able to read a total of 12 + 24 = 36 pages since yesterday.\nThere are 120 - 36 = 84 pages left to be read.\nSince she wants to read half of the remaining pages tomorrow, then she should read 84/2 = 42 pages.\n#### 42",
+            },
+            {
+                "question": "James writes a 3-page letter to 2 different friends twice a week.  How many pages does he write a year?",
+                "target": "He writes each friend 3*2=6 pages a week\nSo he writes 6*2=12 pages every week\nThat means he writes 12*52=624 pages a year\n#### 624",
+            },
+        ]
+        few_shot_examples_txt = ""
+        for i, example in enumerate(few_shot_examples[:N_FEW_SHOT_EXAMPLES]):
+            few_shot_examples_txt += f"# Example {i + 1}:\nQuestion: {example['question']}\nSolution: {example['target']}\n\n"
+
+        def f(sample):
+            instruction_prompt = (
+                "Provide the reasoning steps before giving the final integer answer."
+            )
+
+            question = sample["question"]
+            # Find the last sentence as prompt (removing leading space)
+
+            return {
+                "prompt": question + "\n" + instruction_prompt,
+                "context": few_shot_examples_txt,
                 "response": sample["answer"],
             }
 

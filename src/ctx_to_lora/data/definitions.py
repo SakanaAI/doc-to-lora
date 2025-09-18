@@ -580,6 +580,28 @@ DS_KWARGS = {
             name="main",
             split="train[:100]",
         ),
+        test=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="test",
+        ),
+    ),
+    "gsm8k_fewshot": dict(
+        train=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="train[100:]",
+        ),
+        validation=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="train[:100]",
+        ),
+        test=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="test",
+        ),
     ),
     "openmathintx-2": dict(
         train=dict(
@@ -771,6 +793,7 @@ for ds_name in list(MULTI_ANSWER_DATASETS):
     if ds_name.startswith("longbench/"):
         MULTI_ANSWER_DATASETS.add(f"{ds_name}_e")
 
+GSM8K_DATASETS = {"gsm8k", "gsm8k_fewshot"}
 
 # for training closed qa datasets, e.g., hotpot_qa, squad, etc.
 CLOSED_QA_INTX_TEMPLATES = [
