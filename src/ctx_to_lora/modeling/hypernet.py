@@ -710,6 +710,8 @@ class ModulatedPretrainedModel(nn.Module):
         use_base_input_as_ctx: bool = False,
         # need non-packed inputs for generation
         use_sequence_packing: bool = True,
+        user_defined_scaling: float = 1,
+        inp_compressor=None,
     ):
         assert not use_base_input_as_ctx
         super().__init__()
@@ -719,6 +721,8 @@ class ModulatedPretrainedModel(nn.Module):
         self.ctx_encoder_args = ctx_encoder_args
         self.use_base_input_as_ctx = use_base_input_as_ctx
         self.use_sequence_packing = use_sequence_packing
+        self.user_defined_scaling = user_defined_scaling
+        self.inp_compressor = inp_compressor
         self.model_accepts_loss_kwargs = True
         self.active_adapters = []
 
@@ -959,10 +963,18 @@ class ModulatedPretrainedModel(nn.Module):
 
         if isinstance(self.ctx_encoder.base_model, ModernBertModel):
             ctx_features = ctx_features.unsqueeze(0)
+        if self.user_defined_scaling == 1:
+            return self.hypernet.generate_weights(
+                ctx_features, ctx_attn_mask, ctx_position_ids
+            )
 
-        return self.hypernet.generate_weights(
+        lora_dict, _ = self.hypernet.generate_weights(
             ctx_features, ctx_attn_mask, ctx_position_ids
         )
+        for module in lora_dict:
+            lora_dict[module]["A"] = lora_dict[module]["A"] * self.user_defined_scaling
+            lora_dict[module]["B"] = lora_dict[module]["B"] * self.user_defined_scaling
+        return lora_dict, None
 
     def enable_iterative_mode(self, x: bool):
         self.hypernet.enable_iterative_mode(x)
@@ -1218,6 +1230,19 @@ class ModulatedPretrainedModel(nn.Module):
                 n_queries,
                 position_ids,
             )
+        if self.inp_compressor is not None:
+            print("Using inp compressor")
+            input_ids = model_inputs_kwargs["input_ids"]
+            print(f"input_ids before: {input_ids.shape}")
+            model_inputs_kwargs["input_ids"] = self.inp_compressor.compress_tokens(
+                input_ids,
+                query_text="Answer the following question. Only output the answer and do not output any other words.",
+            ).to(self.base_model.device)
+            # batch size always 1
+            model_inputs_kwargs["attention_mask"] = torch.ones_like(
+                model_inputs_kwargs["input_ids"]
+            )
+            print(f"input_ids after: {model_inputs_kwargs['input_ids'].shape}")
         model_outputs = self.base_model.generate(
             *model_inputs_args, **model_inputs_kwargs
         )

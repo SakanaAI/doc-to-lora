@@ -1,5 +1,7 @@
 import gc
+import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -189,6 +191,9 @@ class CtxDistillModel(nn.Module):
         q_model: PreTrainedModel | None = None,
         q_tokenizer=None,
         reprompt_ctx: bool = False,
+        lora_save_dir: str | None = None,
+        save_after_distill: bool = True,
+        q_gen_rounds: int = 4,
     ):
         super().__init__()
         self.register_module("base_model", base_model)
@@ -203,7 +208,10 @@ class CtxDistillModel(nn.Module):
         self.reset = reset
         self.device = base_model.device
         self.to(self.device)
-        self.q_gen_rounds = 4
+        self.q_gen_rounds = q_gen_rounds
+        # New save options
+        self.lora_save_dir = lora_save_dir
+        self.save_after_distill = save_after_distill
 
         self.peft_config = base_model.peft_config["default"]
         self.adapter_name = "default"
@@ -235,6 +243,26 @@ class CtxDistillModel(nn.Module):
         for layer in get_peft_layers(self.base_model, self.peft_config):
             layer.reset_lora_parameters(self.adapter_name, init_lora_weights=True)
         self._init_optim()
+
+    def save_lora(self):
+        """
+        Save current LoRA adapter in PEFT format plus a lightweight JSON summary
+        for easy human inspection/manipulation.
+        """
+        if self.lora_save_dir is None:
+            return
+        os.makedirs(self.lora_save_dir, exist_ok=True)
+        # Standard PEFT save (produces adapter_config.json + adapter_model.bin / safetensors)
+        self.base_model.save_pretrained(self.lora_save_dir)
+        # Human-readable summary of LoRA parameter shapes
+        summary = {
+            name: list(p.shape)
+            for name, p in self.base_model.named_parameters()
+            if ("lora_A" in name or "lora_B" in name) and p.requires_grad
+        }
+        with open(os.path.join(self.lora_save_dir, "lora_summary.json"), "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"LoRA adapter saved to {self.lora_save_dir}")
 
     @torch.enable_grad()
     def _distill_context(
@@ -312,9 +340,21 @@ class CtxDistillModel(nn.Module):
         # rename for separate timing
         return self.base_model.generate(*args, **kwargs)
 
+    def get_lora_state(self, clone: bool = True):
+        """
+        Return a dict of current LoRA parameter tensors.
+        clone=True returns detached cloned tensors (safe to store).
+        """
+        return {
+            name: (p.detach().clone() if clone else p)
+            for name, p in self.base_model.named_parameters()
+            if ("lora_A" in name or "lora_B" in name)
+        }
+
     def generate(
         self,
         *model_inputs_args: Any,
+        distill_only: bool = False,
         **model_inputs_kwargs: dict[str, Any],
     ):
         if self.reset:
@@ -450,6 +490,9 @@ class CtxDistillModel(nn.Module):
             inp_res_attention_mask,
             student_labels,
         )
+        # Save LoRA after distillation if requested
+        if distill_only:
+            return self.get_lora_state()
 
         # _, inp_ids = ctx_inp_split(
         #     ctx_inp_ids,
@@ -535,6 +578,8 @@ if __name__ == "__main__":
         q_tokenizer=q_tokenizer,
         tokenizer=tokenizer,
         reprompt_ctx=False,
+        lora_save_dir="./saved_lora_adapter",  # example save path
+        save_after_distill=True,
     )
 
     with torch.no_grad():

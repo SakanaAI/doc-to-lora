@@ -82,7 +82,12 @@ def get_tokenizer(
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     template_path = f"chat_templates/{model_name_or_path}.jinja"
-    assert os.path.exists(template_path), f"Chat template not found at {template_path}."
+    # assert os.path.exists(template_path), f"Chat template not found at {template_path}."
+    if not os.path.exists(template_path):
+        logger.warning(
+            f"Chat template not found at {template_path}. Using default template."
+        )
+        return tokenizer
 
     logger.info(f"Using chat template from {template_path}")
     chat_template = open(template_path).read()
@@ -108,7 +113,7 @@ def get_model(
         torch_dtype=dtype,
         trust_remote_code=True,
         attn_implementation="eager",
-        use_cache=False,
+        use_cache=None,
     )
     is_vision_model = check_is_vision_model(model_name_or_path)
     if model_kwargs is not None:

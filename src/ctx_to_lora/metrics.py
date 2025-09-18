@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -29,6 +30,34 @@ def get_length_bin(length: int):
     for i, (start, end) in enumerate(LENGTH_BINS):
         if start <= length < end:
             return (start, end)
+
+
+def compute_gsm8k_acc(pred_texts, label_texts):
+    out = defaultdict(list)
+    for pred_text, label_text in zip(pred_texts, label_texts):
+        if "Answer" not in pred_text:
+            out["gsm8k_acc"].append(0)
+            continue
+
+        label_ans = float(label_text.split("####")[-1].strip().replace(",", ""))
+        # find all the numbers (including decimals) in the string
+        numbers = re.findall(r"\d+\.?\d*", pred_text)
+
+        if not numbers:
+            out["gsm8k_acc"].append(0)
+            continue
+
+        prediction = float(numbers[-1].rstrip(".").strip().replace(",", ""))
+
+        if label_ans == prediction:
+            out["gsm8k_acc"].append(1)
+        else:
+            out["gsm8k_acc"].append(0)
+
+    out_mean = dict()
+    for k in out:
+        out_mean[k] = np.mean(out[k])
+    return out_mean, out
 
 
 def compute_rouge(pred_texts, label_texts):

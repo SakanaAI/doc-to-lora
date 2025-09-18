@@ -63,7 +63,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_test_samples_per_ds",
         type=int,
-        default=1000,
+        default=500,
         help=(
             "Maximum number of validation samples per dataset. "
             "If -1, uses values from checkpoint config."
@@ -103,6 +103,12 @@ if __name__ == "__main__":
         help="Use generated queries for context distillation training.",
     )
     parser.add_argument(
+        "--q_gen_rounds",
+        type=int,
+        default=4,
+        help="Number of rounds of query generation for context distillation.",
+    )
+    parser.add_argument(
         "--use_iterative_mode",
         action="store_true",
         help="Use iterative mode LoRA layer-by-layer generation",
@@ -127,6 +133,21 @@ if __name__ == "__main__":
         "--add_ctx_to_input",
         action="store_true",
         help="Add ctx to base model's input",
+    )
+    parser.add_argument(
+        "--truncate_if_too_long_inp",
+        action="store_true",
+        help="Truncate input sequences that are too long",
+    )
+    parser.add_argument(
+        "--truncate_if_too_long_ctx",
+        action="store_true",
+        help="Truncate ctx sequences that are too long",
+    )
+    parser.add_argument(
+        "--gen_lora_scaling",
+        type=float,
+        default=1.0,
     )
 
     cli_args = vars(parser.parse_args())

@@ -30,6 +30,28 @@ class LLMLinguaModel(nn.Module):
             prompt_txt, rate=rate, force_tokens=["\n", "?"]
         )
 
+    def compress_tokens(self, input_ids, query_text):
+        bs = input_ids.shape[0]
+        txt = self.tokenizer.batch_decode(
+            input_ids[:, self.len_prefix : -self.len_suffix]
+        )
+        q_start_idx = txt[0].rfind(query_text)
+        ctx_txt = txt[0][:q_start_idx]
+        q_txt = txt[0][q_start_idx:]
+        compressed_txt = self.compress(ctx_txt, rate=self.compression_rate)
+        compressed_ids = self.tokenizer(
+            compressed_txt["compressed_prompt"] + "\n\n" + q_txt,
+            return_attention_mask=False,
+            add_special_tokens=False,
+            return_tensors="pt",
+        )["input_ids"].to(self.base_model.device)
+
+        out = torch.cat(
+            [self.prefix.expand(bs, -1), compressed_ids, self.suffix.expand(bs, -1)],
+            dim=-1,
+        )
+        return out
+
     def generate(self, *args, **kwargs):
         # take ctx_ids
         # strip prefix and suffix
@@ -37,7 +59,6 @@ class LLMLinguaModel(nn.Module):
         ctx_ids = kwargs["ctx_ids"][:, self.len_prefix : -self.len_suffix]
         # decode ctx_ids to ctx_txt
         ctx_txt = self.tokenizer.batch_decode(ctx_ids)
-        # 4x compression
         compressed_ctx_txt = self.compress(ctx_txt, rate=self.compression_rate)
         compressed_ctx_ids = self.tokenizer(
             compressed_ctx_txt["compressed_prompt"] + "\n\n",

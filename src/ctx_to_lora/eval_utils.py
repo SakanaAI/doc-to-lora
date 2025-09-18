@@ -29,6 +29,7 @@ from ctx_to_lora.data.collator import eval_collator, generation_collator
 from ctx_to_lora.data.definitions import (
     CLOSED_QA_DATASETS,
     CTX_AFFIXES,
+    GSM8K_DATASETS,
     LONGBENCH_E_TASKS,
     LONGBENCH_TASKS,
     MULTI_ANSWER_DATASETS,
@@ -38,6 +39,7 @@ from ctx_to_lora.data.self_gen_template import SELF_QA_INTX
 from ctx_to_lora.metrics import (
     LENGTH_BINS,
     Evaluator,
+    compute_gsm8k_acc,
     compute_metrics,
     compute_per_token_acc,
     compute_perplexity,
@@ -614,6 +616,13 @@ def eval_generation(
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
                 eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
+        elif ds_name in GSM8K_DATASETS:
+            print("Computing GSM8K Accuracy")
+            gsm8k_acc_metric, per_sample_metric = compute_gsm8k_acc(
+                pred_texts, label_texts
+            )
+            for k, v in gsm8k_acc_metric.items():
+                eval_result.metrics[f"{split_name}_{k}"] = v
         else:
             rouge_metrics, per_sample_metric = compute_rouge(pred_texts, label_texts)
             for k, v in rouge_metrics.items():
@@ -774,13 +783,21 @@ def evaluate(
         except FileNotFoundError:
             raise FileNotFoundError(f"Checkpoint {checkpoint_path} not found. ")
         ctx_name = state_dict["ctx_encoder_args"].ctx_encoder_model_name_or_path
+
         model = ModulatedPretrainedModel.from_state_dict(
             state_dict,
             train=False,
             base_model_kwargs=model_kwargs,
             use_flash_attn=True,
             use_sequence_packing=False,  # for generation
+            user_defined_scaling=args.gen_lora_scaling,
         )
+        if getattr(args, "use_llmlingua", False):
+            print("Using LLMLingua-2 for compressing inp")
+            inp_compressor = LLMLinguaModel(
+                model.base_model, tokenizer, args.llmlingua_compression_rate
+            )
+            model.inp_compressor = inp_compressor
         ctx_model_max_len = model.ctx_encoder.config.max_position_embeddings
         model.enable_iterative_mode(args.use_iterative_mode)
         add_tracker(model.base_model.generate, "generate")
@@ -832,6 +849,7 @@ def evaluate(
                 )
                 ctx_distill_kwargs["q_model"] = q_model
                 ctx_distill_kwargs["q_tokenizer"] = q_tokenizer
+                ctx_distill_kwargs["q_gen_rounds"] = args.q_gen_rounds
             model = CtxDistillModel(peft_model, **ctx_distill_kwargs)
 
             add_tracker(model._distill_context, "distill_context")
@@ -892,6 +910,8 @@ def evaluate(
         max_new_tokens=max_new_tokens,
         set_format="pt",
         add_self_distill_template=use_cd,  # only for eval
+        truncate_if_too_long_inp=args.truncate_if_too_long_inp,  # only for eval
+        truncate_if_too_long_ctx=args.truncate_if_too_long_ctx,  # only for eval
     )
 
     datasets = dict()
@@ -1046,11 +1066,15 @@ def run_eval(
     use_cd: bool = False,
     cd_update_iterations: int = 10,
     cd_use_gen_q: bool = False,
+    q_gen_rounds: int = 4,
     use_iterative_mode: bool = False,
     use_llmlingua: bool = False,
     llmlingua_compression_rate: float = 0.9,
     use_t2l: bool = False,
     add_ctx_to_input: bool = False,
+    truncate_if_too_long_inp: bool = False,
+    truncate_if_too_long_ctx: bool = False,
+    gen_lora_scaling: float = 1,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
@@ -1100,6 +1124,9 @@ def run_eval(
         # but remove_context has to be false for correct file naming
         args.remove_context = False
         args.use_iterative_mode = use_iterative_mode
+        if use_llmlingua:
+            args.use_llmlingua = use_llmlingua
+            args.llmlingua_compression_rate = llmlingua_compression_rate
     else:
         args = Namespace(
             model_name_or_path=model_name_or_path,
@@ -1114,6 +1141,7 @@ def run_eval(
             args.use_cd = use_cd
             args.cd_update_iterations = cd_update_iterations
             args.cd_use_gen_q = cd_use_gen_q
+            args.q_gen_rounds = q_gen_rounds
         if use_llmlingua:
             args.use_llmlingua = use_llmlingua
             args.llmlingua_compression_rate = llmlingua_compression_rate
@@ -1124,6 +1152,9 @@ def run_eval(
     if max_test_samples_per_ds > 0:
         args.max_test_samples_per_ds = max_test_samples_per_ds
     args.add_ctx_to_input = add_ctx_to_input
+    args.gen_lora_scaling = gen_lora_scaling
+    args.truncate_if_too_long_inp = truncate_if_too_long_inp
+    args.truncate_if_too_long_ctx = truncate_if_too_long_ctx
     setup_logging(args.logging_dir)
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
 
