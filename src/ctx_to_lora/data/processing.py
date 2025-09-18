@@ -218,6 +218,8 @@ def get_tokenized_dataset(
     max_new_tokens: int = 256,
     add_self_distill_template: bool = False,
     set_format: str | None = None,
+    truncate_if_too_long_inp: bool = False,
+    truncate_if_too_long_ctx: bool = False,
 ) -> dict[str, Any]:
     if max_qas_len > 0:
         assert max_qas_len <= base_model_max_len, (
@@ -287,6 +289,8 @@ def get_tokenized_dataset(
         ctx_tokenizer=ctx_tokenizer,
         add_self_distill_template=add_self_distill_template,
         num_proc=num_proc,
+        truncate_if_too_long_inp=truncate_if_too_long_inp,
+        truncate_if_too_long_ctx=truncate_if_too_long_ctx,
         **tokenize_kwargs,
     )
 
@@ -322,6 +326,8 @@ def construct_and_tokenize_ctx_qa(
     add_self_distill_template=False,
     set_format=None,
     num_proc=None,
+    truncate_if_too_long_inp=False,
+    truncate_if_too_long_ctx=False,
 ):
     is_train = "train" in split
     # for sft + chat_model, we need to convert the dataset to chat format
@@ -427,33 +433,35 @@ def construct_and_tokenize_ctx_qa(
     if "train" not in split:
         # squeeze since we always have one query per sample in eval
         tokenized_ds = tokenized_ds.map(squeeze_tokens, num_proc=num_proc)
-        # tokenized_ds = tokenized_ds.map(
-        #     truncate_middle_if_too_long,
-        #     fn_kwargs={
-        #         "max_length": base_model_max_len,
-        #         "columns": ["input_ids", "labels"],
-        #         "max_new_tokens": max_new_tokens,
-        #     },
-        # )
         tokenized_ds = tokenized_ds.map(
             add_length_info,
             fn_kwargs={"columns": ["input_ids"]},
         )
+        if truncate_if_too_long_inp:
+            tokenized_ds = tokenized_ds.map(
+                truncate_middle_if_too_long,
+                fn_kwargs={
+                    "max_length": base_model_max_len,
+                    "columns": ["input_ids", "labels"],
+                    "max_new_tokens": max_new_tokens,
+                },
+            )
         if "ctx_ids" in tokenized_ds.column_names:
-            # TODO: remove since we already have ctx chunking for eval
-            # tokenized_ds = tokenized_ds.map(
-            #     truncate_middle_if_too_long,
-            #     fn_kwargs={
-            #         "max_length": ctx_model_max_len,
-            #         "columns": ["ctx_ids"],
-            #         # cxt encoder doesnt need to add new_tokens
-            #         "max_new_tokens": 0,
-            #     },
-            # )
             tokenized_ds = tokenized_ds.map(
                 add_length_info,
                 fn_kwargs={"columns": ["ctx_ids"]},
             )
+            if truncate_if_too_long_ctx:
+                print(f"Truncating ctx to {ctx_model_max_len}")
+                tokenized_ds = tokenized_ds.map(
+                    truncate_middle_if_too_long,
+                    fn_kwargs={
+                        "max_length": ctx_model_max_len,
+                        "columns": ["ctx_ids"],
+                        # cxt encoder doesnt need to add new_tokens
+                        "max_new_tokens": 0,
+                    },
+                )
 
     if set_format:
         tokenized_ds.set_format(type=set_format)
@@ -900,8 +908,12 @@ def truncate_middle_if_too_long(
     # leave max_new_tokens for generation
     half = max_length // 2 - max_new_tokens_half
     for col in columns:
-        t = sample[col]
-        sample[col] = t[:half] + t[-half:] if len(t) > max_length else t
+        if check_is_iterable(sample[col]) and len(sample[col]) == 1:
+            t = sample[col][0]
+            sample[col][0] = t[:half] + t[-half:] if len(t) > max_length else t
+        else:
+            t = sample[col]
+            sample[col] = t[:half] + t[-half:] if len(t) > max_length else t
     return sample
 
 
