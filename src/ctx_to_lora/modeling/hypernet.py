@@ -291,21 +291,24 @@ class HyperLoRA(nn.Module):
                         for m in self.target_modules
                     }
                 )
-            else:
-                self.bias_A = nn.ParameterDict(
+            # else:
+            #     self.bias_A = nn.ParameterDict(
+            #         {
+            #             m: nn.Parameter(
+            #                 torch.zeros((self.n_layers, self.r, self.d_in[m]))
+            #             )
+            #             for m in self.target_modules
+            #         }
+            #     )
+            if self.config.use_bias:
+                self.bias_B = nn.ParameterDict(
                     {
                         m: nn.Parameter(
-                            torch.zeros((self.n_layers, self.r, self.d_in[m]))
+                            torch.zeros((self.n_layers, self.r, self.d_out[m]))
                         )
                         for m in self.target_modules
                     }
                 )
-            self.bias_B = nn.ParameterDict(
-                {
-                    m: nn.Parameter(torch.zeros((self.n_layers, self.r, self.d_out[m])))
-                    for m in self.target_modules
-                }
-            )
 
             self.scaler_A = nn.ParameterDict(
                 {
@@ -1028,7 +1031,9 @@ class ModulatedPretrainedModel(nn.Module):
             generated_loras = combine_lora(
                 generated_loras,
                 n_ctx_chunks,
-                lora_bias=self.hypernet.get_head_bias(),
+                lora_bias=self.hypernet.get_head_bias()
+                if self.hypernet.config.use_bias
+                else None,
             )
 
             # input_ids in model_inputs_kwargs contains only
@@ -1092,6 +1097,8 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
         n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
         n_queries: Integer[Tensor, "n_ctx"] | None = None,
+        scalers: Float[Tensor, "n_ctx"] | None = None,
+        bias_scaler: float | None = None,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
@@ -1102,7 +1109,11 @@ class ModulatedPretrainedModel(nn.Module):
         generated_loras = combine_lora(
             generated_loras,
             n_ctx_chunks,
-            lora_bias=self.hypernet.get_head_bias(),
+            lora_bias=self.hypernet.get_head_bias()
+            if self.hypernet.config.use_bias
+            else None,
+            scalers=scalers,
+            bias_scaler=bias_scaler,
         )
 
         # apply lora hook to the base model
@@ -1196,7 +1207,9 @@ class ModulatedPretrainedModel(nn.Module):
             generated_loras = self.combine_lora(
                 generated_loras,
                 n_ctx_chunks,
-                lora_bias=self.hypernet.get_head_bias(),
+                lora_bias=self.hypernet.get_head_bias()
+                if self.hypernet.config.use_bias
+                else None,
             )
 
             # # for generation the ctx_ids are batched not packed
