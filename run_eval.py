@@ -149,6 +149,11 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
     )
+    parser.add_argument(
+        "--flip_ctx_inp",
+        action="store_true",
+        help="Flip the order of context and input",
+    )
 
     cli_args = vars(parser.parse_args())
     # setup_logging(output_dir, debug=os.getenv("DEBUG", False))

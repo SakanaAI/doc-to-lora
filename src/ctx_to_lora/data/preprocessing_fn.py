@@ -148,6 +148,46 @@ def get_preprocessing_fn(
                 "response": sample["answers"]["text"][0],
             }
 
+    elif ds_name == "squad_assistant_ctx":
+
+        def f(sample):
+            return {
+                "context": "You are a useful AI assistant.",
+                "prompt": sample["context"] + "\n\n" + sample["question"],
+                "response": sample["answers"]["text"][0],
+            }
+
+    elif ds_name == "squad_negative":
+        with open("data/gutenburg_sample.txt") as f:
+            gutenburg_sample = f.read()
+
+        def f(sample):
+            return {
+                "context": gutenburg_sample,
+                "prompt": sample["context"] + "\n\n" + sample["question"],
+                "response": sample["answers"]["text"][0],
+            }
+
+    elif ds_name == "squad_negative_no_passage":
+        with open("data/gutenburg_sample.txt") as f:
+            gutenburg_sample = f.read()
+
+        def f(sample):
+            return {
+                "context": gutenburg_sample,
+                "prompt": sample["question"],
+                "response": sample["answers"]["text"][0],
+            }
+
+    elif ds_name == "squad_assistant_ctx_no_passage":
+
+        def f(sample):
+            return {
+                "context": "You are a useful AI assistant.",
+                "prompt": sample["question"],
+                "response": sample["answers"]["text"][0],
+            }
+
     elif ds_name == "drop":
 
         def f(sample):
@@ -264,6 +304,30 @@ def get_preprocessing_fn(
             #     "prompt": sample["question"] + "\n" + instruction_prompt,
             #     "response": sample["answer"],
             # }
+    elif ds_name == "gsm8k_negative":
+        with open("data/gutenburg_sample.txt") as f:
+            gutenburg_sample = f.read()
+
+        def f(sample):
+            return {
+                "prompt": sample["question"],
+                "context": gutenburg_sample,
+                "response": sample["answer"],
+            }
+
+    elif ds_name == "gsm8k_assistant_ctx":
+
+        def f(sample):
+            return {
+                "prompt": sample["question"],
+                "context": "You are a useful AI assistant.",
+                "response": sample["answer"],
+            }
+            # return {
+            #     "context": sample["question"],
+            #     "prompt": sample["question"] + "\n" + instruction_prompt,
+            #     "response": sample["answer"],
+            # }
 
     elif ds_name == "gsm8k_fewshot":
         N_FEW_SHOT_EXAMPLES = 5
@@ -305,6 +369,19 @@ def get_preprocessing_fn(
                 "prompt": question + "\n" + instruction_prompt,
                 "context": few_shot_examples_txt,
                 "response": sample["answer"],
+            }
+    elif ds_name == "metaicl":
+
+        def f(sample):
+            prompt = f"You are a classifier. Reply must be of the following format: 'Answer: $LETTER' (without quotes) where LETTER is one of {sample['options']['options']}.\nInput:\n{sample['input']}"
+            context = "Examples\n"
+            for example in sample["examples"]:
+                context += f"Input: {example['input']}\nAnswer: {example['output']}\n\n"
+
+            return {
+                "context": context,
+                "prompt": prompt,
+                "response": sample["output"],
             }
 
     elif "opencoder-edu" in ds_name:

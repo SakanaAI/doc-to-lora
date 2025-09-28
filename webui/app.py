@@ -592,13 +592,38 @@ def chat():
                 ctx_tokenizer = None
                 with torch.inference_mode(), torch.amp.autocast(str(device)):
                     # Get the contexts and tokenize them
-                    contexts = request.form.getlist("contexts[]")
-                    if not contexts:
-                        contexts = [""]  # Use empty context if none provided
+                    raw_contexts = request.form.getlist("contexts[]")
+                    # Build scalers aligned with contexts (default to 1.0)
+                    raw_scalers = request.form.getlist("scalers[]")
+                    # Parse bias scaler (singular), default to 1.0 if missing/invalid
+                    bias_scaler_str = request.form.get("bias_scaler", "1.0")
+                    try:
+                        bias_scaler = float(bias_scaler_str)
+                    except Exception:
+                        bias_scaler = 1.0
 
-                    # Ensure we have at least one context
+                    # Clean contexts (drop empty), mirror selection for scalers
+                    pairs = list(zip(raw_contexts, raw_scalers))
+                    contexts = []
+                    kept_scalers = []
+                    for ctx, sc in pairs:
+                        if ctx.strip():
+                            contexts.append(ctx)
+                            try:
+                                kept_scalers.append(float(sc))
+                            except Exception:
+                                kept_scalers.append(1.0)
+
+                    # If all contexts are empty, use a single empty context and scaler 1.0
+                    if not contexts:
+                        contexts = [""]
+                        kept_scalers = [1.0]
+
+                    # Ensure we have at least one context (safety)
                     if len(contexts) == 1 and not contexts[0].strip():
                         contexts = [""]
+                        if not kept_scalers:
+                            kept_scalers = [1.0]
 
                     print(
                         f"Processing {len(contexts)} contexts for response generation"
@@ -621,17 +646,18 @@ def chat():
                     ctx_inputs = process_multiple_contexts(
                         contexts,
                         ctx_tokenizer,
-                        # max_length=(
-                        #     modulated_model.ctx_encoder_args.max_ctx_len
-                        #     if hasattr(modulated_model.ctx_encoder_args, "max_ctx_len")
-                        #     else 512
-                        # ),
                     )
 
                     ctx_ids = ctx_inputs["ctx_ids"].to(device)
                     ctx_attn_mask = ctx_inputs["ctx_attn_mask"].to(device)
 
+                    scalers_tensor = torch.tensor(
+                        kept_scalers, dtype=torch.float32, device=device
+                    )
+
                     print(f"chat_history: {chat_history}")
+                    print(f"scalers: {scalers_tensor}")
+                    print(f"bias_scaler: {bias_scaler}")
 
                     # Tokenize the chat history
                     model_inputs = base_tokenizer.apply_chat_template(
@@ -655,6 +681,8 @@ def chat():
                         n_ctx_chunks=torch.tensor(
                             [len(ctx_ids)], device=ctx_ids.device
                         ),
+                        scalers=scalers_tensor,  # pass per-context scalers
+                        bias_scaler=bias_scaler,  # pass singular bias scaler
                         input_ids=model_inputs,
                         max_new_tokens=512,
                         do_sample=False,

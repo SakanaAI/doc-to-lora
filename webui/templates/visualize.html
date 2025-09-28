@@ -489,6 +489,21 @@
     .highlight-diff {
         background-color: #fff8e1;
     }
+
+    .context-scaler-controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 8px;
+    }
+
+    .context-scaler-controls input[type="range"] {
+        flex: 1;
+    }
+
+    .context-scaler-controls input[type="number"] {
+        width: 90px;
+    }
 </style>
 {% endblock %}
 
@@ -651,8 +666,21 @@
                         <label for="context-input-0">Context 1:</label>
                         <textarea id="context-input-0" class="context-input"
                             placeholder="Enter context information here. This will be used by the hypernetwork to generate a LoRA for the base model."></textarea>
+                        <label for="context-scaler-0" style="margin-top:8px;">Scaling:</label>
+                        <div class="context-scaler-controls">
+                            <input type="range" id="context-scaler-slider-0" class="context-scaler-slider" min="-2"
+                                max="2" step="0.01" value="1">
+                            <input type="number" id="context-scaler-0" class="context-scaler" step="0.01" value="1">
+                        </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- New singular Bias scaler control -->
+            <div class="context-field">
+                <label for="bias-scaler">Bias scaler:</label>
+                <input type="number" id="bias-scaler" step="0.01" value="1">
+                <p class="instruction-text">A single scalar applied to bias; independent of the number of contexts.</p>
             </div>
 
             <button id="apply-hypernetwork-button">Apply Hypernetwork</button>
@@ -806,14 +834,24 @@
                 let formData = new FormData();
                 formData.append('message', message);
 
-                // Check if we're using hypernetwork and include contexts
                 if (document.getElementById('chat-model-name').textContent.includes('Hypernetwork')) {
                     const contextInputs = document.querySelectorAll('.context-input');
-
-                    // Add all contexts to the form data
                     Array.from(contextInputs).forEach(input => {
                         formData.append('contexts[]', input.value);
                     });
+
+                    const scalerInputs = document.querySelectorAll('.context-scaler');
+                    Array.from(scalerInputs).forEach(input => {
+                        const v = (input.value || '').trim();
+                        formData.append('scalers[]', v.length ? v : '1.0');
+                    });
+
+                    // Include singular bias scaler
+                    const biasScalerInput = document.getElementById('bias-scaler');
+                    if (biasScalerInput) {
+                        const bv = (biasScalerInput.value || '').trim();
+                        formData.append('bias_scaler', bv.length ? bv : '1.0');
+                    }
                 }
 
                 fetch('/chat', {
@@ -844,6 +882,43 @@
                 }
             });
     }
+
+    // Utility to wire up slider-number sync inside a context-field
+    function attachScalerSync(fieldEl) {
+        const slider = fieldEl.querySelector('.context-scaler-slider');
+        const number = fieldEl.querySelector('.context-scaler');
+
+        if (!slider || !number) return;
+
+        // Keep slider within [-2,2], but allow number to be arbitrary
+        const clampToSlider = (x) => {
+            const min = parseFloat(slider.min || '-2');
+            const max = parseFloat(slider.max || '2');
+            if (isNaN(x)) return 1.0;
+            return Math.min(Math.max(x, min), max);
+        };
+
+        slider.addEventListener('input', () => {
+            number.value = slider.value;
+        });
+
+        number.addEventListener('input', () => {
+            const parsed = parseFloat(number.value);
+            if (isNaN(parsed)) {
+                number.value = '1.0';
+                slider.value = '1.0';
+            } else {
+                // do not clamp number; only clamp slider representation
+                slider.value = clampToSlider(parsed);
+            }
+        });
+    }
+
+    // Bind initial scaler sync
+    document.addEventListener('DOMContentLoaded', function () {
+        const firstField = document.querySelector('.context-fields .context-field');
+        if (firstField) attachScalerSync(firstField);
+    });
 
     // Handle hypernetwork checkpoint loading
     document.addEventListener('DOMContentLoaded', function () {
@@ -1113,9 +1188,17 @@
                 <label for="context-input-${newFieldIndex}">Context ${contextCount}:</label>
                 <textarea id="context-input-${newFieldIndex}" class="context-input" 
                     placeholder="Enter additional context information here."></textarea>
+                <label for="context-scaler-${newFieldIndex}" style="margin-top:8px;">Scaling:</label>
+                <div class="context-scaler-controls">
+                    <input type="range" id="context-scaler-slider-${newFieldIndex}" class="context-scaler-slider" min="-2" max="2" step="0.01" value="1">
+                    <input type="number" id="context-scaler-${newFieldIndex}" class="context-scaler" step="0.01" value="1">
+                </div>
             `;
 
             contextFieldsContainer.appendChild(newField);
+
+            // Wire up slider-number sync for this field
+            attachScalerSync(newField);
 
             // Enable the remove button if we have more than one context
             if (contextCount > 1) {
@@ -1128,8 +1211,6 @@
             if (contextCount > 1) {
                 contextFieldsContainer.removeChild(contextFieldsContainer.lastChild);
                 contextCount--;
-
-                // Disable the remove button if we're back to just one context
                 if (contextCount === 1) {
                     removeContextButton.disabled = true;
                 }

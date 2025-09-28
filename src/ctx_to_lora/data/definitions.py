@@ -202,6 +202,18 @@ DS_KWARGS = {
             split="train[180:]",
         ),
     ),
+    "squad_negative": dict(
+        test=dict(path="data/raw_datasets/squad", split="validation"),
+    ),
+    "squad_assistant_ctx": dict(
+        test=dict(path="data/raw_datasets/squad", split="validation"),
+    ),
+    "squad_negative_no_passage": dict(
+        test=dict(path="data/raw_datasets/squad", split="validation"),
+    ),
+    "squad_assistant_ctx_no_passage": dict(
+        test=dict(path="data/raw_datasets/squad", split="validation"),
+    ),
     "fw_qa_xl": dict(
         train=dict(
             path="parquet",
@@ -569,6 +581,30 @@ DS_KWARGS = {
     #         split="train",
     #     ),
     # ),
+    "gsm8k_assistant_ctx": dict(
+        train=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="train[100:]",
+        ),
+        validation=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="train[:100]",
+        ),
+        test=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="test",
+        ),
+    ),
+    "gsm8k_negative": dict(
+        test=dict(
+            path="openai/gsm8k",
+            name="main",
+            split="test",
+        ),
+    ),
     "gsm8k": dict(
         train=dict(
             path="openai/gsm8k",
@@ -601,6 +637,16 @@ DS_KWARGS = {
             path="openai/gsm8k",
             name="main",
             split="test",
+        ),
+    ),
+    "metaicl": dict(
+        validation=dict(
+            path="SakanaAI/metaicl",
+            split="train[:100]",
+        ),
+        test=dict(
+            path="SakanaAI/metaicl",
+            split="train",
         ),
     ),
     "openmathintx-2": dict(
@@ -766,6 +812,10 @@ CLOSED_QA_DATASETS = {
     "longbench/musique",
     "hotpot_qa",
     "squad",
+    "squad_negative",
+    "squad_assistant_ctx",
+    "squad_negative_no_passage",
+    "squad_assistant_ctx_no_passage",
     "triviaqa_retrieved",
     "negative_nq",
     "ropes",
@@ -780,6 +830,10 @@ MULTI_ANSWER_DATASETS = {
     "longbench/2wikimqa",
     "longbench/musique",
     "squad",
+    "squad_negative",
+    "squad_assistant_ctx",
+    "squad_negative_no_passage",
+    "squad_assistant_ctx_no_passage",
     "drop",
 }
 
@@ -793,7 +847,8 @@ for ds_name in list(MULTI_ANSWER_DATASETS):
     if ds_name.startswith("longbench/"):
         MULTI_ANSWER_DATASETS.add(f"{ds_name}_e")
 
-GSM8K_DATASETS = {"gsm8k", "gsm8k_fewshot"}
+GSM8K_DATASETS = {"gsm8k", "gsm8k_fewshot", "gsm8k_assistant_ctx", "gsm8k_negative"}
+MULTI_CHOICE_DATASETS = {"metaicl"}
 
 # for training closed qa datasets, e.g., hotpot_qa, squad, etc.
 CLOSED_QA_INTX_TEMPLATES = [
@@ -829,6 +884,10 @@ EVAL_INTX_TEMPLATES = {
     "drop": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     # short-ctx extractive qa
     "squad": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "squad_negative": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "squad_assistant_ctx": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "squad_negative_no_passage": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
+    "squad_assistant_ctx_no_passage": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     # retrieved noisy ctx?
     "triviaqa_retrieved": "Answer the following question. Output only the answer and do not output any other words.\n\nQuestion: {input}",
     # doc w/ distractors qa

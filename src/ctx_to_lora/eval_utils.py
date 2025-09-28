@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from datasets import disable_caching
+from datasets import disable_caching, load_dataset
 from peft import get_peft_model
 from transformers import (
     PreTrainedModel,
@@ -33,13 +33,19 @@ from ctx_to_lora.data.definitions import (
     LONGBENCH_E_TASKS,
     LONGBENCH_TASKS,
     MULTI_ANSWER_DATASETS,
+    MULTI_CHOICE_DATASETS,
 )
-from ctx_to_lora.data.processing import get_tokenized_dataset, load_answers
+from ctx_to_lora.data.processing import (
+    get_ds_kwargs,
+    get_tokenized_dataset,
+    load_answers,
+)
 from ctx_to_lora.data.self_gen_template import SELF_QA_INTX
 from ctx_to_lora.metrics import (
     LENGTH_BINS,
     Evaluator,
     compute_gsm8k_acc,
+    compute_macro_f1_score,
     compute_metrics,
     compute_per_token_acc,
     compute_perplexity,
@@ -195,16 +201,20 @@ def split_string(s: str) -> list[str]:
     return [x for x in out if x]  # remove empty spaces
 
 
-def f1_score(prediction: str, ground_truth: str) -> float:
-    """Compute F1 score between prediction and ground truth strings."""
+def f1_score(prediction: str, ground_truth: str) -> tuple[float, float, float]:
+    """Compute F1 score, precision, and recall between prediction and ground truth strings."""
     common = Counter(prediction) & Counter(ground_truth)
     num_same = sum(common.values())
     if num_same == 0:
-        return 0
-    precision = 1.0 * num_same / len(prediction)
-    recall = 1.0 * num_same / len(ground_truth)
-    f1 = (2 * precision * recall) / (precision + recall)
-    return f1
+        return 0, 0, 0
+    precision = 1.0 * num_same / len(prediction) if len(prediction) > 0 else 0
+    recall = 1.0 * num_same / len(ground_truth) if len(ground_truth) > 0 else 0
+    f1 = (
+        (2 * precision * recall) / (precision + recall)
+        if (precision + recall) > 0
+        else 0
+    )
+    return f1, precision, recall
 
 
 def compute_qa_f1_score(
@@ -214,17 +224,35 @@ def compute_qa_f1_score(
     Word-level F1 score for evaluating question answering systems.
     Order of the words does not matter.
     """
-    res = []
+    f1_scores = []
+    precisions = []
+    recalls = []
+
     for prediction, answers in zip(pred_texts, answers_list):
         normalized_prediction = normalize_answer(prediction)
         prediction_words = split_string(normalized_prediction)
-        score = 0
+        best_f1 = 0
+        best_precision = 0
+        best_recall = 0
+
         for answer in answers:
             normalized_label = normalize_answer(answer)
             label_words = split_string(normalized_label)
-            score = max(score, f1_score(prediction_words, label_words))
-        res.append(score)
-    return dict(qa_f1_score=np.mean(res)), dict(qa_f1_score=res)
+            f1, precision, recall = f1_score(prediction_words, label_words)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_precision = precision
+                best_recall = recall
+
+        f1_scores.append(best_f1)
+        precisions.append(best_precision)
+        recalls.append(best_recall)
+
+    return dict(
+        qa_f1_score=np.mean(f1_scores),
+        qa_precision=np.mean(precisions),
+        qa_recall=np.mean(recalls),
+    ), dict(qa_f1_score=f1_scores, qa_precision=precisions, qa_recall=recalls)
 
 
 def add_longbench_tasks(ds_names: list[str]) -> None:
@@ -251,11 +279,12 @@ def save_generated_text(
         os.makedirs(split_dir, exist_ok=True)
 
     metric_keys = list(per_sample_metric.keys())
-    assert len(metric_keys) == 1
+    # assert len(metric_keys) == 1
     metric_name = metric_keys[0]
     with open(f"{output_dir}/{split}_generated_text.jsonl", "w") as f:
         for sample, metric_val in zip(samples, per_sample_metric[metric_name]):
-            sample[f"{metric_name}"] = metric_val
+            for metric_name in metric_keys:
+                sample[f"{metric_name}"] = metric_val
             f.write(json.dumps(sample) + "\n")
 
 
@@ -576,6 +605,7 @@ def eval_generation(
     tokenizer,
     ctx_tokenizer,
     datasets,
+    original_datasets,
     answers,
     split,
     remove_context,
@@ -622,6 +652,18 @@ def eval_generation(
                 pred_texts, label_texts
             )
             for k, v in gsm8k_acc_metric.items():
+                eval_result.metrics[f"{split_name}_{k}"] = v
+
+        elif ds_name in MULTI_CHOICE_DATASETS:
+            print("Computing Multi-Choice Accuracy")
+            original_ds = original_datasets[ds_name]
+            multi_choice_acc_metric, per_sample_metric = compute_macro_f1_score(
+                pred_texts,
+                label_texts,
+                [x["options"] for x in original_ds["options"]],
+                original_ds["task"],
+            )
+            for k, v in multi_choice_acc_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
         else:
             rouge_metrics, per_sample_metric = compute_rouge(pred_texts, label_texts)
@@ -912,9 +954,11 @@ def evaluate(
         add_self_distill_template=use_cd,  # only for eval
         truncate_if_too_long_inp=args.truncate_if_too_long_inp,  # only for eval
         truncate_if_too_long_ctx=args.truncate_if_too_long_ctx,  # only for eval
+        flip_ctx_inp=args.flip_ctx_inp,  # only for eval
     )
 
     datasets = dict()
+    original_datasets = dict()
     answers = dict()
     ds_names = args.val_ds_names if split == "validation" else args.test_ds_names
     add_longbench_tasks(ds_names)
@@ -923,6 +967,11 @@ def evaluate(
         # handling cases where there are multiple answers
         if ds_name in MULTI_ANSWER_DATASETS:
             answers[ds_name] = load_answers(ds_name, split)
+        if ds_name in MULTI_CHOICE_DATASETS:
+            ds_kwargs = get_ds_kwargs(ds_name, split)
+            original_datasets[ds_name] = load_dataset(
+                **ds_kwargs, trust_remote_code=True
+            )
     print(f"Datasets: {datasets}")
     print(f"Answers: {answers}")
 
@@ -935,6 +984,10 @@ def evaluate(
             datasets[ds_name] = ds.select(val_indices)
             if ds_name in answers:
                 answers[ds_name] = answers[ds_name].select(val_indices)
+            if ds_name in original_datasets:
+                original_datasets[ds_name] = original_datasets[ds_name].select(
+                    val_indices
+                )
 
     max_test_samples_per_ds = getattr(args, "max_test_samples_per_ds", 0)
     if split == "test" and max_test_samples_per_ds > 0:
@@ -944,6 +997,10 @@ def evaluate(
             datasets[ds_name] = ds.select(test_indices)
             if ds_name in answers:
                 answers[ds_name] = answers[ds_name].select(test_indices)
+            if ds_name in original_datasets:
+                original_datasets[ds_name] = original_datasets[ds_name].select(
+                    test_indices
+                )
 
     print(f"Datasets: {datasets}")
     print(f"Answers: {answers}")
@@ -1032,6 +1089,7 @@ def evaluate(
                 tokenizer,
                 ctx_tokenizer,
                 {ds_name: ds},
+                original_datasets,
                 answers,
                 split,
                 args.remove_context,
@@ -1074,6 +1132,7 @@ def run_eval(
     add_ctx_to_input: bool = False,
     truncate_if_too_long_inp: bool = False,
     truncate_if_too_long_ctx: bool = False,
+    flip_ctx_inp: bool = False,
     gen_lora_scaling: float = 1,
 ) -> None:
     """Run evaluation with the specified parameters."""
@@ -1155,6 +1214,7 @@ def run_eval(
     args.gen_lora_scaling = gen_lora_scaling
     args.truncate_if_too_long_inp = truncate_if_too_long_inp
     args.truncate_if_too_long_ctx = truncate_if_too_long_ctx
+    args.flip_ctx_inp = flip_ctx_inp
     setup_logging(args.logging_dir)
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
 

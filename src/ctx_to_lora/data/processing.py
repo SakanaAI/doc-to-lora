@@ -77,7 +77,7 @@ def load_answers(ds_name, split):
         def extract_ans(sample):
             return {"answers": sample["answers"]}
 
-    elif ds_name == "squad":
+    elif "squad" in ds_name:
 
         def extract_ans(sample):
             return {"answers": sample["answers"]["text"]}
@@ -102,35 +102,36 @@ def get_ds_kwargs(ds_name: str, split: str) -> dict[str, Any]:
         skip = slice.split(":")[0]
         take = slice.split(":")[1]
 
-    if ds_name.startswith("self_gen/"):
-        if ds_name.endswith(".parquet"):
-            # ds_name is a glob pattern
-            files = glob(f"{RAW_DATA_DIR}/{ds_name}")
-            if not files:
-                raise FileNotFoundError(
-                    f"The provided pattern does not match any files: {RAW_DATA_DIR}/{ds_name}"
-                )
-        else:
-            # e.g., "self_gen/google/gemma-2-2b-it/pwc"
-            base_model_name = "/".join(ds_name.split("/")[1:3])
-            base_ds = "/".join(ds_name.split("/")[3:])
-            if ("[" in split) and split.endswith("]"):
-                kwargs["split"], slice = split.split("[")
-                slice = slice.strip("]")
-                skip = slice.split(":")[0]
-                if skip:
-                    kwargs["skip"] = int(skip)
-                take = slice.split(":")[1]
-                if take:
-                    kwargs["take"] = int(take)
-            files = glob(
-                f"{SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/{split}/*.parquet"
+    if ds_name.endswith(".parquet"):
+        # ds_name is a glob pattern
+        files = glob(f"{RAW_DATA_DIR}/{ds_name}")
+        if not files:
+            raise FileNotFoundError(
+                f"The provided pattern does not match any files: {RAW_DATA_DIR}/{ds_name}"
             )
-            if not files:
-                raise FileNotFoundError(
-                    f"No self-gen files found for base model {base_model_name} "
-                    f"in {SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/"
-                )
+        kwargs = dict(path="parquet", data_files=files, split="train")
+
+    elif ds_name.startswith("self_gen/"):
+        # e.g., "self_gen/google/gemma-2-2b-it/pwc"
+        base_model_name = "/".join(ds_name.split("/")[1:3])
+        base_ds = "/".join(ds_name.split("/")[3:])
+        if ("[" in split) and split.endswith("]"):
+            kwargs["split"], slice = split.split("[")
+            slice = slice.strip("]")
+            skip = slice.split(":")[0]
+            if skip:
+                kwargs["skip"] = int(skip)
+            take = slice.split(":")[1]
+            if take:
+                kwargs["take"] = int(take)
+        files = glob(
+            f"{SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/{split}/*.parquet"
+        )
+        if not files:
+            raise FileNotFoundError(
+                f"No self-gen files found for base model {base_model_name} "
+                f"in {SELF_GEN_DATA_DIR}/{base_model_name}/{base_ds}/"
+            )
         kwargs = dict(path="parquet", data_files=files, split="train")
     elif (ds_name not in DS_KWARGS) or (split not in DS_KWARGS[ds_name]):
         kwargs = dict(path=ds_name, split=split)
@@ -220,6 +221,7 @@ def get_tokenized_dataset(
     set_format: str | None = None,
     truncate_if_too_long_inp: bool = False,
     truncate_if_too_long_ctx: bool = False,
+    flip_ctx_inp: bool = False,
 ) -> dict[str, Any]:
     if max_qas_len > 0:
         assert max_qas_len <= base_model_max_len, (
@@ -282,6 +284,23 @@ def get_tokenized_dataset(
                 "is not present in the dataset."
             )
     logger.info(f"Constructing and tokenizing {ds_name} with {split} split...")
+    if flip_ctx_inp:
+
+        def squeeze(sample, column):
+            first_id = sample[column][0]
+            if check_is_iterable(first_id):
+                sample[column] = first_id
+            return sample
+
+        def unsqueeze(sample, column):
+            sample[column] = [sample[column]]
+            return sample
+
+        ds = ds.rename_column("context", "context_temp")
+        ds = ds.rename_column("prompts", "context")
+        ds = ds.rename_column("context_temp", "prompts")
+        ds = ds.map(squeeze, fn_kwargs={"column": "context"})
+        ds = ds.map(unsqueeze, fn_kwargs={"column": "prompts"})
 
     tokenized_ds = construct_and_tokenize_ctx_qa(
         ds=ds,
@@ -304,6 +323,7 @@ def get_tokenized_dataset(
         tokenized_ds = tokenized_ds.remove_columns(
             ["logprobs_vals", "logprobs_indices"]
         )
+
     return tokenized_ds
 
 
