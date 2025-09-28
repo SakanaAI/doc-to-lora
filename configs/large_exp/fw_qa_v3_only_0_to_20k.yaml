@@ -1,0 +1,68 @@
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+
+use_kl_loss: true
+
+ctx_encoder_type: per_layer_activations
+n_latent_queries: 8
+num_blocks: 8
+num_self_attn_per_block: 0
+
+# gradient_accumulation_steps: 11
+# max_packed_inp_len: 6144
+# max_packed_ctx_len: 6144
+
+gradient_accumulation_steps: 8
+max_packed_inp_len: 8192
+max_packed_ctx_len: 8192
+
+
+# data
+train_ds_names:
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/fw_qa_v2/min_0_to_2000/train/*level_1*.parquet
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/fw_qa_v2/min_0_to_2000/train/*level_3*.parquet
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/pwc_compact
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/squad_compact
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/ropes_compact
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/drop_compact
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.0_summ_prob_0.0_struct_prob_0.1/smol-rewrite
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.0_summ_prob_0.0_struct_prob_0.1/smol-summarize
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.0_summ_prob_1.0_struct_prob_1.0/bookqa
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.0_summ_prob_1.0_struct_prob_1.0/gov_report_qa
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/openhermes
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/smol-magpie-ultra
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/systemchats
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0_cot_prob_0.2_summ_prob_0.0_struct_prob_0.0/ctx-q-gsm
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.1_cot_prob_0.0_summ_prob_1.0_struct_prob_1.0/synthetic_convqa
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.1_cot_prob_0.0_summ_prob_1.0_struct_prob_1.0/tatqa
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.8_cot_prob_0.0_summ_prob_0.0_struct_prob_0.0/quoref
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.8_cot_prob_0.0_summ_prob_1.0_struct_prob_1.0/hotpot_qa
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.8_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/drop
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.8_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/pwc
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.8_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/ropes
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.8_cot_prob_0.1_summ_prob_0.0_struct_prob_0.0/squad
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.01_cot_prob_0.1_summ_prob_0.05_struct_prob_0.1/fw_qa_v3/min_0_to_8000
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.01_cot_prob_0.1_summ_prob_0.05_struct_prob_0.1/fw_qa_v3/min_0_to_10000
+  # - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.01_cot_prob_0.1_summ_prob_0.05_struct_prob_0.1/fw_qa_v3/min_0_to_15000
+  - data/raw_datasets/self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.01_cot_prob_0.1_summ_prob_0.05_struct_prob_0.1/fw_qa_v3/min_0_to_20000
+
+
+
+val_ds_names:
+  - squad
+  - pwc
+  - drop
+  - ropes
+  - hotpot_qa
+  - booksum
+  - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/fw_qa_v2/min_0_to_2000/train/*level_0_val*.parquet
+  - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/ctx_qa/validation/*.parquet
+  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/facts/validation/*.parquet
+
+
+# - negative_nq
+
+

@@ -317,10 +317,11 @@ class CtxDistillModel(nn.Module):
             loss = token_losses.mean()
 
             # Log metrics for this iteration
-            print(
-                f"Iteration {iteration + 1}/{self.update_iterations}: "
-                f"Loss={loss.item():.4f}"
-            )
+            if iteration % 100 == 0:
+                print(
+                    f"Iteration {iteration + 1}/{self.update_iterations}: "
+                    f"Loss={loss.item():.4f}"
+                )
 
             loss.backward()
             self.optimizer.step()
@@ -414,6 +415,18 @@ class CtxDistillModel(nn.Module):
                 gen_q_list, gen_a_list = postprocess_qa_pairs(res[0])
                 questions += gen_q_list
                 answers += gen_a_list
+
+            if len(questions) == 0:
+                # when q_model refuses to provide questions
+                # only happens with sample 116 in longbench/multifieldqa_en_e
+                # in this case cd just doesn't work, we fall back to zero-shot answer
+                print(f"Warning---no questions generated, skipping distillation")
+                attention_mask = torch.where(
+                    orig_inp_ids != self.pad_token_id, 1, 0
+                ).long()
+                return self.student_generate(
+                    orig_inp_ids, attention_mask=attention_mask, **model_inputs_kwargs
+                )
 
             ctx_inp_messages = [
                 [{"role": "user", "content": f"{ctx_txt}\n\n{SELF_QA_INTX}\n\n{q}"}]

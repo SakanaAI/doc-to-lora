@@ -43,24 +43,22 @@ def shift_contexts(examples):
 
 
 if __name__ == "__main__":
-    ds = load_dataset("google-research-datasets/natural_questions")
+    ds = load_dataset("google-research-datasets/natural_questions", split="validation")
     ds = ds.shuffle(seed=42)
 
-    for split in ["validation", "train"]:
-        # Process samples in parallel using map
-        processed_ds = ds[split].map(
-            process_sample, remove_columns=ds[split].column_names, num_proc=16
-        )
+    # for split in ["validation"]:  # , "train"
+    # Process samples in parallel using map
+    processed_ds = ds.map(process_sample, remove_columns=ds.column_names, num_proc=16)
 
-        # Filter out None values
-        processed_ds = processed_ds.filter(lambda x: x["context"] is not None)
+    # Filter out None values
+    processed_ds = processed_ds.filter(lambda x: x["context"] is not None)
 
-        # Shift contexts to create negative examples
-        processed_ds = processed_ds.map(
-            shift_contexts, batched=True, batch_size=len(processed_ds)
-        )
+    # Shift contexts to create negative examples
+    processed_ds = processed_ds.map(
+        shift_contexts, batched=True, batch_size=len(processed_ds)
+    )
 
-        print(processed_ds)
-        save_dir = "data/raw_datasets/negative_natural_questions"
-        os.makedirs(save_dir, exist_ok=True)
-        processed_ds.to_json(f"{save_dir}/{split}.jsonl")
+    print(processed_ds)
+    save_dir = "data/raw_datasets/negative_natural_questions"
+    os.makedirs(save_dir, exist_ok=True)
+    processed_ds.to_json(f"{save_dir}/validation.jsonl")

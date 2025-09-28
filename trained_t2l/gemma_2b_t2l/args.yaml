@@ -1,0 +1,875 @@
+additional_eval_descs:
+- dogs;cats;bananas;
+- 7@9.qwepra#/.sd,s'2OC^039u#rdagjbL
+- ggggggggggggggggggggg
+also_val_on_train: false
+autoreg_gen: false
+batch_size: 4
+config: null
+debug: false
+delta_w_scaling: 10000
+emb_model: Alibaba-NLP/gte-large-en-v1.5
+encoder_type: linear
+epochs: 20000
+equally_weight_sample: true
+eval_ds_info:
+  arc_challenge:
+    descriptions:
+    - This task is about analyzing questions which examine your grasp of scientific
+      ideas. You must connect conceptual knowledge with practical examples from geology,
+      ecology and environmental changes.
+    - The objective here is to evaluate various scientific scenarios and infer the
+      most logical explanations or definitions based on established knowledge. This
+      task will strengthen your analytical and reasoning skills in the context of
+      natural science.
+    - Your role is to interpret questions focusing on earth science and biological
+      interactions. This demands a clear understanding of relevant processes, such
+      as decomposition, weathering, and species adaptation.
+  arc_easy:
+    descriptions:
+    - Your job is to discern which information best answers a posed question, focusing
+      on practical examples and scientific principles. This requires a strong grasp
+      of underlying concepts in ecology or physics.
+    - You will analyze questions that explore important connections such as environmental
+      issues or animal adaptations. Utilize your background knowledge to evaluate
+      and select the most fitting answer.
+    - This task involves selecting answers that reflect accurate relationships or
+      effects seen in nature or society. You will need to sort through potential choices
+      critically to find the appropriate one.
+  boolq:
+    descriptions:
+    - Analyze the given details about various subjects, including movies, sports,
+      and television shows. Your role is to confirm whether certain claims are true
+      or false.
+    - Your task is to determine the truthfulness of specific statements based on the
+      provided background information. This requires careful reading and comprehension
+      of the content.
+    - The goal is to evaluate factual claims made in relation to highlighted texts.
+      You will need to discern whether the statements align with the information provided.
+  gsm8k:
+    descriptions:
+    - You will be tasked with interpreting mathematical situations described in words.
+      The goal is to use logical reasoning and calculations to determine the numerical
+      answers based on the context provided.
+    - This task challenges your problem-solving abilities through mathematical reasoning.
+      You must carefully read each scenario and systematically work through the data
+      to compute the final outcome.
+    - Your role is to engage with practical math scenarios presented as questions.
+      The task requires translating textual data into numerical operations that will
+      lead you to the final solution.
+  hellaswag:
+    descriptions:
+    - This task revolves around completing an unfinished text by selecting an ending
+      that matches its tone and context. It requires you to think critically about
+      how narratives develop and conclude effectively.
+    - This task asks you to select a suitable conclusion for an unfinished narrative
+      or instructional content. It tests your comprehension and reasoning skills as
+      you assess how well each option aligns with the given text.
+    - Your task involves completing an incomplete passage by selecting the ending
+      that logically continues the context provided. This requires reading comprehension
+      and the ability to infer meaning from a text.
+  humaneval:
+    descriptions:
+    - Engage in building distinct functions that meet the requirements of various
+      presented problems, honing your ability to translate problem statements into
+      logical code. Utilize structured thinking to implement efficient solutions.
+    - You are tasked with generating specific solutions in Python by interpreting
+      problem descriptions associated with tasks like counting odds or validating
+      inputs. Recognizing patterns and leveraging programming techniques will be beneficial.
+    - This task focuses on developing algorithms in Python for specific scenarios,
+      such as counting characters, assessing conditions between numbers, or converting
+      integers into a different format. Critical thinking and algorithmic design will
+      be important.
+  lol_035:
+    descriptions:
+    - Your job is to transform a fill-in-the-blank question by changing just one key
+      word or phrase, allowing for a new but coherent answer. This requires analytical
+      thinking about vocabulary and context.
+    - You need to innovate a way to adjust an existing question so it accepts a different
+      name as an answer. This process enhances your skills in vocabulary rich expressions
+      and logical reasoning.
+    - The objective is to carefully edit questions such that the identity of the answer
+      changes while keeping most statements intact. It emphasizes the importance of
+      word choice and its impact on meaning.
+  lol_039:
+    descriptions:
+    - This task is about spotting keywords that appear in both sentences. You need
+      to focus on meaningful words while ensuring not to include common stop words.
+    - The goal here is to extract important overlapping vocabulary from two related
+      sentences. This requires critical thinking and familiarity with different word
+      derivatives.
+    - Your objective is to analyze two sentences and find words that are shared between
+      them. This requires insight into language nuances and the ability to discern
+      significant terms.
+  lol_084:
+    descriptions:
+    - This task involves assessing a passage with numbered facts about people's movements.
+      You need to find and select the fact that clearly indicates the location of
+      a specified person based on the context provided.
+    - Your task is to read a set of facts within a passage and determine which fact
+      provides the necessary information to answer a question about the location of
+      a specific person.
+    - You will evaluate enumerated facts and a question regarding an individual's
+      whereabouts. The goal is to isolate the fact that supplies essential information
+      for responding accurately to the question.
+  lol_1198:
+    descriptions:
+    - You need to evaluate whether an action committed by PersonX causes PersonY or
+      others to want something indicated in another phrase. It requires you to think
+      critically about relationships and emotional connections.
+    - Your job is to interpret short sequences of events. For each sequence, decide
+      if the first part creates a desire for the second part. Familiarity with human
+      behaviors and desires will be crucial in making accurate assessments.
+    - In this task, you consider two elements where one may lead to a desire for another.
+      Evaluating these connections requires insight into motivations behind human
+      behavior and how actions affect relationships.
+  lol_140:
+    descriptions:
+    - In this challenge, you will consider a prompt and its accompanying completions,
+      aiming to choose the response that best fits the established style of the prompt.
+      Pay attention to informal versus formal tones.
+    - The task involves evaluating two responses based on their alignment with the
+      style of a given prompt. You need to identify which response mirrors the tone
+      and language used in the prompt.
+    - This activity involves selecting between two responses based on their similarity
+      in style to a prompt. Evaluate tone, word choice, and sentence flow to find
+      your answer.
+  lol_1448:
+    descriptions:
+    - You will be presented with different sentences that include medical information.
+      The challenge is to recognize and state the name of the disease or disorder
+      featured in each sentence.
+    - Your task is to read a provided sentence and identify the name of a disorder
+      or disease mentioned within it. This requires familiarity with medical terminology
+      and conditions.
+    - Your job is to decipher sentences containing descriptions of health conditions.
+      From these, you must identify and return the appropriate title of the disorder
+      or disease.
+  lol_1557:
+    descriptions:
+    - In this activity, you will identify mistakes in given English sentences and
+      produce a version that is free from errors. Attention to detail is important
+      in ensuring clarity and correctness.
+    - The goal here is to carefully analyze flawed sentences and create polished versions.
+      Strong language skills are needed to spot errors and make appropriate corrections.
+    - This task involves revising sentences that contain mistakes in grammar or style.
+      Your ability to recognize these issues and rewrite them correctly will be key.
+  lol_1711:
+    descriptions:
+    - In this task, you need to write a short poem inspired by a title. The focus
+      is on capturing the voice of a young child, using straightforward language and
+      continuous sentences.
+    - This task requires you to generate a poem related to a provided title. Think
+      like a child, keeping the language simple and letting your thoughts flow freely
+      without stopping for punctuation.
+    - You will create a light-hearted poem related to a given title. It should be
+      straightforward and fun, reflecting the spontaneous and imaginative ideas of
+      young children through unpunctuated lines.
+  lol_202:
+    descriptions:
+    - This task requires critical thinking as you examine a statement and three choices.
+      You are to find the sentence that represents a disagreement with what is stated,
+      showing an understanding of contrasting ideas.
+    - In this task, you will evaluate a statement and three possible responses. Your
+      objective is to identify which response presents an opposing viewpoint or argument
+      to the original statement provided.
+    - In this exercise, you will encounter a statement and three accompanying sentences.
+      Your role is to isolate the sentence that most directly contradicts the premise
+      of the original statement, requiring strong analytical skills.
+  lol_275:
+    descriptions:
+    - The assignment challenges you to rethink sentence structures based on targeted
+      changes. Your ability to navigate aspects like voice and number will be essential
+      in achieving the desired modifications accurately.
+    - "In this activity, you\u2019ll be tasked with modifying provided text based\
+      \ on specific rules concerning tense, number, or voice. You need to apply linguistic\
+      \ knowledge creatively while ensuring coherence within your changes."
+    - "You\u2019re challenged to change sentences in particular ways, such as altering\
+      \ verb tenses or noun numbers. It requires careful attention to detail in understanding\
+      \ how these changes affect the overall structure of the sentences."
+  lol_304:
+    descriptions:
+    - You are tasked with identifying what the marked number refers to in a conversational
+      excerpt. It requires logical reasoning and an understanding of situational cues
+      present in the text.
+    - Engage with dialogues to uncover what meaning lies behind an underlined number.
+      Recognizing references, ages, or other implied categories based on conversational
+      context is essential in this task.
+    - This task focuses on determining the definition or representation of a highlighted
+      number within text-based interactions. Understanding context and relationships
+      between elements is crucial for success.
+  lol_362:
+    descriptions:
+    - Your role is to analyze a conversation and select the response that effectively
+      embraces the idea of collaboration in humor. Look for the one that acknowledges
+      the previous statement and adds more to the narrative.
+    - This task involves interpreting a given prompt from an improv comedy perspective.
+      You must identify which of two responses aligns with the principle of agreeing
+      and expanding on a topic to keep the dialogue flowing.
+    - This task challenges you to determine which response exemplifies a key improvisational
+      concept by accepting what has already been stated and taking it in a new direction,
+      contributing to story development or humor.
+  lol_614:
+    descriptions:
+    - You are tasked with dissecting a short story by focusing on one key sentence.
+      Reflect on prior occurrences in the narrative to see how they connect as causes
+      or enabling factors for that moment in the plot.
+    - Your objective is to analyze a chosen sentence within a story. You should consider
+      prior events that may have directly led to this moment, creating connections
+      that showcase cause-and-effect dynamics within the narrative flow.
+    - The task here is to interpret a brief narrative by selecting a particular line
+      for examination. Assess what happens before this point to establish whether
+      any prior actions contribute as causes or simply set the stage.
+  lol_636:
+    descriptions:
+    - You will be working on a list that includes both numerical values and lowercase
+      alphabets. The focus is on filtering out the alphabets, ensuring there are no
+      repeats, and sorting them in alphabetical order.
+    - In this task, you need to work with a list that contains both numbers and letters.
+      Your goal is to find and organize the letters in alphabetical order, ensuring
+      that only unique letters are included.
+    - This task involves analyzing a list comprised of various items, including digits
+      and lowercase letters. You must identify the letters, sort them without duplicates,
+      and prepare them for output.
+  lol_701:
+    descriptions:
+    - In this exercise, you will encounter various computer science-related scenarios.
+      Assess your understanding of programming operations, code functionality, and
+      data management to provide accurate answers.
+    - You're tasked with answering questions that assess your understanding of high
+      school computer science topics. Leverage your familiarity with programming languages,
+      computer security, and data structures as you provide your response.
+    - This task involves interpreting computer science questions and applying relevant
+      concepts to arrive at a correct answer. You should focus on key ideas in programming
+      and system functionality.
+  lol_705:
+    descriptions:
+    - The objective of this task is to evaluate your understanding of various macroeconomic
+      principles. You will analyze questions about fiscal policies, money circulation,
+      and market behaviors to derive the right conclusions.
+    - You will explore high school-level macroeconomic topics through a series of
+      questions. Your job is to identify the correct assertions that align with your
+      comprehension of economic functions and behavior.
+    - This task involves critically thinking about macroeconomic concepts and their
+      implications. You need to interpret various dynamics like aggregate demand and
+      fiscal measures while identifying the most appropriate answer.
+  lol_706:
+    descriptions:
+    - Your task is to apply your knowledge of high school mathematics to solve various
+      problems, requiring logical reasoning and an understanding of mathematical principles.
+    - This activity involves interpreting mathematical questions, translating them
+      into calculations, and determining the correct outcomes through analytical thinking.
+    - Delve into questions that require you to connect mathematical concepts with
+      practical applications. Your task will be to pull from your math knowledge in
+      order to resolve each query thoughtfully.
+  lol_710:
+    descriptions:
+    - Your role is to navigate through a series of statistics questions that require
+      practical knowledge about quantitative research methods. This includes understanding
+      how different sampling strategies can influence research outcomes.
+    - Engage with statistical queries that challenge your knowledge of data interpretation
+      and analysis. The task entails distinguishing correct statements based on principles
+      like mean comparison, sampling distributions, and experimental design.
+    - In this exercise, you'll be assessing a range of assertions regarding statistical
+      terms and principles. Drawing upon your background in statistics will enable
+      you to identify valid conclusions from those presented.
+  lol_717:
+    descriptions:
+    - The objective is to evaluate various scenarios presented in the form of questions
+      and accurately identify the logical fallacies at play. Critical thinking skills
+      are crucial for this task.
+    - You are tasked with assessing hypothetical arguments for flawed logic. Being
+      well-versed in identifying common fallacies will support you in this analytical
+      challenge.
+    - In this exercise, you analyze statements regarding logical reasoning to determine
+      which fallacy is being described. This requires familiarity with various types
+      of logical errors in argumentation.
+  lol_726:
+    descriptions:
+    - Engage with questions centered around philosophical themes and thinkers. This
+      requires a solid understanding of philosophical arguments and an ability to
+      discern correct interpretations from the given choices.
+    - Engage in a thoughtful exploration of significant philosophical questions, focusing
+      on concepts put forth by renowned thinkers. Your task revolves around accurately
+      identifying which interpretation is most aligned with established views.
+    - You will navigate through questions that test your grasp of philosophical principles.
+      The task requires critical thinking, as you analyze the provided answers to
+      find the one that accurately reflects philosophical understanding.
+  lol_742:
+    descriptions:
+    - Your goal is to read a given text and pinpoint answers related to event frequency.
+      This might include identifying how many times an event has happened or how often
+      it is likely to occur, based on the information provided.
+    - "You\u2019ll be engaging with texts that mention different activities and assessing\
+      \ how often they occur. This requires analytic thinking as you need to extract\
+      \ meaningful information without extraneous details."
+    - "The challenge lies in extracting succinct answers from written material regarding\
+      \ how frequently various events happen. You\u2019ll need to interpret descriptions\
+      \ carefully, determining the most likely answers based on context."
+  mbpp:
+    descriptions:
+    - Your challenge is to solve a series of problems by writing functions in Python.
+      These problems require handling lists and strings, allowing you to showcase
+      your proficiency in coding while addressing practical programming scenarios.
+    - You will be tasked with creating various Python functions that tackle programming
+      challenges. The exercises will test your ability to manipulate data structures,
+      search for patterns, and implement checks on numerical products.
+    - The goal is to develop Python functions that perform designated operations on
+      lists and strings. This requires a solid grasp of logical reasoning and the
+      ability to apply relevant algorithms in your code.
+  openbookqa:
+    descriptions:
+    - Analyze the provided statements carefully and determine which one best fits
+      into the context of the passage. This requires comprehension skills and the
+      ability to make logical inferences.
+    - Consider each option in relation to what is presented in the input. Discern
+      which one logically completes or responds accurately to the notion being expressed.
+    - Here, you'll be presented with different statements, and your role is to decide
+      which one appropriately complements or responds to a scenario. This process
+      involves critical analysis and synthesis of information.
+  piqa:
+    descriptions:
+    - You will explore practical questions and select an answer that presents a logical
+      and widely accepted approach to solve a given problem or complete a task successfully.
+    - Analyze the provided scenarios where practical advice or solutions are required,
+      focusing on selecting the most commonly used or convenient method.
+    - Given a question related to common tasks, your responsibility is to discern
+      which proposed solution aligns with typical practices or makes the task easier
+      to achieve.
+  winogrande:
+    descriptions:
+    - In this exercise, you need to read short narratives and discern which person
+      or object fits best within the context of the sentence.
+    - This task requires synthesizing information from concise textual scenarios to
+      identify crucial elements that drive the narrative forward.
+    - The goal is to evaluate descriptions and select the entity that best aligns
+      with the sentiments or actions presented in the scenario.
+exp_setup: hyper_lora
+factorized: false
+grad_accum_steps: 1
+head_in_size: 2048
+head_use_bias: false
+hypernet_latent_size: 512
+inp_max_len: 512
+keep_only_best: true
+l2_reg_generated_w: 0.001
+label_smoothing: 0.1
+learnable_AB_offset: false
+learnable_pos_emb: false
+logging_freq: 100
+lr: 2.5e-05
+max_grad_norm: 1.0
+model_dir: google/gemma-2-2b-it
+model_watch_freq: 5000
+mt_lora_path: null
+n_descs_per_ds: 128
+n_embs_per_sampled_task: null
+n_points_per_task: 1
+n_tasks_per_batch: 8
+n_train_ds: 479
+neftune_noise_alpha: 5.0
+notes: null
+pred_z_score: true
+run_name: 20250529-065318_9LnRVQHj
+save_dir: train_outputs/sft/hyper_lora/20250529-065318_9LnRVQHj
+save_freq: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+save_to_base_model_dir: false
+seed: 42
+sft_mode: completion
+shared_AB_head: false
+skip_eval: false
+target_modules:
+- q_proj
+- v_proj
+train_ds_names:
+- lol_742
+- lol_1198
+- lol_717
+- lol_705
+- lol_275
+- lol_636
+- lol_084
+- lol_1711
+- lol_140
+- lol_1448
+- lol_453
+- lol_1207
+- lol_734
+- lol_298
+- lol_587
+- lol_703
+- lol_147
+- lol_564
+- lol_1341
+- lol_201
+- lol_890
+- lol_908
+- lol_1428
+- lol_325
+- lol_1669
+- lol_246
+- lol_357
+- lol_1518
+- lol_1148
+- lol_1605
+- lol_867
+- lol_209
+- lol_751
+- lol_161
+- lol_105
+- lol_645
+- lol_442
+- lol_075
+- lol_269
+- lol_1568
+- lol_834
+- lol_1603
+- lol_685
+- lol_083
+- lol_390
+- lol_750
+- lol_1631
+- lol_1529
+- lol_746
+- lol_1217
+- lol_725
+- lol_889
+- lol_492
+- lol_620
+- lol_294
+- lol_641
+- lol_318
+- lol_846
+- lol_316
+- lol_1188
+- lol_629
+- lol_770
+- lol_1482
+- lol_499
+- lol_955
+- lol_719
+- lol_723
+- lol_087
+- lol_211
+- lol_901
+- lol_1483
+- lol_089
+- lol_627
+- lol_153
+- lol_1342
+- lol_828
+- lol_064
+- lol_1387
+- lol_400
+- lol_1294
+- lol_243
+- lol_1572
+- lol_1151
+- lol_574
+- lol_428
+- lol_366
+- lol_926
+- lol_1503
+- lol_130
+- lol_515
+- lol_151
+- lol_619
+- lol_1562
+- lol_632
+- lol_966
+- lol_605
+- lol_1487
+- lol_707
+- lol_1379
+- lol_1489
+- lol_1567
+- lol_1384
+- lol_1404
+- lol_691
+- lol_728
+- lol_219
+- lol_964
+- lol_1509
+- lol_582
+- lol_455
+- lol_963
+- lol_382
+- lol_859
+- lol_1393
+- lol_1565
+- lol_1720
+- lol_670
+- lol_689
+- lol_324
+- lol_1420
+- lol_618
+- lol_625
+- lol_377
+- lol_929
+- lol_296
+- lol_852
+- lol_1332
+- lol_1444
+- lol_850
+- lol_708
+- lol_1292
+- lol_110
+- lol_155
+- lol_429
+- lol_245
+- lol_137
+- lol_1566
+- lol_1146
+- lol_924
+- lol_022
+- lol_118
+- lol_687
+- lol_1167
+- lol_1502
+- lol_865
+- lol_181
+- lol_698
+- lol_956
+- lol_732
+- lol_721
+- lol_370
+- lol_1400
+- lol_1199
+- lol_1606
+- lol_288
+- lol_1670
+- lol_207
+- lol_1206
+- lol_457
+- lol_1308
+- lol_1310
+- lol_874
+- lol_1541
+- lol_1609
+- lol_210
+- lol_1318
+- lol_365
+- lol_755
+- lol_123
+- lol_1316
+- lol_1378
+- lol_475
+- lol_903
+- lol_070
+- lol_720
+- lol_067
+- lol_1564
+- lol_270
+- lol_167
+- lol_1504
+- lol_178
+- lol_277
+- lol_1315
+- lol_1434
+- lol_192
+- lol_1157
+- lol_672
+- lol_563
+- lol_714
+- lol_1212
+- lol_495
+- lol_1583
+- lol_753
+- lol_343
+- lol_1427
+- lol_092
+- lol_1285
+- lol_333
+- lol_329
+- lol_398
+- lol_157
+- lol_074
+- lol_1506
+- lol_697
+- lol_285
+- lol_393
+- lol_1147
+- lol_1585
+- lol_648
+- lol_353
+- lol_1431
+- lol_148
+- lol_585
+- lol_477
+- lol_1582
+- lol_355
+- lol_633
+- lol_093
+- lol_722
+- lol_566
+- lol_1152
+- lol_1452
+- lol_925
+- lol_1703
+- lol_833
+- lol_1210
+- lol_679
+- lol_1203
+- lol_1089
+- lol_389
+- lol_378
+- lol_637
+- lol_101
+- lol_1355
+- lol_640
+- lol_344
+- lol_1190
+- lol_733
+- lol_107
+- lol_1209
+- lol_505
+- lol_1385
+- lol_1135
+- lol_328
+- lol_609
+- lol_413
+- lol_072
+- lol_1425
+- lol_1451
+- lol_713
+- lol_642
+- lol_1321
+- lol_454
+- lol_504
+- lol_696
+- lol_1429
+- lol_1645
+- lol_431
+- lol_1317
+- lol_131
+- lol_675
+- lol_1158
+- lol_1325
+- lol_1216
+- lol_1347
+- lol_1328
+- lol_630
+- lol_460
+- lol_1665
+- lol_1154
+- lol_300
+- lol_617
+- lol_1508
+- lol_628
+- lol_600
+- lol_1380
+- lol_489
+- lol_905
+- lol_065
+- lol_044
+- lol_069
+- lol_356
+- lol_403
+- lol_590
+- lol_577
+- lol_819
+- lol_1721
+- lol_351
+- lol_904
+- lol_244
+- lol_1712
+- lol_683
+- lol_1197
+- lol_1592
+- lol_274
+- lol_278
+- lol_1534
+- lol_891
+- lol_694
+- lol_497
+- lol_488
+- lol_144
+- lol_1722
+- lol_1728
+- lol_291
+- lol_284
+- lol_1288
+- lol_128
+- lol_580
+- lol_616
+- lol_1401
+- lol_716
+- lol_1421
+- lol_1656
+- lol_1311
+- lol_516
+- lol_593
+- lol_138
+- lol_1186
+- lol_1326
+- lol_119
+- lol_108
+- lol_584
+- lol_388
+- lol_045
+- lol_821
+- lol_1581
+- lol_695
+- lol_596
+- lol_568
+- lol_085
+- lol_1495
+- lol_927
+- lol_1453
+- lol_1201
+- lol_923
+- lol_1204
+- lol_1510
+- lol_754
+- lol_1403
+- lol_1192
+- lol_565
+- lol_146
+- lol_666
+- lol_050
+- lol_704
+- lol_934
+- lol_579
+- lol_1196
+- lol_267
+- lol_206
+- lol_936
+- lol_323
+- lol_494
+- lol_461
+- lol_1409
+- lol_1313
+- lol_076
+- lol_686
+- lol_740
+- lol_1211
+- lol_113
+- lol_280
+- lol_1551
+- lol_116
+- lol_518
+- lol_1520
+- lol_079
+- lol_513
+- lol_1590
+- lol_1713
+- lol_1386
+- lol_063
+- lol_183
+- lol_1447
+- lol_671
+- lol_068
+- lol_858
+- lol_699
+- lol_1593
+- lol_700
+- lol_1607
+- lol_121
+- lol_190
+- lol_1168
+- lol_195
+- lol_1723
+- lol_1449
+- lol_363
+- lol_1419
+- lol_1398
+- lol_893
+- lol_326
+- lol_1194
+- lol_102
+- lol_145
+- lol_1338
+- lol_391
+- lol_176
+- lol_319
+- lol_359
+- lol_856
+- lol_1729
+- lol_761
+- lol_1320
+- lol_1596
+- lol_1601
+- lol_615
+- lol_1283
+- lol_638
+- lol_607
+- lol_692
+- lol_588
+- lol_129
+- lol_1200
+- lol_1486
+- lol_1406
+- lol_583
+- lol_094
+- lol_1731
+- lol_308
+- lol_664
+- lol_163
+- lol_127
+- lol_736
+- lol_379
+- lol_330
+- lol_1599
+- lol_875
+- lol_1214
+- lol_933
+- lol_1319
+- lol_456
+- lol_1189
+- lol_1657
+- lol_517
+- lol_385
+- lol_472
+- lol_047
+- lol_1533
+- lol_249
+- lol_095
+- lol_1479
+- lol_724
+- lol_1418
+- lol_507
+- lol_043
+- lol_1394
+- lol_149
+- lol_1156
+- lol_1598
+- lol_322
+- lol_1714
+- lol_727
+- lol_1704
+- lol_077
+- lol_1390
+- lol_667
+- lol_1724
+- lol_1088
+- lol_1087
+- lol_550
+- lol_892
+- lol_674
+- lol_509
+- lol_346
+- lol_769
+- lol_1322
+- lol_341
+- lol_290
+- lol_335
+- lol_879
+- lol_861
+- lol_594
+- lol_066
+- lol_162
+- lol_1584
+- lol_1622
+- lol_247
+training_task: sft
+use_default_desc: false
+use_hierarchical_sampler: true
+use_hypernet: true
+use_inp_as_desc: false
+use_one_hot_task_emb: false
+use_per_sample_desc: false
+use_per_task_emb: true
+val_batch_size: 32
+val_freq: 10000
+warmup_frac: 0.2
+weight_decay: 0.001

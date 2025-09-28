@@ -107,8 +107,17 @@ def main():
 
     set_seed(training_args.seed)
     checkpoint_dir = training_args.resume_from_checkpoint
-    if checkpoint_dir and not os.path.isdir(checkpoint_dir):
-        raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
+    # if checkpoint_dir:
+    #     # HACK: always load the latest checkpoint
+    #     checkpoint_dirs = glob(checkpoint_dir.split("checkpoint")[0] + "checkpoint*/")
+    #     last_checkpoint = sorted(
+    #         checkpoint_dirs, key=lambda x: int(x.split("checkpoint-")[-1].strip("/"))
+    #     )[-1]
+    #     training_args.resume_from_checkpoint = last_checkpoint
+    #     checkpoint_dir = last_checkpoint
+
+    # # if checkpoint_dir and not os.path.isdir(checkpoint_dir):
+    # #     raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
 
     # should be the same across processes
     # still possible to have a name crash though
@@ -200,9 +209,14 @@ def main():
             )
 
         else:
+            if checkpoint_dir:
+                ctx_args.from_pretrained_checkpoint = (
+                    f"{checkpoint_dir}/pytorch_model.bin"
+                )
             logger.info(
                 f"Loading from checkpoint: {ctx_args.from_pretrained_checkpoint}"
             )
+
             model = ModulatedPretrainedModel.from_state_dict(
                 torch.load(ctx_args.from_pretrained_checkpoint, weights_only=False),
                 train=True,
@@ -329,7 +343,7 @@ def main():
             ctx_args.max_packed_ctx_len,
             max_packed_size=-1,
             seed=training_args.seed,
-            num_proc=16,
+            num_proc=30,
         )
         logger.info("Setting per_device_train_batch_size to 1")
         training_args.per_device_train_batch_size = 1
