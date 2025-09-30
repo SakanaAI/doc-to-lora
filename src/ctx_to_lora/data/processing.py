@@ -228,10 +228,7 @@ def get_tokenized_dataset(
             f"`max_qas_len` should be <= {base_model_max_len=}, got {max_qas_len=}"
         )
     logger.info(f"Loading dataset {ds_name} with split {split}...")
-    # TODO: fix this to allow using both ctx_ids and add_ctx_ids
-    need_ctx_ids = (
-        ctx_model_max_len is not None
-    )  # not add_ctx_to_chat and bool(ctx_model_max_len)
+    need_ctx_ids = ctx_model_max_len is not None
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,
@@ -368,15 +365,9 @@ def construct_and_tokenize_ctx_qa(
         # add `input_ids`, `attention_mask`, `labels`
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
         logging.debug("Tokenizing inputs")
-        # HACK: check magic num niah dataset
-        prepend_bos = False  # see known issues in readme
-        # sample = ds[0]
-        # inp_txt = sample["prompts"][0]
-        # if inp_txt == "What is the special magic number? Reply with only the number.":
-        #     logger.info("Detected Niah dataset, not prepending BOS")
-        #     prepend_bos = False
+
         tokenized_ds = ds.map(
-            get_sft_prompt_formatting_fn(tokenizer, prepend_bos),
+            get_sft_prompt_formatting_fn(tokenizer),
             batched=True,
             batch_size=100_000,
         )
@@ -401,15 +392,6 @@ def construct_and_tokenize_ctx_qa(
                 batch_size=100_000,
                 remove_columns=["context"],
             )
-
-        # # TODO: this can be removed once we implement ctx chunking for training
-        # if is_train:
-        #     # drop
-        #     tokenized_ds = tokenized_ds.filter(
-        #         len_filter,
-        #         fn_kwargs={"max_length": ctx_model_max_len, "keys": ["ctx_ids"]},
-        #         num_proc=16,
-        #     )
 
         # ctx chunking
         # Ideally we want to chunk the raw text directly
@@ -519,7 +501,6 @@ def get_labels_from_input_ids(sample: dict[str, Any]) -> dict[str, Any]:
 
 def get_sft_prompt_formatting_fn(
     tokenizer: PreTrainedTokenizerBase,
-    prepend_bos: bool,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """
     Get a function that formats examples for supervised fine-tuning.
@@ -558,14 +539,6 @@ def get_sft_prompt_formatting_fn(
             return_assistant_tokens_mask=True,
             return_dict=True,
         )
-
-        if prepend_bos:
-            # HACK: add bos at the beginning (see `Known Issues` in README.md)
-            for i, (tok_ids, assistant_masks) in enumerate(
-                zip(tokens["input_ids"], tokens["assistant_masks"])
-            ):
-                tokens["input_ids"][i] = [tokenizer.bos_token_id] + tok_ids
-                tokens["assistant_masks"][i] = [0] + assistant_masks
 
         labels = []
         for tok_ids, masks in zip(tokens["input_ids"], tokens["assistant_masks"]):
@@ -765,7 +738,6 @@ def split_too_long_qas(
             max_qas_per_sample < 0 or len(input_ids[i]) <= max_qas_per_sample
         ):
             # No need to split - add entire sample
-            # logger.debug(f"Sample {i} is within limits, adding as is.")
             for k in samples:
                 out[k].append(samples[k][i])
             continue
@@ -815,9 +787,6 @@ def split_too_long_qas(
                     new_target_indices.append(target_indices)
             else:
                 # Current batch is full, save it and start new batch
-                # logger.debug(
-                #     f"sample {i}: adding batch with {len(new_input_ids)} sequences"
-                # )
                 if new_input_ids:  # Only add non-empty batches
                     add_batch(
                         new_input_ids,
@@ -999,7 +968,6 @@ def pack(
         train_ds = interleave_datasets(
             list(ds_dict.values()),
             probabilities=get_ds_prob(train_ds_lens, total_samples),
-            # probabilities=[l / total_samples for l in train_ds_lens],
             seed=seed,
             stopping_strategy="all_exhausted",
         )

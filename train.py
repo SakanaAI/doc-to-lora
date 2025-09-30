@@ -107,17 +107,6 @@ def main():
 
     set_seed(training_args.seed)
     checkpoint_dir = training_args.resume_from_checkpoint
-    # if checkpoint_dir:
-    #     # HACK: always load the latest checkpoint
-    #     checkpoint_dirs = glob(checkpoint_dir.split("checkpoint")[0] + "checkpoint*/")
-    #     last_checkpoint = sorted(
-    #         checkpoint_dirs, key=lambda x: int(x.split("checkpoint-")[-1].strip("/"))
-    #     )[-1]
-    #     training_args.resume_from_checkpoint = last_checkpoint
-    #     checkpoint_dir = last_checkpoint
-
-    # # if checkpoint_dir and not os.path.isdir(checkpoint_dir):
-    # #     raise NotADirectoryError(f"Checkpoint{checkpoint_dir} is not a directory")
 
     # should be the same across processes
     # still possible to have a name crash though
@@ -168,9 +157,8 @@ def main():
         base_model, tokenizer = get_model_and_tokenizer(
             **vars(model_args),
             train=True,
-            requires_grad=False,  # ctx_args.exp_setup == ExperimentSetup.FULL_FINETUNE,
+            requires_grad=False,
             peft_config=get_lora_config(model_name, **vars(lora_args)),
-            # use_q_lora=True,
         )
         ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
         if ctx_name is not None:
@@ -186,7 +174,6 @@ def main():
             ctx_tokenizer = tokenizer
 
     if ctx_args.exp_setup == ExperimentSetup.HYPERLORA:
-        # TODO: handle only extra_modules case (no target_modules)
         logger.info("Using HyperLoRA")
         if not ctx_args.from_pretrained_checkpoint:
             hypernet_config = get_hypernet_config(
@@ -236,8 +223,7 @@ def main():
             raise ValueError("ctx_encoder contains trainable parameters")
         if len([p for p in model.base_model.parameters() if p.requires_grad]):
             raise ValueError("base model contains trainable parameters")
-        # we can't compile the base model bc we will be
-        # adding/removing forward hooks during training
+
         model.hypernet.compile(fullgraph=True, mode="max-autotune")
 
     else:
@@ -353,13 +339,6 @@ def main():
 
     collator = flatten_if_not_packed
 
-    # HACK [local patch]: deepspeed model loading problem (for resume training)
-    # see https://github.com/microsoft/DeepSpeed/pull/6626/files
-    # /home/rujikorn_sakana_ai/.conda/envs/ctx-to-lora/lib/python3.10/site-packages/deepspeed/runtime/engine.py
-    # HACK: [local path]: make liger kernel works with gemma3
-    # see .venv/lib/python3.10/site-packages/liger_kernel/transformers/monkey_patch.py
-    # L810:814 + L781
-
     if isinstance(model, ModulatedPretrainedModel):
         if isinstance(model.base_model, PeftModel):
             base_model = model.base_model.base_model
@@ -370,8 +349,6 @@ def main():
             logger.info("Compiling ctx_encoder_model")
             ctx_base_model = model.ctx_encoder.base_model
             compile_linear(ctx_base_model)
-            # TODO: why we can't compile ctx_base_model?
-            # ctx_base_model.compile(fullgraph=True, mode="max-autotune")
 
     elif isinstance(model, PeftModel):
         base_model = model.base_model
@@ -419,7 +396,6 @@ if __name__ == "__main__":
     os.environ["OMP_NUM_THREADS"] = "23"
     torch._dynamo.config.capture_scalar_outputs = True
 
-    # DOES THIS CAUSE ACCURACY DEGRADATION?
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     if os.getenv("DEBUG", False):

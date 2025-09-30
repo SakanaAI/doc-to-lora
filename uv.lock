@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -709,6 +709,7 @@ dependencies = [
     { name = "kaggle" },
     { name = "kagglehub", extra = ["hf-datasets"] },
     { name = "liger-kernel" },
+    { name = "llmlingua" },
     { name = "matplotlib" },
     { name = "opt-einsum" },
     { name = "pandas" },
@@ -745,6 +746,7 @@ requires-dist = [
     { name = "kaggle", specifier = ">=1.7.4.5" },
     { name = "kagglehub", extras = ["hf-datasets"], specifier = ">=0.3.12" },
     { name = "liger-kernel" },
+    { name = "llmlingua", specifier = ">=0.2.2" },
     { name = "matplotlib" },
     { name = "opt-einsum", specifier = ">=3.4.0" },
     { name = "pandas" },
@@ -2431,6 +2433,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2e/76/5a239e6894b429ba064767e88ae8ea3ef5c967552467eeb79cb13d49e493/llguidance-0.7.26-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:97485ce044bdac97da403fa38a64b82af27c4c33a80dd5b323c1bc2b5756cab7", size = 14322380, upload-time = "2025-05-30T03:50:43.065Z" },
     { url = "https://files.pythonhosted.org/packages/3f/9c/96b10e33951232138e61ca8b47ff73fc28269695a01d2ab0ca09f6dd9376/llguidance-0.7.26-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9b05bf19c04d02d259d479158387cfb3c93651128d0004981d2669bbd0feca9a", size = 14397975, upload-time = "2025-05-30T03:50:47.555Z" },
     { url = "https://files.pythonhosted.org/packages/ec/1d/16d1bd5ff9266c2a3787f5400eafb4e2b7979c14385be326ff17331669d1/llguidance-0.7.26-cp39-abi3-win_amd64.whl", hash = "sha256:fa8ca0660df03934027b87d7e574edf1f8651493f77c0932f3f66d6effbed2b1", size = 2657375, upload-time = "2025-05-30T03:50:55.639Z" },
+]
+
+[[package]]
+name = "llmlingua"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "nltk" },
+    { name = "numpy" },
+    { name = "tiktoken" },
+    { name = "torch" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fd/02/7ed8ad9cec4b2f0a8a45c5b50a2435b559d2c764b5865e896d1c511080b1/llmlingua-0.2.2.tar.gz", hash = "sha256:1a0caedd8d5a65512a85dadb6bfda6f5b3c4b45e5cb9e7b1c6009573f9058572", size = 59753, upload-time = "2024-04-09T08:21:56.88Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6e/3e/221fe46a3338f2babdb2082ee42df88fcaa8ea0e639e832cbb1b93c5923a/llmlingua-0.2.2-py3-none-any.whl", hash = "sha256:da55137efe0db78063b3395396efe8a0dcfe4ae5a09aea0d503c34b7bf1d800c", size = 30536, upload-time = "2024-04-09T08:21:55.428Z" },
 ]
 
 [[package]]

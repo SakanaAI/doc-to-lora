@@ -43,9 +43,6 @@ def flatten_if_not_packed(inp_list):
 
     if "ctx_ids" in sample:
         # HACK: assumes 1 ctx chunk here
-        # TODO: fix this after we have chunk ctx training
-        # print(sample["ctx_ids"])
-        # breakpoint()
         # assert all(len(ctx_ids) == 1 for ctx_ids in sample["ctx_ids"]), (
         #     "ctx_ids can only have one chunk for eval. "
         #     "Please implement chunked ctx forward pass to handle this."
@@ -68,14 +65,12 @@ def flatten_if_not_packed(inp_list):
 def eval_collator(inp_list, tokenizer):
     # only used for teacher-forcing eval
     # input is a list of tokenized sequences
-    # TODO: handle list input (used to be torch.Tensor)
     padding_kwargs = dict(padding=True, padding_side="right", return_tensors="pt")
 
     has_ctx_ids = "ctx_ids" in inp_list[0]
     if has_ctx_ids:
         # pad to the longest ctx_len in the batch
         # which can have a different length from the input_ids, attn_mask, labels
-        # TODO: handle chunked ctx_ids
         ctx_ids = [example.pop("ctx_ids") for example in inp_list]
         ctx_attn_mask = [torch.ones_like(x) for x in ctx_ids]
         ctx_ids = torch.nn.utils.rnn.pad_sequence(
@@ -147,7 +142,4 @@ def generation_collator(inp_list, tokenizer):
         out["ctx_attn_mask"] = ctx_attn_mask
 
         out["n_ctx_chunks"] = torch.tensor(n_chunks, dtype=torch.int32)
-        # print(f"ctx_ids: {ctx_ids}")
-        # print(f"n_chunks: {n_chunks}")
-        # breakpoint()
     return out

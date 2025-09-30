@@ -7,7 +7,7 @@ import pprint
 
 import numpy as np
 
-from ctx_to_lora.utils import check_is_iterable, concat_list, setup_logging
+from ctx_to_lora.utils import check_is_iterable, concat_list
 
 logger = logging.getLogger()
 
@@ -198,7 +198,6 @@ def pack_batch(
     )
 
     # Pack groups
-    # n_samples = len(boundaries) - 1
     packed_batch = {
         "ctx_ids": [],
         "ctx_position_ids": [],
@@ -218,8 +217,6 @@ def pack_batch(
 
     for idx_pair in idx_pairs:
         start_idx, end_idx = idx_pair[0], idx_pair[1]
-        # start_idx = start_indices[i]
-        # end_idx = start_indices[i + 1]
         group_items = {
             "ctx_ids": batch["ctx_ids"][start_idx:end_idx],
             "input_ids": batch["input_ids"][start_idx:end_idx],
@@ -250,16 +247,11 @@ def pack_batch(
             ctx_efficiency = len(packed_item["ctx_ids"]) / max_packed_ctx_len
             ctx_packing_efficiency_ratios.append(ctx_efficiency)
 
-    # # Calculate total original tokens
-    # total_original_inp_tokens = sum(inp_lens)
-    # total_original_ctx_tokens = sum(ctx_lens)
-    # total_original_tokens = total_original_inp_tokens + total_original_ctx_tokens
-
-    # # Calculate length statistics
+    # Calculate length statistics
     packed_inp_lens_arr = np.array([len(x) for x in packed_batch["input_ids"]])
     packed_ctx_lens_arr = np.array([len(x) for x in packed_batch["ctx_ids"]])
 
-    # # Log performance statistics
+    # Log performance statistics
     avg_inp_packing_efficiency = (
         np.mean(packing_efficiency_ratios) if packing_efficiency_ratios else 0
     )
@@ -296,74 +288,3 @@ def pack_batch(
     logging.debug(f"Packing stats:\n{pprint.pformat(packing_stats, indent=2)}")
 
     return packed_batch
-
-
-if __name__ == "__main__":
-    from datasets import disable_caching
-
-    from ctx_to_lora.data.processing import get_tokenized_dataset
-    from ctx_to_lora.model_loading import get_model_and_tokenizer
-
-    setup_logging("tmp/packing_debug.log", debug=True)
-    logger.info("Starting packing script...")
-    model, tokenizer = get_model_and_tokenizer(
-        "google/gemma-2-2b-it",
-        train=True,
-        requires_grad=False,
-    )
-    base_model_max_len = model.base_model.config.max_position_embeddings
-
-    tokenizer_kwargs = {"max_length": base_model_max_len}  # not used
-    ctx_tokenizer_kwargs = {"max_length": base_model_max_len}  # not used for now
-    ds = get_tokenized_dataset(
-        ds_name="self_gen/google/gemma-2-2b-it_temp_0.0/fw_qa_v2_2k_len_level_2_tiny",
-        split="train",
-        max_qas_len=2048,
-        base_model_max_len=model.base_model.config.max_position_embeddings,
-        tokenizer=tokenizer,
-        tokenizer_kwargs={},
-        ctx_model_max_len=model.base_model.config.max_position_embeddings,
-        ctx_tokenizer=tokenizer,
-        ctx_tokenizer_kwargs={},
-        add_ctx_to_chat=False,
-        add_repeat_prompt=False,
-        repeat_prob=0.0,
-        add_negative_prompt=False,
-        use_kl_loss=False,
-    )
-    # ds.set_format("torch")
-    print(ds)
-    disable_caching()
-
-    packed_ds = ds.map(
-        pack_batch,
-        fn_kwargs={
-            "max_packed_inp_len": 2**13,  # 8k
-            "max_packed_ctx_len": 2**14,  # 16k
-        },
-        batched=True,
-        batch_size=100_000,
-        remove_columns=ds.column_names,
-        num_proc=4,
-    )
-    print(packed_ds)
-
-    # packed_ds = PackedDataset(
-    #     dataset=ds,
-    #     tokenizer=tokenizer,
-    #     max_input_length=base_model_max_len,
-    #     max_packed_length=base_model_max_len * 2,
-    #     # max_packed_size=3,  # maximum number of data points being packed
-    # )
-    # packed_ds.stat()
-    # packed_ds = Dataset.from_list(packed_ds)
-    # packed_ds.set_format("torch")
-    # print(packed_ds)
-    # print(ds[0])
-
-    # print(packed_ds[0])
-    orig_seq = ds[0]["ctx_ids"]
-    packed_seq = packed_ds[0]["ctx_ids"][: len(orig_seq)]
-    print(orig_seq, packed_seq)
-
-    print(orig_seq == packed_seq)

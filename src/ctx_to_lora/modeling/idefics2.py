@@ -16,7 +16,6 @@
 import math
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache
@@ -368,8 +367,6 @@ class Idefics2PerceiverFlashAttention2(Idefics2PerceiverAttention):
         **kwargs,
     ) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
         bsz, q_len, _ = latents.size()
-        # kv_seq_len = q_len + context.size()[1]
-        # kv_seq_len = context.size()[1]
         query_states = self.q_proj(latents)
         if is_cross_attn:
             kv_inp = context
@@ -390,41 +387,6 @@ class Idefics2PerceiverFlashAttention2(Idefics2PerceiverAttention):
         value_states = value_states.view(
             *kv_inp.shape[:2], self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
-
-        # kv_seq_len = key_states.shape[-2]
-        # if past_key_value is not None:
-        #     kv_seq_len += past_key_value[0].shape[-2]
-
-        # if past_key_value is not None:
-        #     # Activate slicing cache only if the config has a value `sliding_windows` attribute
-        #     if (
-        #         hasattr(self.config, "sliding_window")
-        #         and kv_seq_len > self.config.sliding_window
-        #     ):
-        #         slicing_tokens = kv_seq_len - self.config.sliding_window
-
-        #         past_key = past_key_value[0]
-        #         past_value = past_key_value[1]
-
-        #         past_key = past_key[:, :, slicing_tokens:, :].contiguous()
-        #         past_value = past_value[:, :, slicing_tokens:, :].contiguous()
-
-        #         if past_key.shape[-2] != self.config.sliding_window - 1:
-        #             raise ValueError(
-        #                 "past key must have a shape of (`batch_size, num_heads, self.config.sliding_window-1,"
-        #                 f" head_dim`), got {past_key.shape}"
-        #             )
-
-        #         past_key_value = (past_key, past_value)
-
-        #         if attention_mask is not None:
-        #             attention_mask = attention_mask[:, slicing_tokens:]
-        #             attention_mask = torch.cat(
-        #                 [attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1
-        #             )
-
-        #     key_states = torch.cat([past_key_value[0], key_states], dim=2)
-        #     value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
 
@@ -647,22 +609,6 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
                     self_attn = Idefics2PerceiverLayer(config, is_cross_attn=False)
                 self.layers.append(self_attn)
 
-        # self.layers = nn.ModuleList(self.layers)
-
-        # x_attn_config = deepcopy(config)
-        # x_attn_config.is_cross_attn = True
-        # self.layers = [
-        #     Idefics2PerceiverLayer(x_attn_config, idx)
-        #     for idx in range(self.n_cross_attn_layers)
-        # ]
-
-        # config.is_cross_attn = False
-        # self.layers += [
-        #     Idefics2PerceiverLayer(config, idx)
-        #     for idx in range(self.n_self_attn_layers)
-        # ]
-        # self.layers = nn.ModuleList(self.layers)
-
         self.layernorm = Idefics2RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
 
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
@@ -683,12 +629,6 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
         latents = self.latents_q.unsqueeze(0).expand((bsz, *self.latents_q.size()))
 
-        # latent_attention_mask = torch.ones(
-        #     (attention_mask.size(0), latents.size(1)),
-        #     dtype=attention_mask.dtype,
-        #     device=attention_mask.device,
-        # )
-        # attention_mask = torch.cat([attention_mask, latent_attention_mask], dim=-1)
         attention_mask = (
             _prepare_4d_attention_mask(
                 attention_mask, latents.dtype, tgt_len=self.n_latents
@@ -715,11 +655,6 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
         elif position_ids is not None:
             logger.warning_once("Using position ids for resampler")
-            # [bsz + 1]
-            # cu_seq_lens_q = torch.tensor(
-            #     [self.n_latents] * (bsz + 1), device=context.device, dtype=torch.int32
-            # ) * torch.arange(bsz + 1, device=context.device, dtype=torch.int32)
-            # max_length_q = self.n_latents
 
             position_ids = position_ids.flatten()
             indices = torch.arange(
@@ -742,20 +677,12 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
         else:
             raise ValueError("either position_ids or attention_mask is required")
         x_attn_kwargs = dict(
-            # attention_mask=attention_mask,
             position_ids=position_ids,
             cu_seq_lens_q=cu_seq_lens_q,
             cu_seq_lens_k=cu_seq_lens_k,
             max_length_q=max_length_q,
             max_length_k=max_length_k,
         )
-        # self_attn_mask = (
-        #     torch.ones(
-        #         (bsz, self.n_latents), device=context.device, dtype=torch.float32
-        #     )
-        #     if attention_mask is not None
-        #     else None
-        # )
         self_attn_position_ids = torch.arange(
             self.n_latents, device=context.device, dtype=torch.int32
         ).repeat(1, bsz)
@@ -782,46 +709,6 @@ class Idefics2PerceiverResampler(Idefics2PreTrainedModel):
 
             layer_outputs = layer(**attn_kwargs)
             compressed_context = layer_outputs[0]
-        # for encoder in self.layers[: self.n_cross_attn_layers]:
-        #     layer_outputs = encoder(
-        #         compressed_context,
-        #         context,
-        #         attention_mask=None,
-        #         position_ids=position_ids,
-        #         past_key_value=None,
-        #         output_attentions=False,
-        #         use_cache=False,
-        #         cu_seq_lens_q=cu_seq_lens_q,
-        #         cu_seq_lens_k=cu_seq_lens_k,
-        #         max_length_q=max_length_q,
-        #         max_length_k=max_length_k,
-        #     )
-
-        #     compressed_context = layer_outputs[0]
-
-        # if self.n_self_attn_layers:
-        #     position_ids = torch.arange(
-        #         self.n_latents, device=position_ids.device, dtype=torch.int32
-        #     ).repeat(1, bsz)
-        #     cu_seq_lens_k = cu_seq_lens_q
-        #     max_length_k = max_length_q
-
-        # for processor in self.layers[self.n_cross_attn_layers :]:
-        #     layer_outputs = processor(
-        #         compressed_context,
-        #         context=None,
-        #         attention_mask=None,
-        #         position_ids=position_ids,
-        #         past_key_value=None,
-        #         output_attentions=False,
-        #         use_cache=False,
-        #         cu_seq_lens_q=cu_seq_lens_q,
-        #         cu_seq_lens_k=cu_seq_lens_k,
-        #         max_length_q=max_length_q,
-        #         max_length_k=max_length_k,
-        #     )
-
-        #     compressed_context = layer_outputs[0]
 
         compressed_context = self.layernorm(compressed_context)
 
@@ -864,17 +751,6 @@ class Idefics2Perceiver(Idefics2PreTrainedModel):
             position_ids=position_ids,
         )
 
-        # if position_ids is None:
-        #     # padded
-        #     # attn_mask = torch.ones(
-        #     #     (bsz, self.encoder.n_latents),
-        #     #     device=context.device,
-        #     #     dtype=torch.int32,
-        #     # )
-        #     outputs = self.decoder(latents)
-        # else:
-        # packed sequence
-        # always use position_ids for decoder
         latent_position_ids = torch.arange(
             self.encoder.n_latents, device=context.device
         ).unsqueeze(0)
@@ -887,90 +763,3 @@ class Idefics2Perceiver(Idefics2PreTrainedModel):
 __all__ = [
     "Idefics2Perceiver",
 ]
-
-if __name__ == "__main__":
-    encoder_config = Idefics2PerceiverConfig(
-        input_size=1234,
-        n_latents=64,
-        num_blocks=8,
-        num_self_attn_per_block=6,
-        shared_weights=False,
-        attn_implementation="flash_attention_2",
-    )
-    decoder_config = Idefics2PerceiverConfig(
-        input_size=encoder_config.hidden_size,
-        n_latents=16,
-        num_blocks=1,
-        num_self_attn_per_block=0,
-        shared_weights=False,
-        attn_implementation="flash_attention_2",
-    )
-    model = (
-        Idefics2Perceiver(encoder_config, decoder_config).to("cuda").to(torch.bfloat16)
-    )
-    print(model)
-    inp = torch.rand(1, 192 + 37, 1234, dtype=torch.bfloat16, device="cuda")
-    inp = torch.cat([inp, inp], dim=1)
-    # mask = torch.ones(1, 128, dtype=torch.bfloat16, device="cuda")
-    # mask[..., -1] = 0
-    # print(mask)
-    out = model(
-        inp,
-        # attention_mask=mask,
-        position_ids=torch.cat(
-            [
-                torch.arange(128, device="cuda"),
-                torch.arange(64, device="cuda"),
-                torch.arange(37, device="cuda"),
-                torch.arange(128, device="cuda"),
-                torch.arange(64, device="cuda"),
-                torch.arange(37, device="cuda"),
-            ],
-            dim=-1,
-        ).unsqueeze(0),
-        # position_ids=torch.arange(128, device="cuda"),
-    )
-    print(out)
-    print(out.shape)
-    print(model.encoder.latents.grad)
-    print(model.decoder.latents.grad)
-    out.mean().backward()
-    print(model.encoder.latents.grad)
-    print(model.decoder.latents.grad)
-
-    # inp = torch.rand(1, 192 + 37, 1234, dtype=torch.bfloat16, device="cuda")
-    # inp = torch.cat([inp, inp], dim=1)
-    # inp = inp.unsqueeze(1)
-    # # mask = torch.ones(1, 128, dtype=torch.bfloat16, device="cuda")
-    # # mask[..., -1] = 0
-    # # print(mask)
-    # out = torch.stack(
-    #     [
-    #         model(
-    #             inp[:, i],
-    #             # attention_mask=mask,
-    #             position_ids=torch.cat(
-    #                 [
-    #                     torch.arange(128, device="cuda"),
-    #                     torch.arange(64, device="cuda"),
-    #                     torch.arange(37, device="cuda"),
-    #                     torch.arange(128, device="cuda"),
-    #                     torch.arange(64, device="cuda"),
-    #                     torch.arange(37, device="cuda"),
-    #                 ],
-    #                 dim=-1,
-    #             ).unsqueeze(0),
-    #             # position_ids=torch.arange(128, device="cuda"),
-    #         )
-    #         for i in range(inp.shape[1])
-    #     ]
-    # )
-
-    # print(out)
-    # print(out.shape)
-    # print(model.encoder.latents.grad)
-    # print(model.decoder.latents.grad)
-    # out.mean().backward()
-    # print(model.encoder.latents.grad)
-    # print(model.decoder.latents.grad)
-    # breakpoint()

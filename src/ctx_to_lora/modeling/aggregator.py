@@ -2,7 +2,6 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-import torch
 from einops import rearrange, repeat, unpack
 from jaxtyping import Float, Integer
 from torch import Tensor, nn
@@ -41,18 +40,15 @@ class AggregatorConfig:
     pooling_type: POOL_FN
 
     # perceiver
-    # n_cross_attn_layers: int  # number of cross-attention layers
-    # num_self_attends_per_block: int  # = 16
-    # decoder_depth: int  # 1 = only cross-attention
     num_latent_factor: int
     lora_r: int
     per_rank_gen: bool
 
-    n_latent_queries: int  # = 208
+    n_latent_queries: int
     num_blocks: int
     num_self_attn_per_block: int
     shared_weights: bool
-    layer_to_layer_ctx_encoder: bool  #  = False  # default value for backward compat
+    layer_to_layer_ctx_encoder: bool
 
 
 def get_aggregator_config(
@@ -110,10 +106,6 @@ class Perceiver(nn.Module):
             n_output_queries = num_modules * self.r + num_extra_modules
         self.config = Idefics2PerceiverConfig(
             input_size=feature_size,
-            # the first layer is xattn
-            # resampler_depth=kwargs["num_self_attends_per_block"] + 1,
-            # n_cross_attn_layers=kwargs["n_cross_attn_layers"],
-            # resampler_n_latents=n_output_queries * num_latent_factor,
             num_blocks=kwargs["num_blocks"],
             num_self_attn_per_block=kwargs["num_self_attn_per_block"],
             shared_weights=kwargs["shared_weights"],
@@ -124,7 +116,6 @@ class Perceiver(nn.Module):
         )
         self.decoder_config = Idefics2PerceiverConfig(
             input_size=output_size,
-            # resampler_depth=kwargs["decoder_depth"],
             num_blocks=1,
             num_self_attn_per_block=0,
             shared_weights=False,
@@ -218,86 +209,3 @@ class Perceiver(nn.Module):
 AGGREGATOR_CLS = {
     AGGREGATOR_TYPE.PERCEIVER: Perceiver,
 }
-
-if __name__ == "__main__":
-    # Test the Perceiver class
-    print("Testing Perceiver...")
-
-    # Test parameters
-    feature_size = 768
-    output_size = 512
-    num_layers = 12
-    num_modules = 4
-    num_extra_modules = 2
-    lora_r = 8
-    batch_size = 2
-    seq_len = 100
-    device = "cuda"
-
-    torch.set_default_dtype(torch.bfloat16)
-
-    # Create Perceiver instance
-    perceiver = Perceiver(
-        feature_size=feature_size,
-        output_size=output_size,
-        num_layers=num_layers,
-        num_modules=num_modules,
-        num_extra_modules=num_extra_modules,
-        per_rank_gen=True,
-        lora_r=lora_r,
-        num_latent_factor=8,
-        layer_to_layer_ctx_encoder=False,
-        n_latent_queries=208,
-        num_self_attends_per_block=16,
-        decoder_depth=1,
-    ).to(device)
-
-    # Test with 3D input (standard case)
-    print("Testing with 3D input...")
-    ctx_features = torch.randn(1, batch_size * seq_len, feature_size).to(device)
-    ctx_attn_mask = None  # torch.ones(batch_size, seq_len, dtype=torch.long).to(device)
-    ctx_position_ids = torch.arange(seq_len).repeat(batch_size).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        lora_x, extra_x = perceiver(ctx_features, ctx_attn_mask, ctx_position_ids)
-
-    print(f"LoRA output shape: {lora_x.shape}")
-    print(f"Extra output shape: {extra_x.shape}")
-    print(
-        f"Expected LoRA shape: ({batch_size}, {num_layers}, {num_modules}, {lora_r}, {output_size})"
-    )
-    print(
-        f"Expected extra shape: ({batch_size}, {num_layers}, {num_extra_modules}, {output_size})"
-    )
-
-    # Test with layer-to-layer configuration
-    print("\nTesting with layer-to-layer configuration...")
-    perceiver_l2l = Perceiver(
-        feature_size=feature_size,
-        output_size=output_size,
-        num_layers=num_layers,
-        num_modules=num_modules,
-        num_extra_modules=num_extra_modules,
-        per_rank_gen=True,
-        lora_r=lora_r,
-        num_latent_factor=8,
-        layer_to_layer_ctx_encoder=True,
-        n_latent_queries=208,
-        num_self_attends_per_block=16,
-        decoder_depth=1,
-    ).to(device)
-
-    # Test with 4D input for layer-to-layer
-    ctx_features_4d = torch.randn(1, num_layers, batch_size * seq_len, feature_size).to(
-        device
-    )
-
-    with torch.no_grad():
-        lora_x_l2l, extra_x_l2l = perceiver_l2l(
-            ctx_features_4d, ctx_attn_mask, ctx_position_ids
-        )
-
-    print(f"Layer-to-layer LoRA output shape: {lora_x_l2l.shape}")
-    print(f"Layer-to-layer extra output shape: {extra_x_l2l.shape}")
-
-    print("All tests passed!")

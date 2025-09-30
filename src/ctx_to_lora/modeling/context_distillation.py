@@ -482,13 +482,6 @@ class CtxDistillModel(nn.Module):
             inp_res_ids != self.pad_token_id, 1, 0
         ).long()
 
-        # _, inp_ids = ctx_inp_split(
-        #     ctx_inp_ids,
-        #     ctx_inp_sep_seq.to(ctx_inp_res_ids.device),
-        #     self.pad_token_id,
-        #     self.prefix_tokens,
-        # )
-
         student_labels = inp_res_ids.clone()
         student_labels[:, :-res_len] = -100
         student_labels = torch.where(
@@ -507,17 +500,6 @@ class CtxDistillModel(nn.Module):
         if distill_only:
             return self.get_lora_state()
 
-        # _, inp_ids = ctx_inp_split(
-        #     ctx_inp_ids,
-        #     ctx_inp_sep_seq.to(ctx_inp_res_ids.device),
-        #     self.pad_token_id,
-        #     self.prefix_tokens,
-        #     padding_side="left",
-        # )
-
-        # # inp_ids = torch.cat([self.prefix_tokens.expand(bs, -1), inp_ids], dim=-1)
-        # # inp_ids = inp_res_ids[:, :-res_len]
-        # print(self.tokenizer.batch_decode(inp_ids))
         model_inputs_kwargs.pop("attention_mask", None)
         model_inputs_kwargs.pop("input_ids", None)
         if self.reprompt_ctx:
@@ -563,7 +545,6 @@ if __name__ == "__main__":
     sep_text = SELF_QA_INTX
     # ctx = "# Provided Information\nMy name is Tan."
     # ctx = "# Provided Info"
-    # inp = "What is my name? Reply with my name only. No explanation."
     prompt = f"{ctx}\n\n{sep_text}\n\n{inp}"
     messages = [{"role": "user", "content": prompt}]
     encoded = tokenizer.apply_chat_template(
@@ -613,9 +594,6 @@ if __name__ == "__main__":
                 max_new_tokens=256,
                 do_sample=False,
             )
-            # print(
-            #     f"Teacher response:{tokenizer.batch_decode(teacher_outputs, skip_special_tokens=False)}"
-            # )
             print(
                 f"Student response: {tokenizer.batch_decode(outputs, skip_special_tokens=False)}"
             )

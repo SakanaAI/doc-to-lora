@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Iterable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from math import sqrt
@@ -31,11 +30,6 @@ from ctx_to_lora.configs import (
     AggregatorArguments,
     CtxEncoderArguments,
     HypernetArguments,
-)
-from ctx_to_lora.hooks import (
-    add_generated_layernorm_hook,
-    add_generated_lora_hook,
-    remove_hook_handles,
 )
 from ctx_to_lora.model_loading import (
     get_model,
@@ -229,7 +223,6 @@ class HyperLoRA(nn.Module):
         self._init_model()
 
     def _init_model(self):
-        # TODO: add a way to handle dependencies between chunks
         self.agg_config = self.config.aggregator_config
         self.aggregator = AGGREGATOR_CLS[self.agg_config.aggregator_type](
             **vars(self.agg_config)
@@ -278,37 +271,24 @@ class HyperLoRA(nn.Module):
 
             self.d_lora = max(self.d_in[m] + self.d_out[m] for m in self.target_modules)
 
-            if self.config.use_bias:
-                self.bias_A = nn.ParameterDict(
-                    {
-                        m: nn.Parameter(
-                            torch.normal(
-                                0,
-                                0.2 / (self.d_in[m] * self.r) ** 0.5,
-                                (self.n_layers, self.r, self.d_in[m]),
-                            )
+            self.bias_A = nn.ParameterDict(
+                {
+                    m: nn.Parameter(
+                        torch.normal(
+                            0,
+                            0.2 / (self.d_in[m] * self.r) ** 0.5,
+                            (self.n_layers, self.r, self.d_in[m]),
                         )
-                        for m in self.target_modules
-                    }
-                )
-            # else:
-            #     self.bias_A = nn.ParameterDict(
-            #         {
-            #             m: nn.Parameter(
-            #                 torch.zeros((self.n_layers, self.r, self.d_in[m]))
-            #             )
-            #             for m in self.target_modules
-            #         }
-            #     )
-            if self.config.use_bias:
-                self.bias_B = nn.ParameterDict(
-                    {
-                        m: nn.Parameter(
-                            torch.zeros((self.n_layers, self.r, self.d_out[m]))
-                        )
-                        for m in self.target_modules
-                    }
-                )
+                    )
+                    for m in self.target_modules
+                }
+            )
+            self.bias_B = nn.ParameterDict(
+                {
+                    m: nn.Parameter(torch.zeros((self.n_layers, self.r, self.d_out[m])))
+                    for m in self.target_modules
+                }
+            )
 
             self.scaler_A = nn.ParameterDict(
                 {
@@ -323,259 +303,32 @@ class HyperLoRA(nn.Module):
                 }
             )
 
-            if self.config.use_light_weight_lora:
-                # light-weight lora projection (per layer, per module)
-                # self.pre_lora_projection = nn.ParameterDict(
-                #     {
-                #         k: nn.Parameter(
-                #             torch.randn(
-                #                 self.d_in[k], self.config.light_weight_latent_size
-                #             )
-                #         )
-                #         for k in self.target_modules
-                #     }
-                # )
-                self.pre_lora_projection = nn.ParameterDict(
-                    {
-                        k: Mix(
-                            "bs n_layers r d_latent -> bs n_layers r d_in",
-                            weight_shape="n_layers d_latent d_in",
-                            bias_shape="n_layers d_in",
-                            n_layers=len(self.layer_indices),
-                            d_latent=self.config.light_weight_latent_size,
-                            d_in=self.d_in[k],
-                        )
-                        for k in self.target_modules
-                    }
-                )
-                with torch.no_grad():
-                    for param in self.pre_lora_projection.values():
-                        for i in range(param.weight.shape[0]):
-                            nn.init.orthogonal_(
-                                param.weight[i],
-                                # 1 / self.config.light_weight_latent_size**0.5,
-                            )
-                            param.bias.data[:] = 0
-
-                # self.post_lora_projection = nn.ParameterDict(
-                #     {
-                #         k: nn.Parameter(
-                #             torch.randn(
-                #                 self.d_out[k], self.config.light_weight_latent_size
-                #             )
-                #         )
-                #         for k in self.target_modules
-                #     }
-                # )
-                self.post_lora_projection = nn.ParameterDict(
-                    {
-                        k: Mix(
-                            "bs n_layers d_latent r -> bs n_layers d_out r",
-                            weight_shape="n_layers d_latent d_out",
-                            bias_shape="n_layers d_out",
-                            n_layers=len(self.layer_indices),
-                            d_latent=self.config.light_weight_latent_size,
-                            d_out=self.d_out[k],
-                        )
-                        for k in self.target_modules
-                    }
-                )
-                with torch.no_grad():
-                    for param in self.post_lora_projection.values():
-                        for i in range(param.weight.shape[0]):
-                            nn.init.orthogonal_(
-                                param.weight[i],
-                                # 1 / self.config.light_weight_latent_size**0.5,
-                            )
-                            param.bias.data[:] = 0
-
-                self.d_lora = self.config.light_weight_latent_size * 2
-                self.d_in = {k: self.config.light_weight_latent_size for k in self.d_in}
-                self.d_out = {
-                    k: self.config.light_weight_latent_size for k in self.d_out
-                }
-
-                logger.info(f"Using light-weight LoRA with d_lora = {self.d_lora // 2}")
-
             n_modules = len(self.target_modules)
             # have to do this otherwise doesnt work with adamw_torch_fused
             # has something to do with the bias shape (n_modules r d_lora)
             # when n_modules == 1, adamw_torch_fused complains about device/layout
             # but when n_modules > 1, it works fine
-            if self.config.per_rank_gen:
-                if n_modules == 1:
-                    if self.config.per_layer_processing:
-                        if self.config.use_per_rank_bias:
-                            self.head = Mix(
-                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                                weight_shape="n_layers d_latent d_lora",
-                                bias_shape=None,  # no bias
-                                # bias_shape="n_layers r d_lora",
-                                n_layers=len(self.layer_indices),
-                                d_latent=self.config.latent_size,
-                                r=self.config.lora_config.r,
-                                d_lora=self.d_lora,
-                            )
-                        else:
-                            self.head = Mix(
-                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                                weight_shape="n_layers d_latent d_lora",
-                                bias_shape=None,  # no bias
-                                # bias_shape="n_layers d_lora",
-                                n_layers=len(self.layer_indices),
-                                d_latent=self.config.latent_size,
-                                r=self.config.lora_config.r,
-                                d_lora=self.d_lora,
-                            )
-                    # else:
-                    #     if self.config.use_per_rank_bias:
-                    #         self.head = Mix(
-                    #             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                    #             weight_shape="d_latent d_lora",
-                    #             # bias_shape=None,  # no bias
-                    #             bias_shape="r d_lora",
-                    #             # n_layers=len(self.layer_indices),
-                    #             d_latent=self.config.latent_size,
-                    #             r=self.config.lora_config.r,
-                    #             d_lora=d_lora,
-                    #         )
-                    #     else:
-                    #         self.head = Mix(
-                    #             "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                    #             weight_shape="d_latent d_lora",
-                    #             # bias_shape=None,  # no bias
-                    #             bias_shape="d_lora",
-                    #             # n_layers=len(self.layer_indices),
-                    #             d_latent=self.config.latent_size,
-                    #             r=self.config.lora_config.r,
-                    #             d_lora=d_lora,
-                    #         )
-                else:
-                    if self.config.per_layer_processing:
-                        if self.config.use_per_rank_bias:
-                            self.head = Mix(
-                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                                weight_shape="n_layers n_modules d_latent d_lora",
-                                bias_shape=None,  # no bias
-                                # bias_shape="n_layers n_modules r d_lora",
-                                n_layers=len(self.layer_indices),
-                                n_modules=n_modules,
-                                d_latent=self.config.latent_size,
-                                r=self.config.lora_config.r,
-                                d_lora=self.d_lora,
-                            )
-                        else:
-                            self.head = Mix(
-                                "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                                weight_shape="n_layers n_modules d_latent d_lora",
-                                bias_shape=None,  # no bias
-                                # bias_shape="n_layers n_modules d_lora",
-                                n_layers=len(self.layer_indices),
-                                n_modules=n_modules,
-                                d_latent=self.config.latent_size,
-                                r=self.config.lora_config.r,
-                                d_lora=self.d_lora,
-                            )
-                    # else:
-                    #     self.head = Mix(
-                    #         "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
-                    #         weight_shape="n_modules d_latent d_lora",
-                    #         # bias_shape=None,  # no bias
-                    #         bias_shape="n_modules d_lora",
-                    #         n_layers=len(self.layer_indices),
-                    #         n_modules=n_modules,
-                    #         d_latent=self.config.latent_size,
-                    #         r=self.config.lora_config.r,
-                    #         d_lora=d_lora,
-                    #     )
-            # else:
-            #     if n_modules == 1:
-            #         if self.config.per_layer_processing:
-            #             self.head = Mix(
-            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-            #                 weight_shape="n_layers d_latent r d_lora",
-            #                 # bias_shape=None,  # no bias
-            #                 bias_shape="n_layers r d_lora",
-            #                 d_latent=self.config.latent_size,
-            #                 r=self.config.lora_config.r,
-            #                 d_lora=d_lora,
-            #             )
-            #         else:
-            #             self.head = Mix(
-            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-            #                 weight_shape="d_latent r d_lora",
-            #                 # bias_shape=None,  # no bias
-            #                 bias_shape="r d_lora",
-            #                 d_latent=self.config.latent_size,
-            #                 r=self.config.lora_config.r,
-            #                 d_lora=d_lora,
-            #             )
-            #     else:
-            #         # each module processes d -> r d_out independently
-            #         if self.config.per_layer_processing:
-            #             self.head = Mix(
-            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-            #                 weight_shape="n_layers n_modules d_latent r d_lora",
-            #                 # bias_shape=None,  # no bias
-            #                 bias_shape="n_layers n_modules r d_lora",
-            #                 n_modules=n_modules,
-            #                 d_latent=self.config.latent_size,
-            #                 r=self.config.lora_config.r,
-            #                 d_lora=d_lora,
-            #             )
-            #         else:
-            #             self.head = Mix(
-            #                 "bs n_layers n_modules d_latent -> bs n_layers n_modules r d_lora",
-            #                 weight_shape="n_modules d_latent r d_lora",
-            #                 # bias_shape=None,  # no bias
-            #                 bias_shape="n_modules r d_lora",
-            #                 n_modules=n_modules,
-            #                 d_latent=self.config.latent_size,
-            #                 r=self.config.lora_config.r,
-            #                 d_lora=d_lora,
-            #             )
-
-        # if self.extra_modules:
-        #     # self.extra_layers = nn.Sequential(
-        #     #     *[
-        #     #         ResMLPBlock(
-        #     #             input_size=self.config.latent_size,
-        #     #             hidden_size=self.config.latent_size * 4,
-        #     #             output_size=self.config.latent_size,
-        #     #             dropout_rate=getattr(self.config, "dropout_rate", 0),
-        #     #         )
-        #     #         for _ in range(self.config.num_pre_head_layers)
-        #     #     ]
-        #     # )
-        #     self.extra_layers = ResMLPBlock(
-        #         input_size=self.config.latent_size,
-        #         hidden_size=self.config.latent_size * 4,
-        #         output_size=self.config.latent_size,
-        #         dropout_rate=getattr(self.config, "dropout_rate", 0),
-        #     )
-        #     # self.extra_layers = nn.Identity()
-        #     # self.pre_extra_layers_norm = nn.LayerNorm(self.config.latent_size)
-        #     # self.extra_norm = nn.LayerNorm(self.config.latent_size)
-
-        #     # separate head for extra_modules, e.g., layernorm
-        #     n_extra_modules = len(self.extra_modules) if self.extra_modules else 0
-        #     if n_extra_modules == 1:
-        #         self.extra_head = Mix(
-        #             "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
-        #             weight_shape="d_latent hidden_size",
-        #             bias_shape="hidden_size",
-        #             d_latent=self.config.latent_size,
-        #             hidden_size=self.config.base_hidden_size,
-        #         )
-        #     else:
-        #         self.extra_head = Mix(
-        #             "bs n_layers n_modules d_latent -> bs n_layers n_modules hidden_size",
-        #             weight_shape="n_modules d_latent hidden_size",
-        #             bias_shape="n_modules hidden_size",
-        #             n_modules=n_extra_modules,
-        #             d_latent=self.config.latent_size,
-        #             hidden_size=self.config.base_hidden_size,
-        #         )
+            if n_modules == 1:
+                self.head = Mix(
+                    "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                    weight_shape="n_layers d_latent d_lora",
+                    bias_shape=None,  # no bias
+                    n_layers=len(self.layer_indices),
+                    d_latent=self.config.latent_size,
+                    r=self.config.lora_config.r,
+                    d_lora=self.d_lora,
+                )
+            else:
+                self.head = Mix(
+                    "bs n_layers n_modules r d_latent -> bs n_layers n_modules r d_lora",
+                    weight_shape="n_layers n_modules d_latent d_lora",
+                    bias_shape=None,  # no bias
+                    n_layers=len(self.layer_indices),
+                    n_modules=n_modules,
+                    d_latent=self.config.latent_size,
+                    r=self.config.lora_config.r,
+                    d_lora=self.d_lora,
+                )
 
     def get_head_bias(self):
         bias_dict = dict()
@@ -583,8 +336,6 @@ class HyperLoRA(nn.Module):
             bias_A = self.bias_A[module]
             bias_B = self.bias_B[module]
 
-            # transpose B
-            # bias_B = rearrange(bias_B, "bs n_layers r d_out -> bs n_layers d_out r")
             bias_dict[module] = dict(A=bias_A, B=bias_B)
         return bias_dict
 
@@ -611,26 +362,10 @@ class HyperLoRA(nn.Module):
                 [[self.d_in[module]], [self.d_out[module]]],
                 "bs n_layers r *",
             )
-            # transpose B
-            # B = rearrange(B, "bs n_layers r d_out -> bs n_layers d_out r")
 
             # apparently doing A * self.scaler_A is slow due to broadcasting
             A = torch.einsum("ijkl,ijkl->ijkl", A, self.scaler_A[module])
             B = torch.einsum("ijkl,ijkl->ijkl", B, self.scaler_B[module])
-            if self.config.use_light_weight_lora:
-                # A = einsum(
-                #     self.pre_lora_projection[module],
-                #     A,
-                #     "d_in d_latent, bs n_layers r d_latent -> bs n_layers r d_in",
-                # )
-                # B = einsum(
-                #     self.post_lora_projection[module],
-                #     B,
-                #     "d_out d_latent, bs n_layers d_latent r -> bs n_layers d_out r",
-                # )
-                # this is broken?
-                A = self.pre_lora_projection[module](A)
-                B = self.post_lora_projection[module](B)
 
             lora_dict[module] = dict(A=A, B=B)
 
@@ -687,10 +422,6 @@ class HyperLoRA(nn.Module):
             flat_loras = self.head(norm_lora_emb)
 
         flat_layernorms = None
-        # if self.num_extra_modules:
-        #     # [bs, n_layers, n_extra_modules, base_hidden_size]
-        #     extra_emb = self.extra_layers(extra_emb)
-        #     flat_layernorms = self.extra_head(extra_emb)
 
         return flat_loras, flat_layernorms
 
@@ -836,7 +567,6 @@ class ModulatedPretrainedModel(nn.Module):
                 self.base_model, self.hypernet.lora_config
             )
             logger.debug(f"peft_weights: {peft_weights}")
-            # self.hypernet.head.weight.data[:] = 0
             r = self.hypernet_config.lora_config.r
             nn.init.normal_(
                 self.hypernet.head.weight,
@@ -845,45 +575,6 @@ class ModulatedPretrainedModel(nn.Module):
                 / sqrt(self.hypernet.config.latent_size + self.hypernet.d_lora * r),
                 # the head outputs per rank lora --> divide by r to scale down grad
             )
-            # nn.init.orthogonal_(self.hypernet.head.weight, gain=1.0)
-            # self.hypernet.head.bias.data[:] = 0
-
-            # for i, m in enumerate(self.hypernet.target_modules):
-            #     w_shape = self.hypernet.head.weight[
-            #         ..., i, :, : self.hypernet.d_in[m]
-            #     ].shape
-            #     self.hypernet.head.weight[..., i, :, : self.hypernet.d_in[m]] = (
-            #         torch.normal(
-            #             mean=0,
-            #             std=1
-            #             / sqrt(
-            #                 self.hypernet.config.latent_size + self.hypernet.d_in[m]
-            #             ),
-            #             size=w_shape,
-            #         )
-            #     )
-            #     A = peft_weights[m]["lora_A"].weight.clone()  # [r, in_d]
-            #     B = peft_weights[m]["lora_B"].weight.clone()  # [out_d, r]
-            #     if self.hypernet.config.use_light_weight_lora:
-            #         A = A[:, : self.hypernet.config.light_weight_latent_size]
-            #         B = B[: self.hypernet.config.light_weight_latent_size]
-            #     if self.hypernet.config.per_rank_gen:
-            #         if not self.hypernet.config.use_per_rank_bias:
-            #             A = A[0:1]
-            #             B = B[:, 0:1]
-            #     biases = [A, B.T]
-
-            #     # bias-hyperinit
-            #     # init weights to zeros and bias to the base weights
-            #     bias_cat = torch.cat(biases, dim=1)
-            #     # scale the biases by the output size
-            #     # e.g., rank=16 gives bigger (2x?) gradient magnitudes at initialization
-            #     # compared to rank=8
-            #     r = self.hypernet_config.lora_config.r
-            #     bias_cat = bias_cat / r
-            #     self.hypernet.head.bias.data[..., i, :, : bias_cat.shape[1]] = bias_cat
-
-        # self.hypernet.head.bias.requires_grad = False
 
     def state_dict(self, *args, **kwargs):
         # we assume ctx_encoder and base model is frozen here
@@ -994,7 +685,6 @@ class ModulatedPretrainedModel(nn.Module):
         **model_inputs_kwargs: dict[str, Any],
     ) -> tuple | ModelOutput:
         """Forward pass of the modulated model."""
-        # TODO: allow more than one LoRA per sample (multi-lora)
         generated_loras = None
         generated_layernorms = None
         if ctx_ids is None and not self.use_base_input_as_ctx:
@@ -1043,23 +733,6 @@ class ModulatedPretrainedModel(nn.Module):
                 if "position_ids" in model_inputs_kwargs
                 else None
             )
-            # with (
-            #     apply_generated_loras(
-            #         self.base_model,
-            #         generated_loras,
-            #         self.hypernet.layer_indices,
-            #         position_ids,
-            #         self.training,
-            #     ),
-            #     apply_generated_layernorm(
-            #         self.base_model,
-            #         generated_layernorms,
-            #         self.hypernet.layer_indices,
-            #         position_ids,
-            #         self.training,
-            #     ),
-            # ):
-            #     model_outputs = self.base_model(*model_inputs_args, **model_inputs_kwargs)
 
             if n_queries is None:
                 if ctx_position_ids is None:
@@ -1212,9 +885,6 @@ class ModulatedPretrainedModel(nn.Module):
                 else None,
             )
 
-            # # for generation the ctx_ids are batched not packed
-            # ctx_ids_list = torch.split(ctx_ids, n_ctx_chunks, dim=0)
-
             # apply lora hook to the base model
             # TODO: we dont this position_ids for generation?
             position_ids = (
@@ -1262,68 +932,6 @@ class ModulatedPretrainedModel(nn.Module):
         return model_outputs
 
 
-@contextmanager
-def apply_generated_layernorm(
-    base_model: nn.Module,
-    generated_layernorms: dict[str, Float[Tensor, "bs n_layers h"]] | None = None,
-    layer_indices: Iterable[int] | None = None,
-    position_ids: Integer[Tensor, "bs seq_len"] | None = None,
-    training: bool = False,
-):
-    if generated_layernorms is None:
-        yield base_model
-        return
-
-    try:
-        hooks = []
-        for module_name in generated_layernorms:
-            for layer_idx in layer_indices:
-                hooks += add_generated_layernorm_hook(
-                    base_model,
-                    module_name,
-                    layer_idx,
-                    W=generated_layernorms[module_name][:, layer_idx],
-                    position_ids=position_ids,
-                    training=training,
-                )
-        yield base_model
-    finally:
-        remove_hook_handles(hooks)
-
-
-@contextmanager
-def apply_generated_loras(
-    base_model: nn.Module,
-    generated_loras: dict | None = None,
-    layer_indices: Iterable[int] | None = None,
-    position_ids: Integer[Tensor, "bs seq_len"] | None = None,
-    training: bool = False,
-):
-    if generated_loras is None:
-        yield base_model
-        return
-
-    try:
-        hooks = []
-        for module_name in generated_loras:
-            for layer_idx in layer_indices:
-                hooks += add_generated_lora_hook(
-                    base_model,
-                    module_name,
-                    layer_idx,
-                    A=generated_loras[module_name]["A"][:, layer_idx],
-                    B=generated_loras[module_name]["B"][:, layer_idx],
-                    scaling=base_model.peft_config["default"].lora_alpha,
-                    input_dropout=base_model.peft_config["default"].lora_dropout,
-                    position_ids=position_ids,
-                    training=training,
-                )
-
-        yield base_model
-    finally:
-        remove_hook_handles(hooks)
-
-
 # needed for loading model from checkpoint
 # see https://github.com/huggingface/transformers/pull/34632
 torch.serialization.add_safe_globals(
@@ -1337,76 +945,3 @@ torch.serialization.add_safe_globals(
         set,  # for real?
     ]
 )
-
-# if __name__ == "__main__":
-#     # set torch randomness seed
-#     torch.manual_seed(42)
-#     model_name = "meta-llama/Llama-3.1-8B-Instruct"
-#     base_model, tokenizer = get_model_and_tokenizer(
-#         model_name,
-#         train=True,
-#         requires_grad=False,
-#         peft_config=get_lora_config(model_name),
-#     )
-#     print(base_model.modules_to_save)
-#     ctx_model_config = base_model.config
-#     device = base_model.device
-#     # lora_config = base_model.peft_config["default"]
-#     # d_in, d_out = get_peft_in_out_features(base_model, peft_config=lora_config)
-
-#     hypernet_args = HypernetArguments(latent_size=512)
-#     aggregator_args = AggregatorArguments(aggregator_type=AGGREGATOR_TYPE.PERCEIVER)
-#     hypernet_config = get_hypernet_config(
-#         base_model, ctx_model_config, hypernet_args, aggregator_args
-#     )
-#     ctx_encoder_args = CtxEncoderArguments(layer_idx=4)
-#     # ctx_encoder = EarlyExit(get_base_model(base_model), 4)
-#     # hypernet = HyperLoRA(
-#     #     get_hypernet_config(base_model, hypernet_args, aggregator_args),
-#     #     base_model,
-#     # ).to(device)
-
-#     model = ModulatedPretrainedModel(base_model, hypernet_config, ctx_encoder_args).to(
-#         device
-#     )
-#     print(model)
-
-#     ctx_msg = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
-#     ctx_inputs = tokenizer(ctx_msg, return_tensors="pt").to(device)
-#     ctx_ids = ctx_inputs["input_ids"]
-#     ctx_attn_mask = ctx_inputs["attention_mask"]
-#     ctx_features = model.ctx_encoder(
-#         input_ids=ctx_ids, attention_mask=ctx_attn_mask
-#     ).to(torch.float32)
-#     print(ctx_ids.shape)
-
-#     model.eval()
-#     agg_features = model.hypernet.aggregator(ctx_features, ctx_attn_mask)
-#     print(agg_features)
-#     print(agg_features.shape)
-
-#     hnetout = model.hypernet(ctx_features, ctx_attn_mask)
-#     print(hnetout)
-#     print(hnetout.shape)
-
-#     prompt_msg = "hello"
-#     prompt_inputs = tokenizer(prompt_msg, return_tensors="pt").to(device)
-
-#     basemodelout = model.base_model(**prompt_inputs)
-#     print(basemodelout)
-
-#     modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
-#     print(modelout)
-
-#     state_dict = torch.load(
-#         "train_outputs/runs/Jan15_19-10-21_slurm0-a3nodeset-11_d1842c41/checkpoint-55000/pytorch_model.bin",
-#         weights_only=False,
-#     )
-#     print(state_dict.keys())
-#     breakpoint()
-
-#     model.load_state_dict(state_dict)
-#     modelout = model(ctx_ids, ctx_attn_mask, **prompt_inputs)
-#     print(modelout)
-
-#     breakpoint()

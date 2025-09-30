@@ -1,8 +1,6 @@
 import logging
 
-from ctx_to_lora.eval_utils import (
-    run_eval,
-)
+from ctx_to_lora.eval_utils import run_eval
 
 logger = logging.getLogger()
 
@@ -156,7 +154,6 @@ if __name__ == "__main__":
     )
 
     cli_args = vars(parser.parse_args())
-    # setup_logging(output_dir, debug=os.getenv("DEBUG", False))
 
     if cli_args["model_name_or_path"]:
         assert cli_args["max_ctx_chunk_len"] <= 0, (
@@ -165,23 +162,8 @@ if __name__ == "__main__":
 
     eval_batch_size_gen = cli_args.pop("eval_batch_size_gen")
     eval_batch_size = cli_args.pop("eval_batch_size")
-    # run_eval(
-    #     **cli_args,
-    #     # cli_args.checkpoint_path,
-    #     # cli_args.model_name_or_path,
-    #     # cli_args.eval_batch_size,
-    #     # args,
-    #     # split=cli_args.split,
-    #     eval_batch_size=eval_batch_size,
-    #     generative=False,
-    # )
     run_eval(
         **cli_args,
-        # cli_args.checkpoint_path,
-        # cli_args.model_name_or_path,
-        # cli_args.eval_batch_size_gen,
-        # args,
-        # split=cli_args.split,
         eval_batch_size=eval_batch_size_gen,
         generative=True,
     )

@@ -62,9 +62,6 @@ def get_tokenizer(
     padding_side = "left" if not train else "right"
     truncation_side = "left"
 
-    # if peft_config:
-    #     model_name_or_path = peft_config.base_model_name_or_path
-
     if tokenizer_kwargs is None:
         tokenizer_kwargs = {}
 
@@ -82,7 +79,6 @@ def get_tokenizer(
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     template_path = f"chat_templates/{model_name_or_path}.jinja"
-    # assert os.path.exists(template_path), f"Chat template not found at {template_path}."
     if not os.path.exists(template_path):
         logger.warning(
             f"Chat template not found at {template_path}. Using default template."
@@ -179,7 +175,7 @@ def get_lora_config(model_dir, **kwargs):
         base_model_name_or_path=model_dir,
         task_type="CAUSAL_LM",
         lora_dropout=kwargs.get("lora_dropout", 0.0),
-        lora_alpha=r ** (3 / 2) * 2,  # 1,  # 2 / r**0.5,
+        lora_alpha=r ** (3 / 2) * 2,
     )
 
     peft_conf_kwargs.update(kwargs)

@@ -157,7 +157,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_length",
         type=int,
-        default=10_000,
+        default=2000,
         help="Maximum length of the context to consider for generation",
     )
     parser.add_argument(

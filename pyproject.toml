@@ -38,6 +38,7 @@ dependencies = [
     "google-cloud-storage>=3.2.0",
     "wonderwords>=2.2.0",
     "tokenizers==0.21.0",
+    "llmlingua>=0.2.2",
 ]
 
 [build-system]

@@ -55,10 +55,6 @@ def lora_forward_packed(
     base_out = torch.nn.Linear.forward(self, x, *args, **kwargs)
     x = x.to(A.dtype)
     delta_x = F.dropout(x, p=lora_dropout_p, training=self.training)
-    # # [tot_seq_len, r, d_in]
-    # repeated_A = A.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
-    # # [tot_seq_len, d_out, r]
-    # repeated_B = B.repeat_interleave(seq_lens, dim=0, output_size=seq_lens.sum())
     repeated_A = A.repeat_interleave(n_qs, dim=0, output_size=tot_q)
     repeated_A = repeated_A.repeat_interleave(seq_lens, dim=0, output_size=tot_len)
 

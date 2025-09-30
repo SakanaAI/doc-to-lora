@@ -85,8 +85,6 @@ class ArgumentParser(HfArgumentParser):
                         raise ValueError(
                             f"Duplicate argument provided: {arg}, may cause unexpected behavior"
                         )
-                # else:
-                #     raise ValueError(f"Argument provided not found in dataclass: {arg}")
 
             obj = data_class(**inputs)
             outputs.append(obj)
@@ -126,9 +124,7 @@ class ArgumentParser(HfArgumentParser):
 
 
 class ExperimentSetup(str, Enum):
-    # LORA = "lora"
     HYPERLORA = "hyper_lora"
-    # FULL_FINETUNE = "full_finetune"
 
 
 @dataclass
@@ -207,7 +203,6 @@ class TrainingArguments(TrainingArguments):
         default=0.01,
         metadata={"help": "Weight decay for the optimizer."},
     )
-    # TODO: is paged_adam_w faster? (bigger batch size -> fewer grad accum steps)
     optim: str = field(
         default="adamw_torch_fused",
         metadata={"help": "Optimizer."},
@@ -252,10 +247,6 @@ class TrainingArguments(TrainingArguments):
         default=None,
         metadata={"help": "Metric for best model."},
     )
-    # greater_is_better: bool = field(
-    #     default=False,
-    #     metadata={"help": "Whether the metric is better when it is greater."},
-    # )
     load_best_model_at_end: bool = field(
         default=False,
         metadata={"help": "Whether to load the best model at the end of training."},
@@ -318,10 +309,6 @@ class ModelArguments:
         default=True,
         metadata={"help": "Whether to use flash attention."},
     )
-    # use_peft: bool = field(
-    #     default=False,
-    #     metadata={"help": ("Whether to use PEFT or not for training.")},
-    # )
 
 
 @dataclass
@@ -338,10 +325,6 @@ class LoRAArguments:
         default=None,
         metadata={"help": ("LoRA target modules.")},
     )
-    # modules_to_save: Optional[list[str]] = field(
-    #     default=None,
-    #     metadata={"help": ("Modules to save.")},
-    # )
 
 
 @dataclass
@@ -464,10 +447,10 @@ class DataArguments:
         default=1000,
         metadata={"help": "Maximum number of validation samples per dataset."},
     )
-    # max_test_samples_per_ds: int | None = field(
-    #     default=1000,
-    #     metadata={"help": "Maximum number of test samples per dataset."},
-    # )
+    max_test_samples_per_ds: int | None = field(
+        default=500,
+        metadata={"help": "Maximum number of test samples per dataset."},
+    )
 
 
 @dataclass
@@ -555,17 +538,6 @@ class AggregatorArguments:
         default="mean",
         metadata={"help": "Pooling type for HyperLoRA."},
     )
-    # feature_size: int
-    # num_layers: int
-    # num_modules: int
-    # output_size: int
-
-    # perceiver
-    # attention_probs_dropout_prob: float = field(
-    #     default=0.0,
-    #     metadata={"help": "Attention dropout probability for Perceiver."},
-    # )
-    # not used (keep herer for backward compatibility)
     num_latent_factor: int = field(
         default=8,
         metadata={"help": "Number of latent factors for Perceiver."},
@@ -574,10 +546,6 @@ class AggregatorArguments:
         default=208,  # 26 * 8
         metadata={"help": "Number of latent queries of Perceiver."},
     )
-    # num_blocks: int = field(
-    #     default=8,
-    #     metadata={"help": "Number of blocks for Perceiver."},
-    # )
 
     num_blocks: int = field(
         default=8,
@@ -591,11 +559,6 @@ class AggregatorArguments:
         default=False,
         metadata={"help": "Whether to share weights across blocks for Perceiver."},
     )
-
-    # decoder_depth: int = field(
-    #     default=1,
-    #     metadata={"help": "Decoder depth for Perceiver."},
-    # )
 
 
 # needed for loading model from checkpoint

@@ -11,11 +11,8 @@ from vllm import LLM, SamplingParams
 
 from ctx_to_lora.data.definitions import (
     CLOSED_QA_INTX_TEMPLATES,
-    COT_TEMPLATES,
     RAW_DATA_DIR,
     SELF_GEN_DATA_DIR,
-    STRUCTURING_PROMPTS,
-    SUMMARIZATION_PROMPTS,
 )
 from ctx_to_lora.data.processing import (
     filter_none,
@@ -67,29 +64,15 @@ def truncate_middle_if_too_long(
     return input_ids
 
 
-# TODO: self-gen for magic ctx num
 def get_prompt(context: str, q: str, remove_qa_template: bool) -> str:
     prompt = QA_PROMPT_TEMPLATE if not remove_qa_template else PROMPT_TEMPLATE
     return prompt.format(context=context, question=q)
 
 
-def augment_prompt(sample, closed_qa_prob, cot_prob):
-    z = random.random()
-    should_add_closed_qa = ("type" not in sample) or (sample["type"] == "question")
-    if should_add_closed_qa and (z < closed_qa_prob):
-        sample["prompts"] = add_closed_qa_prompt(sample["prompts"])
-    elif closed_qa_prob <= z < (closed_qa_prob + cot_prob):
-        sample["prompts"] = add_cot_prompt(sample["prompts"])
-
-    return sample
-
-
-def add_cot_prompt(prompts: list[str]) -> str:
-    return [random.choice(COT_TEMPLATES).format(input=q) for q in prompts]
-
-
-def add_closed_qa_prompt(prompts: list[str]) -> str:
-    return [random.choice(CLOSED_QA_INTX_TEMPLATES).format(input=q) for q in prompts]
+def add_closed_qa_prompt(q: str, closed_qa_prob: float = 0.1) -> str:
+    if random.random() <= closed_qa_prob:
+        q = random.choice(CLOSED_QA_INTX_TEMPLATES).format(input=q)
+    return q
 
 
 def load_config(config_path: str) -> dict:
@@ -97,49 +80,6 @@ def load_config(config_path: str) -> dict:
     with open(config_path) as f:
         config = yaml.safe_load(f)
     return config
-
-
-def add_paraphrasing_prompt(samples, summ_prob: float, struct_prob: float):
-    """Augment batch with summarization / structuring prompts given separate probabilities.
-    The original samples are extended (in-place) with newly created paraphrased variants.
-    """
-    if summ_prob == 0 and struct_prob == 0:
-        return samples
-    n_samples = len(samples["ctx_ids"]) if "ctx_ids" in samples else 0
-    if n_samples == 0:
-        return samples
-
-    n_summ = int(n_samples * summ_prob)
-    n_struct = int(n_samples * struct_prob)
-    all_indices = list(range(n_samples))
-    random.shuffle(all_indices)
-    summ_indices = all_indices[:n_summ]
-    struct_indices = all_indices[n_summ : n_summ + n_struct]
-
-    def _add(kind_indices, prompts_source, prompt_type):
-        out = dict()
-        if not kind_indices:
-            return out
-        for k in samples:
-            if k == "prompts":
-                sampled_prompts = random.choices(prompts_source, k=len(kind_indices))
-                out[k] = [[p] for p in sampled_prompts]
-            elif k == "type":
-                out[k] = [prompt_type] * len(kind_indices)
-            else:
-                out[k] = [samples[k][i] for i in kind_indices]
-        return out
-
-    summ_samples = _add(summ_indices, SUMMARIZATION_PROMPTS, "summarization")
-    struct_samples = _add(struct_indices, STRUCTURING_PROMPTS, "structuring")
-
-    # Extend original samples
-    for k in samples:
-        if summ_indices:
-            samples[k] += summ_samples[k]
-        if struct_indices:
-            samples[k] += struct_samples[k]
-    return samples
 
 
 def get_dataset_configs(
@@ -334,46 +274,18 @@ def self_generate(
         keep_in_memory=True,
     )
 
-    ds = ds.map(
-        augment_prompt,
-        fn_kwargs={"closed_qa_prob": closed_qa_prob, "cot_prob": cot_prob},
-        keep_in_memory=True,
-        num_proc=16,
-    )
-
-    ds = ds.map(
-        add_paraphrasing_prompt,
-        batched=True,
-        fn_kwargs={
-            "summ_prob": summ_prob,
-            "struct_prob": struct_prob,
-        },
-        batch_size=50_000,
-        keep_in_memory=True,
-    )
-
     ctxs = [sample["context"] for sample in ds]
+    questions = [
+        [add_closed_qa_prompt(q, closed_qa_prob) for q in sample["prompts"] if q]
+        for sample in ds
+    ]
 
     questions = [q_list for q_list in ds["prompts"] if len(q_list) > 0]
-    # for sample in ds:
-    #     if ("type" not in sample) or (
-    #         "type" in sample and sample["type"] == "question"
-    #     ):
-    #         # for generated qa, apply to only "question" type
-    #         questions.append(
-    #             [
-    #                 add_closed_qa_prompt(q, closed_qa_prob)
-    #                 for q in sample["prompts"]
-    #                 if q
-    #             ]
-    #         )
-    #     else:
-    #         questions.append([q for q in sample["prompts"] if q])
 
     print(f"Loaded {len(ctxs)} contexts and {len(questions)} questions")
 
     k = 16
-    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}_cot_prob_{cot_prob}_summ_prob_{summ_prob}_struct_prob_{struct_prob}/{ds_name}/{split}/ds{shard_name}"
+    fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
 
     chunk_size = 1_000
     for chunk_idx, start in enumerate(range(0, len(ctxs), chunk_size)):
@@ -669,24 +581,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Probability of using closed QA prompt template (default: 0.0)",
-    )
-    parser.add_argument(
-        "--cot_prob",
-        type=float,
-        default=0.0,
-        help="Probability of using chain-of-thought prompt template (default: 0.0)",
-    )
-    parser.add_argument(
-        "--summ_prob",
-        type=float,
-        default=0.0,
-        help="Probability of adding a summarization variant (default: 0.0)",
-    )
-    parser.add_argument(
-        "--struct_prob",
-        type=float,
-        default=0.0,
-        help="Probability of adding a structuring variant (default: 0.0)",
     )
     parser.add_argument(
         "--do_truncate",

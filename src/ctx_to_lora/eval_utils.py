@@ -3,7 +3,6 @@ import logging
 import os
 import re
 import string
-import sys
 import time
 from argparse import Namespace
 from collections import Counter, defaultdict
@@ -14,7 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from datasets import disable_caching, load_dataset
+from datasets import disable_caching
 from peft import get_peft_model
 from transformers import (
     PreTrainedModel,
@@ -23,20 +22,16 @@ from transformers import (
     Trainer,
     set_seed,
 )
-from transformers.trainer_utils import find_executable_batch_size
 
 from ctx_to_lora.data.collator import eval_collator, generation_collator
 from ctx_to_lora.data.definitions import (
     CLOSED_QA_DATASETS,
     CTX_AFFIXES,
-    GSM8K_DATASETS,
     LONGBENCH_E_TASKS,
     LONGBENCH_TASKS,
     MULTI_ANSWER_DATASETS,
-    MULTI_CHOICE_DATASETS,
 )
 from ctx_to_lora.data.processing import (
-    get_ds_kwargs,
     get_tokenized_dataset,
     load_answers,
 )
@@ -44,8 +39,6 @@ from ctx_to_lora.data.self_gen_template import SELF_QA_INTX
 from ctx_to_lora.metrics import (
     LENGTH_BINS,
     Evaluator,
-    compute_gsm8k_acc,
-    compute_macro_f1_score,
     compute_metrics,
     compute_per_token_acc,
     compute_perplexity,
@@ -58,7 +51,6 @@ from ctx_to_lora.model_loading import (
     get_model_and_tokenizer,
     get_tokenizer,
 )
-from ctx_to_lora.modeling import hypernet
 from ctx_to_lora.modeling.context_distillation import CtxDistillModel
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 from ctx_to_lora.modeling.llm_lingua import LLMLinguaModel
@@ -75,80 +67,8 @@ from ctx_to_lora.utils import clear_gpu, concat_list, get_run_name, setup_loggin
 logger = logging.getLogger()
 
 
-# bandaid for loading old models (before restructure)
-sys.modules["ctx_to_lora.modeling_utils"] = hypernet
-
-
-# from https://github.com/huggingface/transformers/issues/32215#issuecomment-2386274138
-
-
-class EvaluateAutoFindBatchSizeMixin:
-    def evaluate(self, *args, **kwargs):
-        print(f"Auto-finding batch size for evaluate")
-        # can't set self.args.eval_batch_size, it is computed from self.args.per_device_eval_batch_size
-        super_evaluate = super().evaluate  # super cannot be called inside lambda
-
-        # assert not self.args.dataloader_persistent_workers, "dataloader_persistent_workers not supported because eval batch size does not change"
-        def new_evaluate(batch_size):
-            old_eval_batch_size = self.args.eval_batch_size
-            self.args.per_device_eval_batch_size = batch_size
-            if self.args.eval_batch_size != old_eval_batch_size:
-                if self.args.dataloader_persistent_workers and hasattr(
-                    self, "_eval_dataloaders"
-                ):
-                    del self._eval_dataloaders  # to shutdown the workers
-                logger.info(
-                    f"Setting eval_batch_size to {self.args.eval_batch_size} (per device: {batch_size}) from old {old_eval_batch_size}"
-                )
-            return super_evaluate(*args, **kwargs)
-            # don't reset at end, but keep batch size for the next time evaluate is called
-
-        return find_executable_batch_size(
-            new_evaluate,
-            self.args.per_device_eval_batch_size,
-            auto_find_batch_size=self.args.auto_find_batch_size,
-        )()
-
-    def predict(self, *args, **kwargs):
-        print(f"Auto-finding batch size for predict")
-        # can't set self.args.eval_batch_size, it is computed from self.args.per_device_eval_batch_size
-        super_predict = super().predict  # super cannot be called inside lambda
-
-        def new_predict(batch_size):
-            old_eval_batch_size = self.args.eval_batch_size
-            self.args.per_device_eval_batch_size = batch_size
-            if self.args.eval_batch_size != old_eval_batch_size:
-                if self.args.dataloader_persistent_workers and hasattr(
-                    self, "_eval_dataloaders"
-                ):
-                    del self._eval_dataloaders  # to shutdown the workers
-                logger.info(
-                    f"Setting eval_batch_size to {self.args.eval_batch_size} (per device: {batch_size}) from old {old_eval_batch_size}"
-                )
-            return super_predict(*args, **kwargs)
-
-        return find_executable_batch_size(
-            new_predict,
-            self.args.per_device_eval_batch_size,
-            auto_find_batch_size=self.args.auto_find_batch_size,
-        )()
-
-
-class CustomSeq2SeqTrainer(Seq2SeqTrainer, EvaluateAutoFindBatchSizeMixin):
-    pass
-
-
-class CustomTrainer(Trainer, EvaluateAutoFindBatchSizeMixin):
-    pass
-
-
-# ============================================================================
-# Metrics and Evaluation Utilities
-# ============================================================================
-
 # from https://gist.github.com/cloneofsimo/8abd0284d4738f28f04200628f9a83f5
 # https://github.com/Nordth/humanize-ai-lib/blob/main/src/humanize-string.ts
-
 
 _HIDDEN_CHARS = re.compile(
     r"[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]"
@@ -646,25 +566,6 @@ def eval_generation(
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
                 eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
-        elif ds_name in GSM8K_DATASETS:
-            print("Computing GSM8K Accuracy")
-            gsm8k_acc_metric, per_sample_metric = compute_gsm8k_acc(
-                pred_texts, label_texts
-            )
-            for k, v in gsm8k_acc_metric.items():
-                eval_result.metrics[f"{split_name}_{k}"] = v
-
-        elif ds_name in MULTI_CHOICE_DATASETS:
-            print("Computing Multi-Choice Accuracy")
-            original_ds = original_datasets[ds_name]
-            multi_choice_acc_metric, per_sample_metric = compute_macro_f1_score(
-                pred_texts,
-                label_texts,
-                [x["options"] for x in original_ds["options"]],
-                original_ds["task"],
-            )
-            for k, v in multi_choice_acc_metric.items():
-                eval_result.metrics[f"{split_name}_{k}"] = v
         else:
             rouge_metrics, per_sample_metric = compute_rouge(pred_texts, label_texts)
             for k, v in rouge_metrics.items():
@@ -967,11 +868,6 @@ def evaluate(
         # handling cases where there are multiple answers
         if ds_name in MULTI_ANSWER_DATASETS:
             answers[ds_name] = load_answers(ds_name, split)
-        if ds_name in MULTI_CHOICE_DATASETS:
-            ds_kwargs = get_ds_kwargs(ds_name, split)
-            original_datasets[ds_name] = load_dataset(
-                **ds_kwargs, trust_remote_code=True
-            )
     print(f"Datasets: {datasets}")
     print(f"Answers: {answers}")
 
@@ -1082,7 +978,7 @@ def evaluate(
             )
             out.update(metrics)
     else:
-        eval_trainer = CustomSeq2SeqTrainer(**trainer_kwargs)
+        eval_trainer = Seq2SeqTrainer(**trainer_kwargs)
         for ds_name, ds in datasets.items():
             metrics = eval_generation(
                 eval_trainer,
