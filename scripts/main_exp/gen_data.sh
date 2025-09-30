@@ -3,7 +3,7 @@ uv run data/download_fineweb_edu.py
 
 # generate qa data
 # run from 000 to 013
-for shard_id in $(seq -f "%03g" 0 1); do
+for shard_id in $(seq -f "%03g" 0 13); do
   uv run data/generate_fw_edu_qa_v2.py --shard_pattern "${shard_id}_00000" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it --max_length=2000 --max_model_length=2048;
   uv run data/generate_fw_edu_qa_v2_repeat.py --shard_pattern "min_0_to_2000/${shard_id}*level_0*" --n_qa_pairs=5 --vllm_model=google/gemma-3-12b-it;
 
