@@ -186,21 +186,10 @@ def self_generate(
             raise ValueError(
                 f"Multiple sources of truth for closed_qa_prob: CLI arg --closed_qa_prob={args.closed_qa_prob} and dataset name contains closed_qa_prob specification."
             )
-        if "_summ_prob_" in ds_name and args.summ_prob != 0.0:
-            raise ValueError(
-                f"Multiple sources of truth for summ_prob: CLI arg --summ_prob={args.summ_prob} and dataset name contains summ_prob specification."
-            )
-        if "_struct_prob_" in ds_name and args.struct_prob != 0.0:
-            raise ValueError(
-                f"Multiple sources of truth for struct_prob: CLI arg --struct_prob={args.struct_prob} and dataset name contains struct_prob specification."
-            )
 
     # Base values from args
     temp = args.temp
     closed_qa_prob = args.closed_qa_prob
-    summ_prob = args.summ_prob
-    struct_prob = args.struct_prob
-    cot_prob = args.cot_prob
 
     # Overrides from ds_name pattern if present
     if ds_name is not None:
@@ -212,21 +201,10 @@ def self_generate(
             m = re.search(r"_closed_qa_prob_([\d.]+)", ds_name)
             if m:
                 closed_qa_prob = float(m.group(1))
-        if "_summ_prob_" in ds_name:
-            m = re.search(r"_summ_prob_([\d.]+)", ds_name)
-            if m:
-                summ_prob = float(m.group(1))
-        if "_struct_prob_" in ds_name:
-            m = re.search(r"_struct_prob_([\d.]+)", ds_name)
-            if m:
-                struct_prob = float(m.group(1))
 
     print(f"Processing dataset: {ds_name}, split: {split}")
     print(f"Using temperature: {temp}")
     print(f"Using closed QA prompt probability: {closed_qa_prob}")
-    print(f"Using chain-of-thought prompt probability: {cot_prob}")
-    print(f"Using summarization augmentation probability: {summ_prob}")
-    print(f"Using structuring augmentation probability: {struct_prob}")
 
     if parquet_file:
         print(f"Loading dataset from parquet file: {parquet_file}")
@@ -249,7 +227,7 @@ def self_generate(
     print(f"Loaded dataset: {ds_name} with split: {split}")
 
     if args.debug:
-        ds = ds.take(50)
+        ds = ds.take(10)
 
     ds = ds.filter(filter_none, batched=False, num_proc=8)
 
@@ -445,22 +423,6 @@ def execute_qa_generation(
             # bos + question + eos + start model turn + response + eos
             input_ids = all_ids[:sys_start] + all_ids[q_start:res_end]
 
-            # TODO: save prompt logprobs with qa_start
-            # TODO: also save the prompt tokens for output alignment during training
-            # prompt_logp = completions[c + i].prompt_logprobs
-            # q_len = res_start - q_start
-            # prompt_logp_indices = np.empty((q_len, k), dtype=np.int32)
-            # # float-16 is better for this range
-            # prompt_logp_vals = np.empty((q_len, k), dtype=np.float16)
-            # for li, info_d in enumerate(prompt_logp[q_start:res_start]):
-            #     for j, (idx, tok_info) in enumerate(info_d.items()):
-            #         # vllm returns logprob for gt token first,
-            #         # which means that we might have k + 1 logprobs
-            #         if j >= k:
-            #             continue
-            #         prompt_logp_indices[li, j] = idx
-            #         prompt_logp_vals[li, j] = tok_info.logprob
-
             # relative to the input_ids
             res_start = res_start - q_start + sys_start
             res_end = res_start + n_response_tokens
@@ -472,10 +434,6 @@ def execute_qa_generation(
             self_gen_data[ctx]["response_start_end"].append((res_start, res_end))
             self_gen_data[ctx]["logprobs_vals"].append(logp_vals)
             self_gen_data[ctx]["logprobs_indices"].append(logp_indices)
-            # NOTE: also have to shift back 1 for training
-            # self_gen_data[ctx]["prompt_start_end"].append((sys_start, res_start))
-            # self_gen_data[ctx]["prompt_logprobs_vals"].append(prompt_logp_vals)
-            # self_gen_data[ctx]["prompt_logprobs_indices"].append(prompt_logp_indices)
 
         c += i + 1
 
@@ -516,20 +474,22 @@ def execute_qa_generation(
     # random.shuffle(samples)
 
     # Save results
-    if not args.debug:
-        # df = pd.DataFrame(samples)
-        # ds_out = Dataset.from_pandas(df)
-        ds_out = Dataset.from_list(samples)
-        # fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
+    # df = pd.DataFrame(samples)
+    # ds_out = Dataset.from_pandas(df)
+    ds_out = Dataset.from_list(samples)
+    # fpath = f"{SELF_GEN_DATA_DIR}/{args.vllm_model}_temp_{temp}_closed_qa_prob_{closed_qa_prob}/{ds_name}/{split}/ds{shard_name}"
 
-        os.makedirs(os.path.dirname(fpath), exist_ok=True)
-        fpath = f"{fpath}.parquet"
-        ds_out.to_parquet(fpath)
-        print(f"Saved to {fpath}")
+    if args.debug:
+        fpath += "_debug"
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
 
-        # Cleanup
-        del samples, ds_out, completions, messages, ctxs, questions
-        clear_gpu()
+    fpath = f"{fpath}.parquet"
+    ds_out.to_parquet(fpath)
+    print(f"Saved to {fpath}")
+
+    # Cleanup
+    del samples, ds_out, completions, messages, ctxs, questions
+    clear_gpu()
 
 
 def parse_args() -> argparse.Namespace:

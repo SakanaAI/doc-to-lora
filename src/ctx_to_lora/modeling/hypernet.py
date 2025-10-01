@@ -31,8 +31,10 @@ from ctx_to_lora.configs import (
     CtxEncoderArguments,
     HypernetArguments,
 )
+from ctx_to_lora.data.processing import tokenize_ctx_text
 from ctx_to_lora.model_loading import (
     get_model,
+    get_tokenizer,
 )
 from ctx_to_lora.modeling.aggregator import (
     AGGREGATOR_CLS,
@@ -458,7 +460,7 @@ class ModulatedPretrainedModel(nn.Module):
         self.user_defined_scaling = user_defined_scaling
         self.inp_compressor = inp_compressor
         self.model_accepts_loss_kwargs = True
-        self.active_adapters = []
+        self.generated_loras = None
 
         self.register_module("base_model", base_model)
         self._init_model()
@@ -496,6 +498,28 @@ class ModulatedPretrainedModel(nn.Module):
         model.load_state_dict(state_dict)
         return model
 
+    def patch_lora_forward(self):
+        layers = get_layers(self.base_model)
+
+        lora_forward_fn = (
+            lora_forward_packed if self.use_sequence_packing else lora_forward
+        )
+        for layer_idx in self.hypernet.layer_indices:
+            for module_info in get_peft_modules(layers[layer_idx], self.peft_config):
+                name = module_info["name"]
+                module = module_info["module"]
+                if getattr(module, "patched_forward", False):
+                    continue
+                logger.debug(f"Applying LoRA forward to {name}")
+                module.forward_orig = module.forward
+                module.patched_forward = True
+                module.forward = partial(
+                    lora_forward_fn,
+                    self=module,
+                    lora_dropout_p=self.peft_config.lora_dropout,
+                    scaling=self.peft_config.lora_alpha,
+                )
+
     def _init_model(self):
         # disable adapter of the base model
         # this only works with LoRA(?)
@@ -506,21 +530,7 @@ class ModulatedPretrainedModel(nn.Module):
             HyperLoRA(self.hypernet_config).to(self.device).to(torch.float32)
         )
 
-        layers = get_layers(self.base_model)
-        lora_forward_fn = (
-            lora_forward_packed if self.use_sequence_packing else lora_forward
-        )
-        for layer_idx in self.hypernet.layer_indices:
-            for module_info in get_peft_modules(layers[layer_idx], self.peft_config):
-                name = module_info["name"]
-                module = module_info["module"]
-                logger.debug(f"Applying LoRA forward to {name}")
-                module.forward = partial(
-                    lora_forward_fn,
-                    self=module,
-                    lora_dropout_p=self.peft_config.lora_dropout,
-                    scaling=self.peft_config.lora_alpha,
-                )
+        self.patch_lora_forward()
 
         ctx_model_name = self.ctx_encoder_args.ctx_encoder_model_name_or_path
         if ctx_model_name is None:
@@ -762,58 +772,6 @@ class ModulatedPretrainedModel(nn.Module):
         else:
             return model_outputs
 
-    @torch.inference_mode()
-    def generate_with_multi_loras(
-        self,
-        ctx_ids: Integer[Tensor, "bs ctx_length"],
-        ctx_attn_mask: Integer[Tensor, "bs ctx_length"] | None = None,
-        ctx_position_ids: Integer[Tensor, "bs ctx_length"] | None = None,
-        n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
-        n_queries: Integer[Tensor, "n_ctx"] | None = None,
-        scalers: Float[Tensor, "n_ctx"] | None = None,
-        bias_scaler: float | None = None,
-        *model_inputs_args: Any,
-        **model_inputs_kwargs: dict[str, Any],
-    ):
-        generated_loras, _ = self.generate_weights(
-            ctx_ids, ctx_attn_mask, ctx_position_ids
-        )
-
-        generated_loras = combine_lora(
-            generated_loras,
-            n_ctx_chunks,
-            lora_bias=self.hypernet.get_head_bias()
-            if self.hypernet.config.use_bias
-            else None,
-            scalers=scalers,
-            bias_scaler=bias_scaler,
-        )
-
-        # apply lora hook to the base model
-        position_ids = (
-            model_inputs_kwargs["position_ids"]
-            if "position_ids" in model_inputs_kwargs
-            else None
-        )
-        if n_queries is None:
-            # assumes each group has one q
-            n_queries = torch.ones(
-                len(n_ctx_chunks), dtype=torch.int32, device=self.device
-            )
-
-        apply_lora_to_layers(
-            self.base_model,
-            self.hypernet.layer_indices,
-            generated_loras,
-            n_queries,
-            position_ids,  # TODO: remove (cant be used with generation?)
-        )
-
-        model_outputs = self.base_model.generate(
-            *model_inputs_args, **model_inputs_kwargs
-        )
-        return model_outputs
-
     def combine_lora(self, *args, **kwargs):
         # for timing
         return combine_lora(*args, **kwargs)
@@ -821,6 +779,38 @@ class ModulatedPretrainedModel(nn.Module):
     def apply_lora_to_layers(self, *args, **kwargs):
         # for timing
         return apply_lora_to_layers(*args, **kwargs)
+
+    # for simple api usage
+    def internalize(self, ctx_str: str):
+        ctx_tokenizer = get_tokenizer(self.ctx_encoder.base_model.name_or_path)
+        ctx_ids = tokenize_ctx_text(dict(context=[ctx_str]), ctx_tokenizer)["ctx_ids"]
+        return self._internalize_from_ids(torch.tensor(ctx_ids, device=self.device))
+
+    def _internalize_from_ids(
+        self,
+        ctx_ids: Integer[Tensor, "n_ctx ctx_len"] | None = None,
+        ctx_attn_mask: Integer[Tensor, "n_ctx ctx_len"] | None = None,
+        ctx_position_ids: Integer[Tensor, "n_ctx ctx_len"] | None = None,
+    ):
+        self.patch_lora_forward()
+        if ctx_attn_mask is None and ctx_position_ids is None:
+            assert ctx_ids.shape[0] == 1
+            ctx_attn_mask = torch.ones_like(ctx_ids)
+        generated_loras, generated_layernorms = self.generate_weights(
+            ctx_ids, ctx_attn_mask, ctx_position_ids
+        )
+        self.generated_loras = generated_loras
+
+    def reset(self):
+        self.generated_loras = None
+        layers = get_layers(self.base_model)
+        for layer_idx in self.hypernet.layer_indices:
+            for module_info in get_peft_modules(layers[layer_idx], self.peft_config):
+                name = module_info["name"]
+                module = module_info["module"]
+                logger.debug(f"Resetting forward for {name}")
+                module.forward = module.forward_orig
+                module.patched_forward = False
 
     @torch.inference_mode()
     def generate(
@@ -837,23 +827,22 @@ class ModulatedPretrainedModel(nn.Module):
         generated_layernorms = None
         if (
             ctx_ids is None
-            and not self.active_adapters
+            and not self.generated_loras
             and not self.use_base_input_as_ctx
         ):
-            logger.warning(
-                (
-                    "*" * 100,
-                    "\n\nNo ctx_ids provided, using the base model for generation\n\n",
-                    "*" * 100,
-                )
+            print(
+                "*" * 100
+                + "\n\nNo ctx_ids provided, using the base model for generation\n\n"
+                + "*" * 100
             )
-        if ctx_ids is None and self.active_adapters:
-            logger.info(
-                (
-                    "*" * 100,
-                    "\n\nUsing active LoRAs for generation\n\n",
-                    "*" * 100,
-                )
+        elif ctx_ids is None and self.generated_loras:
+            generated_loras = self.generated_loras
+            if n_ctx_chunks is None:
+                n_ctx_chunks = torch.tensor((1,), device=self.device)
+            print(
+                "*" * 100
+                + "\n\nUsing internalized LoRAs for generation\n\n"
+                + "*" * 100
             )
         else:
             if self.use_base_input_as_ctx:
@@ -895,7 +884,9 @@ class ModulatedPretrainedModel(nn.Module):
             if n_queries is None:
                 if ctx_position_ids is None:
                     n_queries = torch.ones(
-                        ctx_ids.shape[0], dtype=torch.int32, device=self.device
+                        model_inputs_kwargs["input_ids"].shape[0],
+                        dtype=torch.int32,
+                        device=self.device,
                     )
                 else:
                     # quite redundant (we do cu_seqlens many places)
@@ -913,19 +904,7 @@ class ModulatedPretrainedModel(nn.Module):
                 n_queries,
                 position_ids,
             )
-        if self.inp_compressor is not None:
-            print("Using inp compressor")
-            input_ids = model_inputs_kwargs["input_ids"]
-            print(f"input_ids before: {input_ids.shape}")
-            model_inputs_kwargs["input_ids"] = self.inp_compressor.compress_tokens(
-                input_ids,
-                query_text="Answer the following question. Only output the answer and do not output any other words.",
-            ).to(self.base_model.device)
-            # batch size always 1
-            model_inputs_kwargs["attention_mask"] = torch.ones_like(
-                model_inputs_kwargs["input_ids"]
-            )
-            print(f"input_ids after: {model_inputs_kwargs['input_ids'].shape}")
+
         model_outputs = self.base_model.generate(
             *model_inputs_args, **model_inputs_kwargs
         )

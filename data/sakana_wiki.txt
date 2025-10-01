@@ -1,0 +1,8 @@
+Sakana AI Co, Ltd. is a Japanese artificial intelligence company based in Tokyo.
+Overview
+
+Sakana AI's main research fields are evolution and collective intelligence of AI. The company's name is derived from the Japanese word さかな (sakana), which means fish. This represents the idea of a school of fish coming together and forming a coherent entity from simple rules, which is an analogy of collective intelligence.[2]
+
+The company was founded by David Ha, Llion Jones and Ren Ito. Llion Jones co-authored the famous paper "Attention Is All You Need" when he was working for Google in 2017. The company raised $30M in its seed funding round from Lux Capital and Khosla Ventures.[3] The company raised approximately $200M from companies such as Mitsubishi UFJ, SMBC, Mizuho, Itochu, KDDI, Nomura and Nvidia in its series A funding round in 2024.[4]
+
+In January 2024, Sakana AI developed a method to build new AI models by 'breeding' multiple existing models, which it sees as a means to democratise AI development, as this process does not require large computational resources.[5] Sakana AI is also developing a model called the AI Scientist, which automates the entire process of scientific research.[6] The Nikkei estimated the company's value at 19 billion yen in 2024.[7] 

@@ -15,9 +15,6 @@ gradient_accumulation_steps: 11
 max_packed_inp_len: 6144
 max_packed_ctx_len: 6144
 
-
-
-
 # data
 train_ds_names:
   - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/fw_qa_v2/min_0_to_2000/train/*level_1*.parquet
@@ -31,11 +28,4 @@ val_ds_names:
   - pwc
   - drop
   - ropes
-  # - hotpot_qa
-  # - negative_nq
-  # - booksum
-  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_1.0/fw_qa_v2/min_0_to_2000/train/*level_0_val*.parquet
   - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/fw_qa_v2/min_0_to_2000/train/*level_0_val*.parquet
-  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/ctx_qa/validation/*.parquet
-  # - self_gen/google/gemma-2-2b-it_temp_0.0_closed_qa_prob_0.0/facts/validation/*.parquet
-

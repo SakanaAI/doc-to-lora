@@ -941,9 +941,6 @@ def evaluate(
 
     collator = generation_collator if generative else eval_collator
 
-    if max_ctx_chunk_len > 0:
-        model.generate = model.generate_with_multi_loras
-
     # if isinstance(model, CtxDistillModel):
 
     #     model.generate = partial(

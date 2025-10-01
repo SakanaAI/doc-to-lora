@@ -2,6 +2,7 @@
 # module load cuda/12.4
 # module load cudnn/9.1.0
 # module load hpcx/v2.21
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uv self update
 uv venv --python 3.10 --seed
 uv pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --torch-backend=cu124
@@ -16,12 +17,11 @@ uv run data/build_pwc_compact.py
 uv run data/build_ropes_compact.py
 uv run data/build_squad_compact.py
 
-# [Optional]
-# needed for gated models
+# optional: needed for gated models
 # uv run huggingface-cli login
 
-# needed for logging with wandb
+# optional: needed for logging with wandb
 # wandb login
 
-# dev
+# optional: dev
 # uv run pre-commit install

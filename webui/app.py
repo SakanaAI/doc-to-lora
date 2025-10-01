@@ -675,7 +675,7 @@ def chat():
                     #         do_sample=False,
                     #     )
 
-                    outputs = modulated_model.generate_with_multi_loras(
+                    outputs = modulated_model.generate(
                         ctx_ids=ctx_ids,
                         ctx_attn_mask=ctx_attn_mask,
                         n_ctx_chunks=torch.tensor(

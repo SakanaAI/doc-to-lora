@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ctx_to_lora.data.definitions import CLOSED_QA_INTX_TEMPLATES, EVAL_INTX_TEMPLATES
+from ctx_to_lora.utils import concat_list
 
 logger = logging.getLogger()
 
@@ -41,6 +42,29 @@ def get_preprocessing_fn(
     if ds_name.startswith("self_gen") or ds_name.endswith("_compact"):
         # already processed data, do nothing
         return f
+
+    if "fw_qa_v2" in ds_name:
+
+        def f(sample):
+            # get questions/answers from all levels in the ds
+            q_cols = [col for col in sample.keys() if col.startswith("prompts_level")]
+            r_cols = [col for col in sample.keys() if col.startswith("responses_level")]
+            questions = concat_list([sample[col] for col in q_cols])
+            responses = concat_list([sample[col] for col in r_cols])
+            min_len = min(len(questions), len(responses))
+
+            if min_len == 0:
+                return {
+                    "context": None,
+                    "prompts": None,
+                    "responses": None,
+                }
+
+            return {
+                "context": sample["context"],
+                "prompts": questions[:min_len],
+                "responses": responses[:min_len],
+            }
 
     elif ds_name.startswith("longbench"):
 
