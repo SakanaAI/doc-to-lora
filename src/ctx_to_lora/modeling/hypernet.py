@@ -820,6 +820,8 @@ class ModulatedPretrainedModel(nn.Module):
         ctx_position_ids: Integer[Tensor, "n_chunks ctx_length"] | None = None,
         n_ctx_chunks: Integer[Tensor, "n_ctx"] | None = None,
         n_queries: Integer[Tensor, "n_ctx"] | None = None,
+        scalers: Float[Tensor, "n_ctx"] | None = None,
+        bias_scaler: float | None = None,
         *model_inputs_args: Any,
         **model_inputs_kwargs: dict[str, Any],
     ):
@@ -872,6 +874,8 @@ class ModulatedPretrainedModel(nn.Module):
                 lora_bias=self.hypernet.get_head_bias()
                 if self.hypernet.config.use_bias
                 else None,
+                scalers=scalers,
+                bias_scaler=bias_scaler,
             )
 
             # apply lora hook to the base model
