@@ -1,0 +1,1 @@
+WANDB_MODE=disabled uv run run_eval.py --checkpoint_path CHECKPOINT_PATH --datasets ctx_magic_number_32_1024 ctx_magic_number_1024_2048 ctx_magic_number_3072_4096 ctx_magic_number_7168_8192 ctx_magic_number_15360_16384 ctx_magic_number_28672_32768 ctx_magic_number_57344_65536 ctx_magic_number_122880_131072 --max_ctx_chunk_len=1024 --split test --eval_batch_size_gen=4

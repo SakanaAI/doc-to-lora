@@ -53,11 +53,14 @@ print(tokenizer.decode(outputs[0]))
 
 ### 🎮 Interactive Demo [WIP]
 ```bash
-uv run webui/demo.py
+uv run demo/app.py
 ```
 
 ### 🧪 Experimental Scripts
-| Experiment                           | Data prep                                                                                                                           | Training                                  | Evaluation                                                                                                                               | Notes                                                                                                                               |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| [Main experiment](scripts/main_exp/) | `uv run bash scripts/main_exp/0-download_data.sh`<br>`uv run bash scripts/main_exp/gen_data.sh` *(optional, rebuilds from scratch)* | `uv run bash scripts/main_exp/1-train.sh` | `uv run bash scripts/main_exp/eval/<script>.sh` (pick from `base_model.sh`, `cd.sh`, `cd_oracle.sh`, `d2l.sh`, `llmlingua.sh`, `t2l.sh`) | Downloading data is fastest; regenerate only if you need fresh synthetic data. Evaluation scripts reproduce the main paper metrics. |
-| [NIAH](scripts/niah/)                | `uv run bash scripts/niah/0-gen_data.sh`                                                                                            | `uv run bash scripts/niah/1-train.sh`     | `uv run bash scripts/niah/2-eval.sh`                                                                                                     | Run the scripts in order; data generation only needs to happen once                                                                 |
+To run any of the following scripts, use `uv run $PATH_TO_SCRIPT` from the root of this project.
+
+
+| Experiment                           | Data prep                             | Training                      | Evaluation                   | Notes                                                                                                                               |
+| ------------------------------------ | ------------------------------------- | ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [Main experiment](scripts/main_exp/) | `scripts/main_exp/0-download_data.sh` | `scripts/main_exp/1-train.sh` | `scripts/main_exp/eval/*.sh` | Downloading data is fastest; regenerate only if you need fresh synthetic data. Evaluation scripts reproduce the main paper metrics. |
+| [NIAH](scripts/niah/)                | `scripts/niah/0-gen_data.sh`          | `scripts/niah/1-train.sh`     | `scripts/niah/2-eval.sh`     | Run the scripts in order; data generation only needs to happen once                                                                 |

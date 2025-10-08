@@ -233,7 +233,7 @@ def self_generate(
 
     tk = get_tokenizer(args.vllm_model, train=True)
 
-    self_qa_intx_tokens = tk(SELF_QA_INTX, add_special_tokens=False)["input_ids"]
+    self_qa_intx_tokens = tk(SELF_QA_INTX, add_special_tokens=False)["input_ids"][1:]
     if args.remove_qa_template:
         self_qa_intx_tokens = tk("\n\n", add_special_tokens=False)["input_ids"]
     n_self_qa_intx_tokens = len(self_qa_intx_tokens)
