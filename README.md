@@ -64,3 +64,16 @@ To run any of the following scripts, use `uv run $PATH_TO_SCRIPT` from the root 
 | ------------------------------------ | ------------------------------------- | ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | [Main experiment](scripts/main_exp/) | `scripts/main_exp/0-download_data.sh` | `scripts/main_exp/1-train.sh` | `scripts/main_exp/eval/*.sh` | Downloading data is fastest; regenerate only if you need fresh synthetic data. Evaluation scripts reproduce the main paper metrics. |
 | [NIAH](scripts/niah/)                | `scripts/niah/0-gen_data.sh`          | `scripts/niah/1-train.sh`     | `scripts/niah/2-eval.sh`     | Run the scripts in order; data generation only needs to happen once                                                                 |
+
+
+### Self-Generated Data Viewer
+After downloading/generating the data, we can see samples of the data using this script.
+```bash
+uv run webui/self_gen_viewer.py
+```
+See more info at [webui/SELF_GEN_VIEWER.md](webui/SELF_GEN_VIEWER.md).
+
+### Citation
+```bibtex
+TBD
+```

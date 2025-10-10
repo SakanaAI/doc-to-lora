@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Self-Gen Data Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 25px;
+            text-align: center;
+            font-size: 2.5em;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .samples-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 15px;
+            align-items: end;
+        }
+
+        label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #333;
+            font-size: 0.9em;
+        }
+
+        select,
+        input {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        select:focus,
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: auto;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .info-box p {
+            margin: 5px 0;
+            color: #555;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #c33;
+        }
+
+        .sample {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            transition: box-shadow 0.3s;
+        }
+
+        .sample:hover {
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .sample-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .section {
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 5px;
+        }
+
+        .content {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .question-item {
+            background: #fff;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            margin-bottom: 10px;
+        }
+
+        .question-number {
+            background: #667eea;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
+        #results {
+            margin-top: 30px;
+        }
+
+        .load-more {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: 700;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔍 Self-Gen Data Viewer</h1>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="folder-select">Model Folder:</label>
+                <select id="folder-select">
+                    <option value="">-- Select a folder --</option>
+                    {% for folder in folders %}
+                    <option value="{{ folder }}">{{ folder }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="file-select">Parquet File:</label>
+                <select id="file-select" disabled>
+                    <option value="">-- Select a file --</option>
+                </select>
+            </div>
+
+            <div class="samples-row">
+                <div class="control-group">
+                    <label for="num-samples">Number of Samples:</label>
+                    <input type="number" id="num-samples" value="100" min="1" max="1000" step="10">
+                </div>
+                <button id="load-btn" disabled>Load Data</button>
+            </div>
+        </div>
+
+        <div id="info" style="display: none;"></div>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const folderSelect = document.getElementById('folder-select');
+        const fileSelect = document.getElementById('file-select');
+        const numSamplesInput = document.getElementById('num-samples');
+        const loadBtn = document.getElementById('load-btn');
+        const infoDiv = document.getElementById('info');
+        const resultsDiv = document.getElementById('results');
+
+        // When folder is selected, load parquet files
+        folderSelect.addEventListener('change', async () => {
+            const folder = folderSelect.value;
+            fileSelect.innerHTML = '<option value="">-- Select a file --</option>';
+            fileSelect.disabled = true;
+            loadBtn.disabled = true;
+
+            if (!folder) return;
+
+            try {
+                const response = await fetch(`/api/parquet_files?folder=${encodeURIComponent(folder)}`);
+                const data = await response.json();
+
+                if (data.files && data.files.length > 0) {
+                    data.files.forEach(file => {
+                        const option = document.createElement('option');
+                        option.value = file;
+                        option.textContent = file;
+                        fileSelect.appendChild(option);
+                    });
+                    fileSelect.disabled = false;
+                } else {
+                    alert('No parquet files found in this folder');
+                }
+            } catch (error) {
+                alert('Error loading files: ' + error.message);
+            }
+        });
+
+        // Enable load button when file is selected
+        fileSelect.addEventListener('change', () => {
+            loadBtn.disabled = !fileSelect.value;
+        });
+
+        // Load data button
+        loadBtn.addEventListener('click', loadData);
+
+        async function loadData() {
+            const folder = folderSelect.value;
+            const file = fileSelect.value;
+            const numSamples = numSamplesInput.value;
+
+            if (!folder || !file) return;
+
+            resultsDiv.innerHTML = '<div class="loading">⏳ Loading data...</div>';
+            infoDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(
+                    `/api/load_data?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}&num_samples=${numSamples}`
+                );
+                const data = await response.json();
+
+                if (data.error) {
+                    resultsDiv.innerHTML = `<div class="error"><strong>Error:</strong> ${data.error}</div>`;
+                    return;
+                }
+
+                displayData(data);
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error"><strong>Error:</strong> ${error.message}</div>`;
+            }
+        }
+
+        function displayData(data) {
+            // Show info box
+            infoDiv.style.display = 'block';
+            infoDiv.innerHTML = `
+                <div class="info-box">
+                    <div class="stats">
+                        <div class="stat-card">
+                            <div class="stat-value">${data.num_samples}</div>
+                            <div class="stat-label">Samples</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.samples.length > 0 ? data.samples[0].questions.length : 0}</div>
+                            <div class="stat-label">Questions per Sample</div>
+                        </div>
+                    </div>
+                    <p><strong>Model:</strong> ${data.model_name}</p>
+                    <p><strong>File:</strong> ${data.file_path}</p>
+                </div>
+            `;
+
+            // Show samples
+            let html = '';
+            data.samples.forEach(sample => {
+                html += `
+                    <div class="sample">
+                        <div class="sample-header">Sample #${sample.index}</div>
+                        
+                        <div class="section">
+                            <div class="section-title">📝 Context</div>
+                            <div class="content">${escapeHtml(sample.ctx)}</div>
+                        </div>
+                        
+                        <div class="section">
+                            <div class="section-title">❓ Questions & Answers (${sample.questions.length})</div>
+                            ${sample.questions.map((q, i) => `
+                                <div class="question-item">
+                                    <span class="question-number">Q&A ${i + 1}</span>
+                                    <div class="content">${escapeHtml(q)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+
+            resultsDiv.innerHTML = html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+
+</html>
