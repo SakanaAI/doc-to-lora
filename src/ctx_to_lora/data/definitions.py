@@ -10,6 +10,16 @@ CTX_AFFIXES = {
         "prefix": [2, 106, 1645, 110],  # <bos><start_of_turn>user\n\n\n
         "suffix": [107, 108, 106, 2516, 108],  # <end_of_turn>\n<start_of_turn>model\n
     },
+    "mistralai/Mistral-7B-Instruct-v0.2": {
+        "prefix": [1, 733, 16289, 28793, 28705, 13, 13],  # `<s> [INST] \n\n`
+        "suffix": [733, 28748, 16289, 28793],  # ` [/INST] `
+    },
+    "Qwen/Qwen3-4B-Instruct-2507": {
+        # `<|im_start|>system\n<|im_end|>\n<|im_start|>user\n`
+        "prefix": [151644, 8948, 198, 151645, 198, 151644, 872, 198],
+        # `<|im_end|>\n<|im_start|>assistant\n`
+        "suffix": [151645, 198, 151644, 77091, 198],
+    },
 }
 
 
