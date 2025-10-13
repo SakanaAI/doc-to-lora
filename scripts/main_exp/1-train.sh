@@ -2,23 +2,9 @@
 
 port=29051
 
-default_args=(
-    "--model_name_or_path=google/gemma-2-2b-it"
-    "--max_steps=50_000"
-    "--target_modules=down_proj"
-    "--lora_r=8"
-    "--eval_strategy=no"
-    "--max_qas_len=2048"
-    "--max_qas_per_sample=1"
-    "--per_rank_gen=True"
-    "--per_layer_processing=True"
-    "--gen_lora_l1_reg_coef=0.1"
-)
-
 uv run accelerate launch --config_file accelerate_config.yaml --main_process_port $port \
 --num_processes=8 --gpu_ids all train.py \
 configs/main_exp/self_gen_lv1_closed_qa_1_l2l.yaml \
-"${default_args[@]}" \
 --model_name_or_path=google/gemma-2-2b-it \
 --target_modules=down_proj --lora_r=8 \
 --eval_strategy=no --max_qas_len=2048 --max_qas_per_sample=1 \
