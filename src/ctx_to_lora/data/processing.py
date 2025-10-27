@@ -381,6 +381,19 @@ def construct_and_tokenize_ctx_qa(
     )
 
     if need_ctx_ids:
+        if (
+            tokenizer.name_or_path != ctx_tokenizer.name_or_path
+            and "ctx_ids" in tokenized_ds.column_names
+        ):
+            logger.info("Detokenizing contexts...")
+            tokenized_ds = tokenized_ds.map(
+                detokenize_ctx_text,
+                fn_kwargs={"tokenizer": tokenizer},
+                batched=True,
+                batch_size=100_000,
+                remove_columns=["ctx_ids"],
+            )
+
         if "ctx_ids" not in tokenized_ds.column_names:
             # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
             os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -904,6 +917,14 @@ def truncate_middle_if_too_long(
             t = sample[col]
             sample[col] = t[:half] + t[-half:] if len(t) > max_length else t
     return sample
+
+
+def detokenize_ctx_text(
+    samples: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> dict[str, Any]:
+    contexts = tokenizer.batch_decode(samples["ctx_ids"])
+    return dict(context=contexts)
 
 
 def tokenize_ctx_text(

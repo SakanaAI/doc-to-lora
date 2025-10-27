@@ -1,0 +1,30 @@
+# LoRA
+lora_r: 8
+lora_dropout: 0.0
+target_modules:
+  - down_proj
+
+use_kl_loss: true
+
+ctx_encoder_type: per_layer_activations
+n_latent_queries: 8
+num_blocks: 9
+num_self_attn_per_block: 0
+
+gradient_accumulation_steps: 11
+max_packed_inp_len: 6144
+max_packed_ctx_len: 6144
+
+# data
+train_ds_names:
+  - self_gen/Qwen/Qwen3-4B-Instruct-2507_temp_0.0_closed_qa_prob_1.0/fw_qa_v2/min_0_to_2000/train/*level_1*.parquet
+  - self_gen/Qwen/Qwen3-4B-Instruct-2507_temp_0.0_closed_qa_prob_0.0/pwc_compact
+  - self_gen/Qwen/Qwen3-4B-Instruct-2507_temp_0.0_closed_qa_prob_1.0/squad_compact
+  - self_gen/Qwen/Qwen3-4B-Instruct-2507_temp_0.0_closed_qa_prob_1.0/ropes_compact
+  - self_gen/Qwen/Qwen3-4B-Instruct-2507_temp_0.0_closed_qa_prob_1.0/drop_compact
+
+val_ds_names:
+  - squad
+  - pwc
+  - drop
+  - ropes

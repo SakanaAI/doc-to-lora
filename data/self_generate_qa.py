@@ -38,6 +38,8 @@ MODEL_CTX_LEN = {
     "google/gemma-2-27b-it": 8192,
     "google/gemma-2-2b-it": 8192,
     "google/gemma-2-9b-it": 8192,
+    # qwen 4b has 256k ctx length but using lower max lengths is faster
+    "Qwen/Qwen3-4B-Instruct-2507": 2**13 + 2**12,
 }
 
 
@@ -241,7 +243,7 @@ def self_generate(
     n_pre_ctx_tokens = len(pre_ctx_tokens)
     sys_tokens = tk(system_template.split("\n")[0], add_special_tokens=False)[
         "input_ids"
-    ]
+    ][:-1]
     n_sys_tokens = len(sys_tokens)
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     ds = ds.map(

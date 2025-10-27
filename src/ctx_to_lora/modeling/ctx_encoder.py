@@ -92,7 +92,14 @@ class PerLayerActivations(nn.Module):
     def __init__(self, base_model: PreTrainedModel, config: CtxEncoderArguments):
         super().__init__()
         base_model = get_base_model(base_model)  # remove lm head
-        base_model.layers = base_model.layers[:-1]  # remove last attn block
+
+        # -1 to remove last attn block
+        if config.ctx_encoder_last_layer is not None:
+            last_layer = config.ctx_encoder_last_layer - 1
+        else:
+            last_layer = -1
+
+        base_model.layers = base_model.layers[:last_layer]
         self.base_model = base_model
 
     @property

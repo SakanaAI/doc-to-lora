@@ -38,6 +38,7 @@ from ctx_to_lora.metrics import (
     compute_prefix_matching,
 )
 from ctx_to_lora.model_loading import (
+    check_is_vision_model,
     get_lora_config,
     get_model_and_tokenizer,
     get_tokenizer,
@@ -165,7 +166,9 @@ def main():
             ctx_encoder_model_config = AutoConfig.from_pretrained(
                 ctx_name, trust_remote_code=True
             )
-            if "Llama" in ctx_name and "Vision" in ctx_name:
+            if ("Llama" in ctx_name and "Vision" in ctx_name) or check_is_vision_model(
+                ctx_name
+            ):
                 ctx_encoder_model_config = ctx_encoder_model_config.text_config
             ctx_tokenizer = get_tokenizer(ctx_name, train=True)
         else:
@@ -191,6 +194,18 @@ def main():
                     f"Using the first {ctx_encoder_args.layer_idx} layers"
                     " as the context encoder"
                 )
+            ctx_name = ctx_encoder_args.ctx_encoder_model_name_or_path
+            if ctx_encoder_args.ctx_encoder_last_layer is None and (
+                ctx_name is not None and ctx_name != base_model.name_or_path
+            ):
+                logger.info(
+                    f"Setting ctx_encoder_last_layer to {base_model.name_or_path} max layers"
+                    f":{base_model.config.num_hidden_layers}"
+                )
+                ctx_encoder_args.ctx_encoder_last_layer = (
+                    base_model.config.num_hidden_layers
+                )
+
             model = ModulatedPretrainedModel(
                 base_model, hypernet_config, ctx_encoder_args
             )

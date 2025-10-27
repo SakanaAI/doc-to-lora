@@ -27,7 +27,7 @@ except FileNotFoundError:
     DEFAULT_CONTEXT = ""
 
 WARNING_MESSAGE = (
-    "⚠️ **Caution**: This is an academic proof-of-concept application.\n"
+    "⚠️ **Caution**: This is an academic proof-of-concept demonstration.\n"
     "The model may generate inaccurate information or hallucinate facts."
 )
 
@@ -73,11 +73,19 @@ def get_available_checkpoints():
     return sorted(checkpoints) if checkpoints else ["No checkpoints found"]
 
 
-def load_checkpoint(checkpoint_path: str) -> tuple[str, gr.update]:
+def load_checkpoint(
+    checkpoint_path: str,
+) -> tuple[str, gr.update, gr.update, gr.update, gr.update]:
     global modulated_model, ctx_tokenizer, base_tokenizer, chat_history
 
     if not checkpoint_path or checkpoint_path == "No checkpoints found":
-        return "⚠️ Please select a valid checkpoint", gr.update()
+        return (
+            "⚠️ Please select a valid checkpoint",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+        )
 
     try:
         print(f"Loading checkpoint: {checkpoint_path}")
@@ -113,7 +121,13 @@ def load_checkpoint(checkpoint_path: str) -> tuple[str, gr.update]:
             f"✅ Successfully loaded checkpoint!\n\nBase Model: {model_name}\n\n"
             "You can now add context and start chatting."
         )
-        return success_msg, gr.update(interactive=True)
+        return (
+            success_msg,
+            gr.update(interactive=True),  # msg
+            gr.update(interactive=True),  # send_btn
+            gr.update(interactive=True),  # system_msg
+            gr.update(interactive=True),  # clear_btn
+        )
 
     except Exception as e:
         import traceback
@@ -122,7 +136,13 @@ def load_checkpoint(checkpoint_path: str) -> tuple[str, gr.update]:
             f"❌ Error loading checkpoint:\n{str(e)}\n\n{traceback.format_exc()}"
         )
         print(error_msg)
-        return error_msg, gr.update(interactive=False)
+        return (
+            error_msg,
+            gr.update(interactive=False),
+            gr.update(interactive=False),
+            gr.update(interactive=False),
+            gr.update(interactive=False),
+        )
 
 
 def process_multiple_contexts(contexts: list[str]) -> dict:
@@ -167,6 +187,8 @@ def generate_response(
     scaler_2: float,
     context_3: str,
     scaler_3: float,
+    context_4: str,
+    scaler_4: float,
     bias_scaler: float,
 ):
     global modulated_model, chat_history, ctx_tokenizer, base_tokenizer
@@ -200,6 +222,9 @@ def generate_response(
         if context_3 and context_3.strip():
             contexts.append(context_3)
             scalers.append(scaler_3)
+        if context_4 and context_4.strip():
+            contexts.append(context_4)
+            scalers.append(scaler_4)
 
         if not contexts:
             contexts = [""]
@@ -269,7 +294,7 @@ def reset_chat(system_msg: str):
 
 def update_context_display(num_contexts: int):
     updates = []
-    for i in range(3):
+    for i in range(4):
         updates.append(gr.update(visible=(i < num_contexts)))
     return updates
 
@@ -285,21 +310,21 @@ custom_css = """
 
 .chat-container {
     border-radius: 10px;
-    border: 1px solid #e0e0e0;
+    border: 2px solid #d1d5db;
 }
 
 .context-field {
-    background-color: #f9f9f9;
     border-radius: 8px;
     padding: 15px;
     margin-bottom: 10px;
-    border: 1px solid #e0e0e0;
+    border: 2px solid #d1d5db;
 }
 
 .status-box {
     border-radius: 8px;
     padding: 15px;
     margin: 10px 0;
+    border: 2px solid #e5e7eb;
 }
 
 .primary-button {
@@ -330,7 +355,7 @@ custom_css = """
 
 .warning-box {
     background-color: #fff3cd;
-    border: 1px solid #ffc107;
+    border: 2px solid #ffc107;
     border-radius: 8px;
     padding: 12px;
     margin: 10px 0;
@@ -341,21 +366,144 @@ custom_css = """
 .warning-box strong {
     color: #d97706;
 }
+
+.disabled-overlay {
+    background-color: #f5f5f5;
+    border: 3px dashed #999;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    color: #999;
+}
+
+.chat-disabled-notice {
+    border: 3px solid #f59e0b;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    color: #92400e;
+    font-weight: 600;
+    text-align: center;
+    background-color: #fef3c7;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.internalization-banner {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 15px;
+    text-align: center;
+    font-weight: 600;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    border: 3px solid #5568d3;
+}
+
+.internalization-banner h3 {
+    margin: 0 0 10px 0;
+    font-size: 1.2em;
+    color: white;
+}
+
+.internalization-banner p {
+    margin: 5px 0;
+    font-size: 0.95em;
+    font-weight: 400;
+    color: white;
+}
+
+.context-section-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: 3px solid #5568d3;
+    border-left: 6px solid #4c51bf;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    color: white;
+    box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+}
+
+.context-section-header strong,
+.context-section-header small {
+    color: white;
+}
+
+.chat-section-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: 3px solid #2563eb;
+    border-left: 6px solid #1d4ed8;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    color: white;
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+}
+
+.chat-section-header strong,
+.chat-section-header small {
+    color: white;
+}
+
+.panel-box {
+    background-color: rgba(249, 250, 251, 0.5);
+    border: 2px solid rgba(209, 213, 219, 0.5);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    backdrop-filter: blur(10px);
+}
+
+.chat-panel-box {
+    background-color: rgba(249, 250, 251, 0.5);
+    border: 2px solid rgba(209, 213, 219, 0.5);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    backdrop-filter: blur(10px);
+}
+
+/* Dark mode support */
+.dark .panel-box,
+.dark .chat-panel-box {
+    background-color: rgba(31, 41, 55, 0.5);
+    border: 2px solid rgba(75, 85, 99, 0.5);
+}
+
+.dark .context-field,
+.dark .chat-container {
+    border-color: rgba(75, 85, 99, 0.5);
+}
+
+.dark .status-box {
+    border-color: rgba(55, 65, 81, 0.5);
+}
 """
 
 
 def create_demo():
     with gr.Blocks(
-        title="Context-to-LoRA Chat Interface",
+        title="Doc-to-LoRA Chat Interface",
         theme=gr.themes.Soft(),
         css=custom_css,
     ) as demo:
         gr.Markdown(
             """
-            # 🎯 Context-to-LoRA Chat Interface
+            # 📜 Doc-to-LoRA Chat Interface
             
             Load a hypernetwork checkpoint and chat with a context-modulated language model.
             Add multiple contexts with individual scaling parameters to influence the model's responses.
+            """
+        )
+
+        gr.HTML(
+            """
+            <div class="internalization-banner">
+                <h3>🧠 How Context Internalization Works</h3>
+                <p>📥 Contexts are processed by the hypernetworkto dynamically modulate the base model's parameters</p>
+                <p>🚫 Contexts are NOT passed as text to the base model — they influence behavior internally</p>
+                <p>💬 Only your chat messages (below) are sent to the language model</p>
+            </div>
             """
         )
 
@@ -365,7 +513,7 @@ def create_demo():
             
             1. **Load a Checkpoint**: Select a hypernetwork checkpoint from the dropdown and click "Load Checkpoint"
             2. **Configure Contexts**: 
-               - Use the slider to choose how many contexts you want (0-3)
+               - Use the slider to choose how many contexts you want (1-4)
                - Enter your context information in each text field
                - Adjust the scaling sliders to control the influence of each context
             3. **Set Bias Scaler**: Adjust the bias scaler to control overall model behavior
@@ -378,7 +526,7 @@ def create_demo():
         )
 
         with gr.Row():
-            with gr.Column(scale=1):
+            with gr.Column(scale=1, elem_classes="panel-box"):
                 gr.Markdown("### 📦 Load Checkpoint")
                 gr.Markdown(
                     "*Select a trained hypernetwork checkpoint to begin.*",
@@ -403,27 +551,29 @@ def create_demo():
 
                 gr.Markdown("---")
 
-                gr.Markdown("### 📝 Context Configuration")
-                gr.Markdown(
-                    "*Add contexts to influence the model's responses. Each context can be scaled independently.*",
-                    elem_classes="instruction-text",
+                gr.HTML(
+                    """
+                    <div class="context-section-header">
+                        <strong>🧠 Context Internalization (Hypernetwork Input)</strong><br>
+                        <small>These contexts modulate the model internally — they are NOT shown to the base model</small>
+                    </div>
+                    """
                 )
 
                 num_contexts = gr.Slider(
-                    minimum=0,
-                    maximum=3,
+                    minimum=1,
+                    maximum=4,
                     step=1,
                     value=1,
-                    label="Number of Contexts",
+                    label="Number of Contexts to Internalize",
                     interactive=True,
                 )
 
                 with gr.Group(visible=True) as context_1_group:
                     context_1 = gr.Textbox(
-                        label="Context 1",
-                        placeholder="Enter context information here...",
+                        label="🧠 Context 1 (Internalized via Hypernetwork)",
+                        placeholder="Enter context to be internalized by the hypernetwork...",
                         lines=4,
-                        elem_classes="context-field",
                         value=DEFAULT_CONTEXT,
                     )
                     scaler_1 = gr.Slider(
@@ -436,10 +586,9 @@ def create_demo():
 
                 with gr.Group(visible=False) as context_2_group:
                     context_2 = gr.Textbox(
-                        label="Context 2",
-                        placeholder="Enter additional context information...",
+                        label="🧠 Context 2 (Internalized via Hypernetwork)",
+                        placeholder="Enter additional context to be internalized...",
                         lines=4,
-                        elem_classes="context-field",
                     )
                     scaler_2 = gr.Slider(
                         minimum=-2.0,
@@ -451,10 +600,9 @@ def create_demo():
 
                 with gr.Group(visible=False) as context_3_group:
                     context_3 = gr.Textbox(
-                        label="Context 3",
-                        placeholder="Enter additional context information...",
+                        label="🧠 Context 3 (Internalized via Hypernetwork)",
+                        placeholder="Enter additional context to be internalized...",
                         lines=4,
-                        elem_classes="context-field",
                     )
                     scaler_3 = gr.Slider(
                         minimum=-2.0,
@@ -462,6 +610,20 @@ def create_demo():
                         step=0.01,
                         value=1.0,
                         label="Context 3 Scaling",
+                    )
+
+                with gr.Group(visible=False) as context_4_group:
+                    context_4 = gr.Textbox(
+                        label="🧠 Context 4 (Internalized via Hypernetwork)",
+                        placeholder="Enter additional context to be internalized...",
+                        lines=4,
+                    )
+                    scaler_4 = gr.Slider(
+                        minimum=-2.0,
+                        maximum=2.0,
+                        step=0.01,
+                        value=1.0,
+                        label="Context 4 Scaling",
                     )
 
                 gr.Markdown("---")
@@ -475,13 +637,30 @@ def create_demo():
                     info="A single scalar applied to bias parameters (independent of contexts)",
                 )
 
-            with gr.Column(scale=2):
-                gr.Markdown("### 💬 Chat Interface")
+            with gr.Column(scale=2, elem_classes="chat-panel-box"):
+                gr.HTML(
+                    """
+                    <div class="chat-section-header">
+                        <strong>💬 Chat Interface (Direct Input to Base Model)</strong><br>
+                        <small>Your messages here are the ONLY text the base model sees — contexts above influence it internally</small>
+                    </div>
+                    """
+                )
+
+                chat_status_notice = gr.HTML(
+                    """
+                    <div class="chat-disabled-notice">
+                        🔒 <strong>Chat Disabled:</strong> Please load a checkpoint first to enable chat functionality.
+                    </div>
+                    """,
+                    visible=True,
+                )
 
                 system_msg = gr.Textbox(
-                    label="System Message",
-                    placeholder="Enter system message (optional)...",
+                    label="System Message (Optional - Sent to Base Model)",
+                    placeholder="Load a checkpoint to enable chat...",
                     lines=2,
+                    interactive=False,
                 )
 
                 chatbot = gr.Chatbot(
@@ -489,35 +668,63 @@ def create_demo():
                     height=500,
                     elem_id="chatbot",
                     elem_classes="chat-container",
-                    value=[[None, WARNING_MESSAGE]],
+                    value=[
+                        [
+                            None,
+                            "🔒 Chat is currently disabled. Please load a checkpoint from the left panel to begin chatting.",
+                        ]
+                    ],
                 )
 
                 with gr.Row():
                     msg = gr.Textbox(
-                        label="Your Message",
-                        placeholder="Type your message here... (Shift+Enter for new line)",
+                        label="Your Message (Sent Directly to Base Model)",
+                        placeholder="⚠️ Load a checkpoint first to start chatting...",
                         lines=2,
                         scale=4,
                         interactive=False,
                     )
                     send_btn = gr.Button(
-                        "Send", variant="primary", scale=1, interactive=False
+                        "🔒 Send (Disabled)",
+                        variant="primary",
+                        scale=1,
+                        interactive=False,
                     )
 
                 with gr.Row():
-                    clear_btn = gr.Button("🔄 Reset Chat", variant="secondary")
+                    clear_btn = gr.Button(
+                        "🔒 Reset Chat (Disabled)",
+                        variant="secondary",
+                        interactive=False,
+                    )
                     reset_status = gr.Textbox(label="Reset Status", visible=False)
 
         load_btn.click(
             fn=load_checkpoint,
             inputs=[checkpoint_dropdown],
-            outputs=[status_box, msg],
-        ).then(fn=lambda: gr.update(interactive=True), outputs=[send_btn])
+            outputs=[status_box, msg, send_btn, system_msg, clear_btn],
+        ).then(
+            fn=lambda: (
+                gr.update(visible=False),
+                gr.update(
+                    placeholder="Type your message here... (Shift+Enter for new line)"
+                ),
+                gr.update(value="Send"),
+                gr.update(value="🔄 Reset Chat"),
+                gr.update(value=[[None, WARNING_MESSAGE]]),
+            ),
+            outputs=[chat_status_notice, msg, send_btn, clear_btn, chatbot],
+        )
 
         num_contexts.change(
             fn=update_context_display,
             inputs=[num_contexts],
-            outputs=[context_1_group, context_2_group, context_3_group],
+            outputs=[
+                context_1_group,
+                context_2_group,
+                context_3_group,
+                context_4_group,
+            ],
         )
 
         msg.submit(
@@ -535,6 +742,8 @@ def create_demo():
                 scaler_2,
                 context_3,
                 scaler_3,
+                context_4,
+                scaler_4,
                 bias_scaler,
             ],
             outputs=[chatbot],
@@ -555,6 +764,8 @@ def create_demo():
                 scaler_2,
                 context_3,
                 scaler_3,
+                context_4,
+                scaler_4,
                 bias_scaler,
             ],
             outputs=[chatbot],

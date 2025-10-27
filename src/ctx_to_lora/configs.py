@@ -518,11 +518,19 @@ class CtxEncoderArguments:
         default=None,
         metadata={
             "help": "Layer index for context encoder. "
-            "Default to L//4 where L is the number of layers of the ctx model"
+            "Default to L//4 where L is the number of layers of the ctx model. "
+            "Only used when ctx_encoder_type==early_exit"
         },
     )
     quantize_ctx_encoder: bool = field(
         default=False, metadata={"help": "Wheter to quantize the ctx encoder."}
+    )
+    ctx_encoder_last_layer: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of layers for the context encoder. "
+            "Only used when ctx_encoder_type==per_layer_activations"
+        },
     )
 
 
