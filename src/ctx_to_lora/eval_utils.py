@@ -52,6 +52,7 @@ from ctx_to_lora.model_loading import (
     get_tokenizer,
 )
 from ctx_to_lora.modeling.context_distillation import CtxDistillModel
+from ctx_to_lora.modeling.generative_adapter import GenerativeAdapter
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 from ctx_to_lora.modeling.llm_lingua import LLMLinguaModel
 from ctx_to_lora.modeling.text_to_lora import TextToLoRA
@@ -121,7 +122,9 @@ def split_string(s: str) -> list[str]:
     return [x for x in out if x]  # remove empty spaces
 
 
-def f1_score(prediction: str, ground_truth: str) -> tuple[float, float, float]:
+def f1_score(
+    prediction: list[str], ground_truth: list[str]
+) -> tuple[float, float, float]:
     """Compute F1 score, precision, and recall between prediction and ground truth strings."""
     common = Counter(prediction) & Counter(ground_truth)
     num_same = sum(common.values())
@@ -200,11 +203,11 @@ def save_generated_text(
 
     metric_keys = list(per_sample_metric.keys())
     # assert len(metric_keys) == 1
-    metric_name = metric_keys[0]
+
     with open(f"{output_dir}/{split}_generated_text.jsonl", "w") as f:
-        for sample, metric_val in zip(samples, per_sample_metric[metric_name]):
+        for i, sample in enumerate(samples):
             for metric_name in metric_keys:
-                sample[f"{metric_name}"] = metric_val
+                sample[f"{metric_name}"] = per_sample_metric[metric_name][i]
             f.write(json.dumps(sample) + "\n")
 
 
@@ -771,7 +774,7 @@ def evaluate(
                     add_special_tokens=False,
                     return_tensors="pt",
                 )
-                .input_ids[0]
+                .input_ids[0][1:]
                 .to(base_model.device)
             )
             ctx_distill_kwargs = dict(
@@ -818,6 +821,10 @@ def evaluate(
             ctx_model_max_len = model.base_model.config.max_position_embeddings
             add_tracker(model.base_model.generate, "base_model.generate")
             add_tracker(model.generate_weights, "generate_weights")
+
+        elif args.use_generative_adapter:
+            model = GenerativeAdapter(model=base_model, tokenizer=tokenizer)
+            ctx_model_max_len = base_model.config.max_position_embeddings
 
     if base_model is None:
         base_model = model.base_model
@@ -1027,6 +1034,7 @@ def run_eval(
     truncate_if_too_long_ctx: bool = False,
     flip_ctx_inp: bool = False,
     gen_lora_scaling: float = 1,
+    use_generative_adapter: bool = False,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
@@ -1038,6 +1046,12 @@ def run_eval(
     if use_llmlingua and add_ctx_to_input:
         raise ValueError(
             "LLMLingua always adds compressed context to input by default."
+        )
+    if use_generative_adapter and (
+        model_name_or_path != "mistralai/Mistral-7B-Instruct-v0.2"
+    ):
+        raise ValueError(
+            "Generative adapter is only available for Mistral-7B-Instruct-v0.2."
         )
 
     disable_caching()
@@ -1099,6 +1113,7 @@ def run_eval(
             args.llmlingua_compression_rate = llmlingua_compression_rate
         if use_t2l:
             args.use_t2l = use_t2l
+        args.use_generative_adapter = use_generative_adapter
     if max_val_samples_per_ds > 0:
         args.max_val_samples_per_ds = max_val_samples_per_ds
     if max_test_samples_per_ds > 0:

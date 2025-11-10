@@ -224,7 +224,7 @@ def save_tracker_stats_csv(file_path: str, name: str | None = None) -> None:
 
     # If no data at all, raise an error
     if timer_stats is None and memory_stats is None:
-        raise ValueError("No tracking data available to export")
+        print("No tracking data available to export")
 
 
 def print_tracker_stats(name: str | None = None) -> None:

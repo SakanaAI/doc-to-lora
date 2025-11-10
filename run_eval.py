@@ -152,6 +152,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Flip the order of context and input",
     )
+    parser.add_argument(
+        "--use_generative_adapter",
+        action="store_true",
+        help="Use generative adapter for evaluation",
+    )
 
     cli_args = vars(parser.parse_args())
 
