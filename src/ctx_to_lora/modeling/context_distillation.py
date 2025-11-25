@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from math import ceil
 from typing import Any
 
 import torch
@@ -222,6 +223,8 @@ class CtxDistillModel(nn.Module):
                     p.requires_grad = True
         log_num_train_params(self.base_model)
         self._init_optim()
+        # Mini-batch size for distillation updates
+        self.batch_size = 20
 
     @property
     def generation_config(self):
@@ -274,57 +277,83 @@ class CtxDistillModel(nn.Module):
         inp_res_attention_mask: Integer[Tensor, "bs inp_length"],
         student_labels: Integer[Tensor, "bs inp_length"],
     ):
-        # Implements KD-style loss by computing teacher (with context) and student (no context) log-probs locally.
+        # Implements KD-style loss by computing teacher (with context) and student (no context)
+        # log-probs locally, using mini-batches for updates.
 
-        teacher_shifted_label_pos = get_shifted_label_pos(teacher_labels)
-        student_shifted_label_pos = get_shifted_label_pos(student_labels)
-
-        with torch.no_grad():
-            teacher_outputs = self.base_model(
-                ctx_inp_res_ids, attention_mask=ctx_inp_res_attention_mask
-            )
-            teacher_logits = logits_at_positions(
-                teacher_outputs, teacher_shifted_label_pos
-            )
-            # Use top-k teacher probabilities only
-            K = 16
-            topk_vals, topk_idx = teacher_logits.topk(K, dim=-1)
-            teacher_denom = torch.logsumexp(
-                teacher_logits.float(), dim=-1, keepdim=True
-            )
-            teacher_p = (topk_vals - teacher_denom).exp().detach()  # [N, K]
-
-        # Optimization loop: match student to teacher using selected indices
         was_training = self.training
         self.train()
 
-        print(f"Starting context distillation for {self.update_iterations} iterations")
+        num_samples = ctx_inp_res_ids.size(0)
+        mb = self.batch_size
+        num_batches = ceil(num_samples / mb)
 
-        for iteration in range(self.update_iterations):
-            self.optimizer.zero_grad()
-            student_outputs = self.base_model(
-                inp_res_ids, attention_mask=inp_res_attention_mask
-            )
-            student_logits = logits_at_positions(
-                student_outputs, student_shifted_label_pos
-            )
-            student_denom = torch.logsumexp(
-                student_logits.float(), dim=-1, keepdim=True
-            )
-            selected_student_logits = student_logits.gather(-1, topk_idx)
-            student_logq = selected_student_logits - student_denom  # [N, K]
-            token_losses = -(teacher_p * student_logq).sum(dim=-1)  # [N]
-            loss = token_losses.mean()
+        total_steps = max(self.update_iterations * num_batches, 1)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=total_steps, eta_min=0.0
+        )
 
-            # Log metrics for this iteration
-            if iteration % 100 == 0:
-                print(
-                    f"Iteration {iteration + 1}/{self.update_iterations}: "
-                    f"Loss={loss.item():.4f}"
+        print(
+            f"Starting context distillation for {self.update_iterations} epochs, "
+            f"mini-batch size {mb} ({num_batches} batches/epoch), "
+            f"cosine LR schedule over {total_steps} steps"
+        )
+
+        for epoch in range(self.update_iterations):
+            # Shuffle order each epoch for SGD
+            perm = torch.randperm(num_samples, device=self.device)
+
+            epoch_loss = 0.0
+            for b in range(num_batches):
+                start = b * mb
+                end = min(start + mb, num_samples)
+                indices = perm[start:end]
+
+                b_ctx_ids = ctx_inp_res_ids[indices]
+                b_ctx_am = ctx_inp_res_attention_mask[indices]
+                b_teacher_labels = teacher_labels[indices]
+
+                b_inp_ids = inp_res_ids[indices]
+                b_inp_am = inp_res_attention_mask[indices]
+                b_student_labels = student_labels[indices]
+
+                # Compute teacher distribution (top-k) for this mini-batch
+                with torch.no_grad(), self.base_model.disable_adapter():
+                    t_pos = get_shifted_label_pos(b_teacher_labels)
+                    teacher_outputs = self.base_model(
+                        b_ctx_ids, attention_mask=b_ctx_am
+                    )
+                    teacher_logits = logits_at_positions(teacher_outputs, t_pos)
+                    K = 16
+                    topk_vals, topk_idx = teacher_logits.topk(K, dim=-1)
+                    teacher_denom = torch.logsumexp(
+                        teacher_logits.float(), dim=-1, keepdim=True
+                    )
+                    teacher_p = (topk_vals - teacher_denom).exp().detach()  # [N, K]
+
+                # Student forward and update for this mini-batch
+                self.optimizer.zero_grad()
+                s_pos = get_shifted_label_pos(b_student_labels)
+                student_outputs = self.base_model(b_inp_ids, attention_mask=b_inp_am)
+                student_logits = logits_at_positions(student_outputs, s_pos)
+                student_denom = torch.logsumexp(
+                    student_logits.float(), dim=-1, keepdim=True
                 )
+                selected_student_logits = student_logits.gather(-1, topk_idx)
+                student_logq = selected_student_logits - student_denom  # [N, K]
+                token_losses = -(teacher_p * student_logq).sum(dim=-1)  # [N]
+                loss = token_losses.mean()
 
-            loss.backward()
-            self.optimizer.step()
+                loss.backward()
+                self.optimizer.step()
+                scheduler.step()
+
+                epoch_loss += loss.detach().item()
+
+            cur_lr = self.optimizer.param_groups[0]["lr"]
+            print(
+                f"Epoch {epoch + 1}/{self.update_iterations}, "
+                f"batch {b + 1}/{num_batches}: loss={epoch_loss / num_batches:.4f}, lr={cur_lr:.6e}"
+            )
 
         if not was_training:
             self.eval()
@@ -548,7 +577,10 @@ if __name__ == "__main__":
     prompt = f"{ctx}\n\n{sep_text}\n\n{inp}"
     messages = [{"role": "user", "content": prompt}]
     encoded = tokenizer.apply_chat_template(
-        messages, return_tensors="pt", return_dict=True
+        messages,
+        return_tensors="pt",
+        return_dict=True,
+        add_generation_prompt=True,
     )
     # encoded = tokenizer(prompt, return_tensors="pt")
     encoded = {k: v.to(model.device) for k, v in encoded.items()}
@@ -567,7 +599,7 @@ if __name__ == "__main__":
         prefix_tokens=prefix_tokens,
         ctx_inp_sep_seq=sep_ids,
         pad_token_id=tokenizer.pad_token_id,
-        update_iterations=200,
+        update_iterations=100,
         q_model=q_model,
         q_tokenizer=q_tokenizer,
         tokenizer=tokenizer,
