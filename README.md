@@ -74,7 +74,7 @@ uv run demo/app.py
 ```
 <div align="center">
     <h3>Video Demo</h3>
-    <video src="https://github.com/user-attachments/assets/e8a8efa2-93f4-441b-8a54-0649cd724bb5" controls autoplay muted playsinline preload="metadata" width="900"></video>
+    <video src="https://github.com/user-attachments/assets/f46325b1-d040-48f0-8b3e-deba0e6218ff" controls autoplay muted playsinline preload="metadata" width="900"></video>
 </div>
 
 ### 🧪 Experimental Scripts
