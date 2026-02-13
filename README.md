@@ -1,5 +1,5 @@
-# Doc-to-LoRA (D2L): Learning to Instantly Internalize Contexts
 <div align="center">
+    <h1>Doc-to-LoRA (D2L): Learning to Instantly Internalize Contexts</h1>
     :newspaper:<a href="https://x.com/SakanaAILabs">X</a> |
     :scroll:<a href="https://arxiv.org/abs/xxxxx">Paper</a> |
     :hugs:<a href="https://huggingface.co/SakanaAI">Hugging Face</a> |
@@ -74,7 +74,7 @@ uv run demo/app.py
 ```
 <div align="center">
     <h3>Video Demo</h3>
-    <video src="assets/doc-to-lora-demo.mp4" controls autoplay muted playsinline preload="metadata" width="900"></video>
+    <video src="https://raw.githubusercontent.com/SakanaAI/doc-to-lora/refs/heads/main/assets/doc-to-lora-demo.mp4" controls autoplay muted playsinline preload="metadata" width="900"></video>
 </div>
 
 ### 🧪 Experimental Scripts
