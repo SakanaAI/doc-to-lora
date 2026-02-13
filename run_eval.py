@@ -107,6 +107,12 @@ if __name__ == "__main__":
         help="Number of rounds of query generation for context distillation.",
     )
     parser.add_argument(
+        "--cd_batch_size",
+        type=int,
+        default=16,
+        help="Batch size for context distillation.",
+    )
+    parser.add_argument(
         "--use_iterative_mode",
         action="store_true",
         help="Use iterative mode LoRA layer-by-layer generation",

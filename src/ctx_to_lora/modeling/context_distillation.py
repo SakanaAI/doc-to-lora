@@ -195,6 +195,7 @@ class CtxDistillModel(nn.Module):
         lora_save_dir: str | None = None,
         save_after_distill: bool = True,
         q_gen_rounds: int = 4,
+        batch_size: int = 16,
     ):
         super().__init__()
         self.register_module("base_model", base_model)
@@ -224,7 +225,7 @@ class CtxDistillModel(nn.Module):
         log_num_train_params(self.base_model)
         self._init_optim()
         # Mini-batch size for distillation updates
-        self.batch_size = 20
+        self.batch_size = batch_size
 
     @property
     def generation_config(self):

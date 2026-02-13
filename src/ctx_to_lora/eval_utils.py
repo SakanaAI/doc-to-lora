@@ -796,6 +796,7 @@ def evaluate(
                 ctx_distill_kwargs["q_model"] = q_model
                 ctx_distill_kwargs["q_tokenizer"] = q_tokenizer
                 ctx_distill_kwargs["q_gen_rounds"] = args.q_gen_rounds
+                ctx_distill_kwargs["batch_size"] = args.cd_batch_size
             model = CtxDistillModel(peft_model, **ctx_distill_kwargs)
 
             add_tracker(model._distill_context, "distill_context")
@@ -856,6 +857,7 @@ def evaluate(
         ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=ctx_tokenizer,
         add_ctx_to_chat=add_ctx_to_chat,
+        add_negative_prompt=False,
         use_kl_loss=False,
         max_new_tokens=max_new_tokens,
         set_format="pt",
@@ -1025,6 +1027,7 @@ def run_eval(
     cd_update_iterations: int = 10,
     cd_use_gen_q: bool = False,
     q_gen_rounds: int = 4,
+    cd_batch_size: int = 16,
     use_iterative_mode: bool = False,
     use_llmlingua: bool = False,
     llmlingua_compression_rate: float = 0.9,
@@ -1108,6 +1111,7 @@ def run_eval(
             args.cd_update_iterations = cd_update_iterations
             args.cd_use_gen_q = cd_use_gen_q
             args.q_gen_rounds = q_gen_rounds
+            args.cd_batch_size = cd_batch_size
         if use_llmlingua:
             args.use_llmlingua = use_llmlingua
             args.llmlingua_compression_rate = llmlingua_compression_rate

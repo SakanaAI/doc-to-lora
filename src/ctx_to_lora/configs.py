@@ -418,6 +418,10 @@ class CtxTrainingArguments:
         default=0.0,
         metadata={"help": "L1 regularization coefficient for generated LoRAs."},
     )
+    add_negative_prompt: bool = field(
+        default=False,
+        metadata={"help": "Whether to add negative prompt training."},
+    )
 
 
 @dataclass

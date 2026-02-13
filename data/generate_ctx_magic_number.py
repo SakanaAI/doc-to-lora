@@ -246,7 +246,7 @@ def main():
         k_values = list(range(k_start, k_end))
         bin_size = len(k_values)
         save_dir = f"{args.out_prefix}_{tok_bin[0]}_{tok_bin[1]}"
-        training_enabled = tok_bin[1] <= 512  # unchanged policy
+        training_enabled = tok_bin[1] <= 1024  # unchanged policy
         if training_enabled:
             train_data: list[dict] = []
             # Distribute training budget across k values.

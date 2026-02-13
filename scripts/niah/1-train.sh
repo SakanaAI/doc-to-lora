@@ -1,4 +1,5 @@
- WANDB_MODE=disabled run uv run train.py \
+#!/bin/bash
+WANDB_MODE=disabled uv run train.py \
  configs/niah_exp/ctx_magic_number_32_256.yaml \
  --model_name_or_path=google/gemma-2-2b-it \
  --num_train_epochs=1 \
@@ -37,4 +38,5 @@
  --max_val_samples_per_ds=100 \
  --seed=1 \
  --use_per_ctx_average_loss=True \
- --torch_empty_cache_steps=10
+ --torch_empty_cache_steps=10 \
+ "$@"

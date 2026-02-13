@@ -162,9 +162,51 @@ def filter_none(sample):
     return True
 
 
+def add_negative_prompt_fn(samples):
+    unique_contexts = set()
+    ctxs, prompts, responses = [], [], []
+    for ctx, prompt, response in zip(
+        samples["context"], samples["prompt"], samples["response"]
+    ):
+        if ctx in unique_contexts:
+            continue
+        unique_contexts.add(ctx)
+        ctxs.append(ctx)
+        prompts.append(prompt)
+        responses.append(response)
+
+    logger.debug("Adding negative prompt...")
+    logger.debug(f"# unique contexts: {len(unique_contexts)}")
+
+    # remove one last sample if the number of samples is odd
+    if len(ctxs) % 2 != 0:
+        ctxs.pop()
+        prompts.pop()
+        responses.pop()
+
+    # to make sure that the negative prompt/response is not the same as the original
+    indices = list(np.random.permutation(len(ctxs))) + list(
+        np.random.permutation(len(ctxs))
+    )
+    neg_ctxs, neg_prompts, neg_responses = [], [], []
+    for idx in range(0, len(indices), 2):
+        i = indices[idx]
+        j = indices[idx + 1]
+        neg_ctxs.append(ctxs[i])
+        neg_prompts.append(ctxs[j] + "\n\n" + prompts[j])
+        neg_responses.append(responses[j])
+
+    return dict(
+        context=neg_ctxs + samples["context"],
+        prompt=neg_prompts + samples["prompt"],
+        response=neg_responses + samples["response"],
+    )
+
+
 def load_and_process_dataset(
     ds_name: str,
     split: str,
+    add_negative_prompt: bool,
     num_proc: int,
     remove_cols: bool = True,
 ):
@@ -198,6 +240,13 @@ def load_and_process_dataset(
         batched=False,
         num_proc=16,
     )
+    if add_negative_prompt and "context" in ds:
+        ds = ds.map(
+            add_negative_prompt_fn,
+            batched=True,
+            batch_size=100_000,
+            # num_proc=num_proc,
+        )
     return ds
 
 
@@ -215,6 +264,7 @@ def get_tokenized_dataset(
     num_chunk_probs: dict[int, float] | None,
     max_ctx_chunk_num: int,
     add_ctx_to_chat: bool,
+    add_negative_prompt: bool,
     use_kl_loss: bool,
     max_new_tokens: int = 256,
     add_self_distill_template: bool = False,
@@ -233,6 +283,7 @@ def get_tokenized_dataset(
     load_and_process_kwargs = dict(
         ds_name=ds_name,
         split=split,
+        add_negative_prompt=add_negative_prompt,
     )
     tokenize_kwargs = dict(
         max_qas_len=max_qas_len,

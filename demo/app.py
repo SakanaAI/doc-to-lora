@@ -27,7 +27,7 @@ except FileNotFoundError:
     DEFAULT_CONTEXT = ""
 
 WARNING_MESSAGE = (
-    "⚠️ **Caution**: This is an academic proof-of-concept demonstration.\n"
+    "⚠️ **Caution**: This is an educational proof-of-concept demonstration.\n"
     "The model may generate inaccurate information or hallucinate facts."
 )
 
@@ -665,6 +665,7 @@ def create_demo():
 
                 chatbot = gr.Chatbot(
                     label="Conversation",
+                    show_copy_button=True,
                     height=500,
                     elem_id="chatbot",
                     elem_classes="chat-container",
@@ -785,7 +786,7 @@ if __name__ == "__main__":
     demo = create_demo()
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=7861,
         share=False,
         debug=True,
     )

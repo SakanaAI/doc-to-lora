@@ -6,6 +6,7 @@ models/
 results/
 datasets/
 llm-comparator/
+trained_d2l/
 # Ignore data files but not scripts
 /data/processed_datasets/
 /data/raw_datasets/

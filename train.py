@@ -280,6 +280,7 @@ def main():
         ctx_model_max_len=ctx_model_max_len,
         ctx_tokenizer=ctx_tokenizer,
         add_ctx_to_chat=add_ctx_to_chat,
+        add_negative_prompt=ctx_args.add_negative_prompt,
         max_ctx_chunk_len=ctx_args.max_ctx_chunk_len,
         min_ctx_chunk_len=ctx_args.min_ctx_chunk_len,
         num_chunk_probs=ctx_args.num_chunk_probs,
