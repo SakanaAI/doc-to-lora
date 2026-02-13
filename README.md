@@ -74,7 +74,7 @@ uv run demo/app.py
 ```
 <div align="center">
     <h3>Video Demo</h3>
-    <video src="https://raw.githubusercontent.com/SakanaAI/doc-to-lora/refs/heads/main/assets/doc-to-lora-demo.mp4" controls autoplay muted playsinline preload="metadata" width="900"></video>
+    <video src="https://github.com/user-attachments/assets/e8a8efa2-93f4-441b-8a54-0649cd724bb5" controls autoplay muted playsinline preload="metadata" width="900"></video>
 </div>
 
 ### 🧪 Experimental Scripts
