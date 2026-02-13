@@ -1,7 +1,3 @@
-# the installation script assumes the following modules (slurm)
-# module load cuda/12.4
-# module load cudnn/9.1.0
-# module load hpcx/v2.21
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv self update
 uv venv --python 3.10 --seed

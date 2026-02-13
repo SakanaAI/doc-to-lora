@@ -145,12 +145,9 @@ def load_checkpoint(
         )
 
 
-def process_multiple_contexts(contexts: list[str]) -> dict:
-    contexts = [ctx for ctx in contexts if ctx.strip()]
-    if not contexts:
-        contexts = [""]
-    print(f"Processing {len(contexts)} non-empty contexts")
-    tokenized_contexts = tokenize_ctx_text({"context": contexts}, ctx_tokenizer)
+def process_context(context: str) -> dict:
+    context = context.strip() if context else ""
+    tokenized_contexts = tokenize_ctx_text({"context": [context]}, ctx_tokenizer)
     ctx_ids = tokenized_contexts["ctx_ids"]
     ctx_ids = [
         torch.tensor(ctx_id, dtype=torch.long, device=device) for ctx_id in ctx_ids
@@ -181,14 +178,8 @@ def add_user_message(message: str, history):
 def generate_response(
     history: list[list[str]],
     system_msg: str,
-    context_1: str,
-    scaler_1: float,
-    context_2: str,
-    scaler_2: float,
-    context_3: str,
-    scaler_3: float,
-    context_4: str,
-    scaler_4: float,
+    context: str,
+    context_scaler: float,
     bias_scaler: float,
 ):
     global modulated_model, chat_history, ctx_tokenizer, base_tokenizer
@@ -210,41 +201,24 @@ def generate_response(
 
         chat_history.append({"role": "user", "content": user_message})
 
-        contexts = []
-        scalers = []
-
-        if context_1 and context_1.strip():
-            contexts.append(context_1)
-            scalers.append(scaler_1)
-        if context_2 and context_2.strip():
-            contexts.append(context_2)
-            scalers.append(scaler_2)
-        if context_3 and context_3.strip():
-            contexts.append(context_3)
-            scalers.append(scaler_3)
-        if context_4 and context_4.strip():
-            contexts.append(context_4)
-            scalers.append(scaler_4)
-
-        if not contexts:
-            contexts = [""]
-            scalers = [1.0]
-
-        print(f"Processing {len(contexts)} contexts with scalers: {scalers}")
+        context = context.strip() if context else ""
+        print(f"Processing single context with scaler: {context_scaler}")
         print(f"Bias scaler: {bias_scaler}")
 
         with torch.inference_mode(), torch.amp.autocast(str(device)):
-            ctx_inputs = process_multiple_contexts(contexts)
+            ctx_inputs = process_context(context)
             ctx_ids = ctx_inputs["ctx_ids"].to(device)
             ctx_attn_mask = ctx_inputs["ctx_attn_mask"].to(device)
 
-            scalers_tensor = torch.tensor(scalers, dtype=torch.float32, device=device)
+            scalers_tensor = torch.tensor(
+                [context_scaler], dtype=torch.float32, device=device
+            )
 
             model_inputs = base_tokenizer.apply_chat_template(
                 chat_history, return_tensors="pt", add_generation_prompt=True
             ).to(device)
 
-            print(f"Contexts: {contexts}")
+            print(f"Context: {context}")
             print(f"Chat history: {chat_history}")
 
             outputs = modulated_model.generate(
@@ -290,13 +264,6 @@ def reset_chat(system_msg: str):
         {"role": "system", "content": system_msg.strip() if system_msg else ""}
     ]
     return [[None, WARNING_MESSAGE]], "Chat history reset successfully!"
-
-
-def update_context_display(num_contexts: int):
-    updates = []
-    for i in range(4):
-        updates.append(gr.update(visible=(i < num_contexts)))
-    return updates
 
 
 custom_css = """
@@ -492,7 +459,7 @@ def create_demo():
             # 📜 Doc-to-LoRA Chat Interface
             
             Load a hypernetwork checkpoint and chat with a context-modulated language model.
-            Add multiple contexts with individual scaling parameters to influence the model's responses.
+            Add one context with a scaling parameter to influence the model's responses.
             """
         )
 
@@ -512,10 +479,9 @@ def create_demo():
             ### 📖 Usage Instructions
             
             1. **Load a Checkpoint**: Select a hypernetwork checkpoint from the dropdown and click "Load Checkpoint"
-            2. **Configure Contexts**: 
-               - Use the slider to choose how many contexts you want (1-4)
-               - Enter your context information in each text field
-               - Adjust the scaling sliders to control the influence of each context
+            2. **Configure Context**:
+               - Enter your context information in the text field
+               - Adjust the scaling slider to control context influence
             3. **Set Bias Scaler**: Adjust the bias scaler to control overall model behavior
             4. **Start Chatting**: Once the model is loaded, type your message and press Shift+Enter or click Send
             5. **Reset**: Use the "Reset Chat" button to start a new conversation
@@ -555,76 +521,24 @@ def create_demo():
                     """
                     <div class="context-section-header">
                         <strong>🧠 Context Internalization (Hypernetwork Input)</strong><br>
-                        <small>These contexts modulate the model internally — they are NOT shown to the base model</small>
+                        <small>This context modulates the model internally — it is NOT shown to the base model</small>
                     </div>
                     """
                 )
 
-                num_contexts = gr.Slider(
-                    minimum=1,
-                    maximum=4,
-                    step=1,
-                    value=1,
-                    label="Number of Contexts to Internalize",
-                    interactive=True,
+                context = gr.Textbox(
+                    label="🧠 Context (Internalized via Hypernetwork)",
+                    placeholder="Enter context to be internalized by the hypernetwork...",
+                    lines=4,
+                    value=DEFAULT_CONTEXT,
                 )
-
-                with gr.Group(visible=True) as context_1_group:
-                    context_1 = gr.Textbox(
-                        label="🧠 Context 1 (Internalized via Hypernetwork)",
-                        placeholder="Enter context to be internalized by the hypernetwork...",
-                        lines=4,
-                        value=DEFAULT_CONTEXT,
-                    )
-                    scaler_1 = gr.Slider(
-                        minimum=-2.0,
-                        maximum=2.0,
-                        step=0.01,
-                        value=1.0,
-                        label="Context 1 Scaling",
-                    )
-
-                with gr.Group(visible=False) as context_2_group:
-                    context_2 = gr.Textbox(
-                        label="🧠 Context 2 (Internalized via Hypernetwork)",
-                        placeholder="Enter additional context to be internalized...",
-                        lines=4,
-                    )
-                    scaler_2 = gr.Slider(
-                        minimum=-2.0,
-                        maximum=2.0,
-                        step=0.01,
-                        value=1.0,
-                        label="Context 2 Scaling",
-                    )
-
-                with gr.Group(visible=False) as context_3_group:
-                    context_3 = gr.Textbox(
-                        label="🧠 Context 3 (Internalized via Hypernetwork)",
-                        placeholder="Enter additional context to be internalized...",
-                        lines=4,
-                    )
-                    scaler_3 = gr.Slider(
-                        minimum=-2.0,
-                        maximum=2.0,
-                        step=0.01,
-                        value=1.0,
-                        label="Context 3 Scaling",
-                    )
-
-                with gr.Group(visible=False) as context_4_group:
-                    context_4 = gr.Textbox(
-                        label="🧠 Context 4 (Internalized via Hypernetwork)",
-                        placeholder="Enter additional context to be internalized...",
-                        lines=4,
-                    )
-                    scaler_4 = gr.Slider(
-                        minimum=-2.0,
-                        maximum=2.0,
-                        step=0.01,
-                        value=1.0,
-                        label="Context 4 Scaling",
-                    )
+                context_scaler = gr.Slider(
+                    minimum=-2.0,
+                    maximum=2.0,
+                    step=0.01,
+                    value=1.0,
+                    label="Context Scaling",
+                )
 
                 gr.Markdown("---")
 
@@ -717,17 +631,6 @@ def create_demo():
             outputs=[chat_status_notice, msg, send_btn, clear_btn, chatbot],
         )
 
-        num_contexts.change(
-            fn=update_context_display,
-            inputs=[num_contexts],
-            outputs=[
-                context_1_group,
-                context_2_group,
-                context_3_group,
-                context_4_group,
-            ],
-        )
-
         msg.submit(
             fn=add_user_message,
             inputs=[msg, chatbot],
@@ -737,14 +640,8 @@ def create_demo():
             inputs=[
                 chatbot,
                 system_msg,
-                context_1,
-                scaler_1,
-                context_2,
-                scaler_2,
-                context_3,
-                scaler_3,
-                context_4,
-                scaler_4,
+                context,
+                context_scaler,
                 bias_scaler,
             ],
             outputs=[chatbot],
@@ -759,14 +656,8 @@ def create_demo():
             inputs=[
                 chatbot,
                 system_msg,
-                context_1,
-                scaler_1,
-                context_2,
-                scaler_2,
-                context_3,
-                scaler_3,
-                context_4,
-                scaler_4,
+                context,
+                context_scaler,
                 bias_scaler,
             ],
             outputs=[chatbot],

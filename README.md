@@ -1,11 +1,28 @@
+# Doc-to-LoRA (D2L): Learning to Instantly Internalize Contexts
 <div align="center">
-    <h1>Doc-to-LoRA</h1>
-    <br>
-    <img height="500px" src="assets/cover.png" />
+    :newspaper:<a href="https://x.com/SakanaAILabs">X</a> |
+    :scroll:<a href="https://arxiv.org/abs/xxxxx">Paper</a> |
+    :hugs:<a href="https://huggingface.co/SakanaAI">Hugging Face</a> |
+    :octocat:<a href="https://github.com/SakanaAI/doc-to-lora">GitHub</a>
+<br>A reference implementation of Doc-to-LoRA (D2L).<br>
+</div>
+<div align="center">
+    <img height="300px" src="assets/overview_animation.gif" />
 </div>
 
-
 ---
+
+## 🛠️ Installation
+```
+curl -LsSf https://astral.sh/uv/install.sh | sh
+./install.sh
+```
+
+## 🤗 Pre-Trained Models
+```
+uv run huggingface-cli login
+uv run huggingface-cli download SakanaAI/doc-to-lora --local-dir . --include "trained_t2l/*"
+```
 
 ## 🚀 Python API Usage
 ```python
@@ -51,10 +68,14 @@ outputs = model.generate(input_ids=chat_ids, max_new_tokens=256)
 print(tokenizer.decode(outputs[0]))
 ```
 
-### 🎮 Interactive Demo [WIP]
+### 🎮 Interactive Demo
 ```bash
 uv run demo/app.py
 ```
+<div align="center">
+    <h3>Video Demo</h3>
+    <video src="assets/doc-to-lora-demo.mp4" controls autoplay muted playsinline preload="metadata" width="900"></video>
+</div>
 
 ### 🧪 Experimental Scripts
 To run any of the following scripts, use `uv run $PATH_TO_SCRIPT` from the root of this project.
@@ -66,14 +87,21 @@ To run any of the following scripts, use `uv run $PATH_TO_SCRIPT` from the root 
 | [NIAH](scripts/niah/)                | `scripts/niah/0-gen_data.sh`          | `scripts/niah/1-train.sh`     | `scripts/niah/2-eval.sh`     | Run the scripts in order; data generation only needs to happen once                                                                 |
 
 
-### Self-Generated Data Viewer
+### 🔬 Self-Generated Data Viewer
 After downloading/generating the data, we can see samples of the data using this script.
 ```bash
 uv run webui/self_gen_viewer.py
 ```
 See more info at [webui/SELF_GEN_VIEWER.md](webui/SELF_GEN_VIEWER.md).
 
-### Citation
+### 📚 Citation
 ```bibtex
-TBD
+@techreport{sakana2025doc-to-lora,
+  title       = {{Doc-to-LoRA: Learning to Instantly Internalize Contexts}},
+  author      = {Rujikorn Charakorn and Edoardo Cetin and Shinnosuke Uesaka and Robert Tjarko Lange},
+  institution = {Sakana AI},
+  year        = {2026},
+  month       = {Febuary},
+  note        = {Technical Report}
+}
 ```
