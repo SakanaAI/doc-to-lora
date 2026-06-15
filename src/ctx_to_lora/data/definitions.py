@@ -1,4 +1,24 @@
+from datasets import Features, Value
+
 IGNORE_INDEX = -100
+
+OOLONG_SYNTH_FEATURES = Features(
+    {
+        "id": Value("int64"),
+        "context_len": Value("int64"),
+        "dataset": Value("large_string"),
+        "context_window_text": Value("large_string"),
+        "context_window_text_with_labels": Value("large_string"),
+        "question": Value("large_string"),
+        "task_group": Value("large_string"),
+        "task": Value("large_string"),
+        "answer": Value("large_string"),
+        "answer_type": Value("large_string"),
+        "input_subset": Value("large_string"),
+        "num_labels": Value("int64"),
+        "context_window_id": Value("int64"),
+    }
+)
 
 TRANSFORMED_DATA_DIR = "data/processed_datasets"
 RAW_DATA_DIR = "data/raw_datasets/"
@@ -27,12 +47,14 @@ LONGBENCH_TASKS = [
     "longbench/qasper",
     "longbench/multifieldqa_en",
     "longbench/2wikimqa",
+    "longbench/gov_report",
 ]
 
 LONGBENCH_E_TASKS = [
     "longbench/qasper_e",
     "longbench/multifieldqa_en_e",
     "longbench/2wikimqa_e",
+    "longbench/gov_report_e",
 ]
 
 DS_KWARGS = {
@@ -124,6 +146,35 @@ DS_KWARGS = {
             data_files="data/raw_datasets/ropes_compact/train/ds.parquet",
             split="train",
         )
+    ),
+    "clipper": dict(
+        train=dict(
+            path="chtmp223/CLIPPER",
+            split="train",
+            verification_mode="no_checks",
+        ),
+        validation=dict(
+            path="chtmp223/CLIPPER",
+            split="dev",
+            verification_mode="no_checks",
+        ),
+        test=dict(
+            path="chtmp223/CLIPPER",
+            split="test",
+            verification_mode="no_checks",
+        ),
+    ),
+    "oolong-synth": dict(
+        validation=dict(
+            path="oolongbench/oolong-synth",
+            split="validation",
+            features=OOLONG_SYNTH_FEATURES,
+        ),
+        test=dict(
+            path="oolongbench/oolong-synth",
+            split="test",
+            features=OOLONG_SYNTH_FEATURES,
+        ),
     ),
 }
 
@@ -245,6 +296,7 @@ EVAL_INTX_TEMPLATES = {
     "longbench/qasper": 'Answer the question as concisely as you can, using a single phrase or sentence if possible.\nIf the question cannot be answered based on the information in the article, write "unanswerable".\nIf the question is a yes/no question, answer "yes", "no", or "unanswerable". Do not provide any explanation.\n\nQuestion: {input}',
     "longbench/multifieldqa_en": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",
     "longbench/2wikimqa": "Answer the following question. Only output the answer and do not output any other words.\n\nQuestion: {input}",
+    "longbench/gov_report": "Write a concise summary of the report. Focus on the main issues, findings, and conclusions.",
 }
 for ds_name in LONGBENCH_E_TASKS:
     EVAL_INTX_TEMPLATES[ds_name] = EVAL_INTX_TEMPLATES[ds_name[:-2]]

@@ -74,6 +74,12 @@ if __name__ == "__main__":
         help="Maximum length of context chunk for evaluation",
     )
     parser.add_argument(
+        "--ctx_chunk_overlap",
+        type=int,
+        default=0,
+        help="Number of overlapping context tokens between adjacent eval chunks",
+    )
+    parser.add_argument(
         "--max_new_tokens",
         type=int,
         default=256,
@@ -134,6 +140,47 @@ if __name__ == "__main__":
         help="Use Text-to-LoRA model for evaluation",
     )
     parser.add_argument(
+        "--use_rag",
+        action="store_true",
+        help="Use retrieval-augmented generation baseline over the dataset context field",
+    )
+    parser.add_argument(
+        "--use_hybrid_rag",
+        action="store_true",
+        help="Use Doc-to-LoRA internalization plus RAG-augmented prompt inputs during evaluation",
+    )
+    parser.add_argument(
+        "--rag_chunk_size",
+        type=int,
+        default=256,
+        help="Token chunk size for the RAG baseline retriever",
+    )
+    parser.add_argument(
+        "--rag_chunk_overlap",
+        type=int,
+        default=64,
+        help="Token overlap between adjacent RAG baseline chunks",
+    )
+    parser.add_argument(
+        "--rag_top_k",
+        type=int,
+        default=4,
+        help="Maximum number of retrieved chunks to include in the RAG prompt",
+    )
+    parser.add_argument(
+        "--rag_max_retrieved_tokens",
+        type=int,
+        default=1536,
+        help="Maximum total retrieved-context tokens to include in the RAG prompt",
+    )
+    parser.add_argument(
+        "--rag_retrieval_mode",
+        type=str,
+        choices=["bm25"],
+        default="bm25",
+        help="Retriever backend for the RAG baseline",
+    )
+    parser.add_argument(
         "--add_ctx_to_input",
         action="store_true",
         help="Add ctx to base model's input",
@@ -162,6 +209,14 @@ if __name__ == "__main__":
         "--use_generative_adapter",
         action="store_true",
         help="Use generative adapter for evaluation",
+    )
+    parser.add_argument(
+        "--log_dense_lora_magnitude",
+        action="store_true",
+        help=(
+            "Compute dense LoRA-update magnitude stats during evaluation and save "
+            "them alongside generated text."
+        ),
     )
 
     cli_args = vars(parser.parse_args())

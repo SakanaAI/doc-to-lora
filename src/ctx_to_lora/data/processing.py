@@ -12,7 +12,14 @@ from typing import Any
 import datasets
 import numpy as np
 import torch
-from datasets import Dataset, interleave_datasets, is_caching_enabled, load_dataset
+from datasets import (
+    Dataset,
+    Features,
+    Value,
+    interleave_datasets,
+    is_caching_enabled,
+    load_dataset,
+)
 from transformers import PreTrainedTokenizerBase
 
 from ctx_to_lora.data.definitions import (
@@ -29,11 +36,29 @@ from ctx_to_lora.data.self_gen_template import QA_PROMPT_TEMPLATE
 from ctx_to_lora.utils import check_is_iterable, concat_list
 
 logger = logging.getLogger()
+OOLONG_SUBSAMPLE_SIZE = 350
+OOLONG_SUBSAMPLE_SEED = 42
+OOLONG_MAX_CONTEXT_LEN = 2**16
 
 COLS_TO_KEEP_PREPROCESSING = [
     "context",
     "prompts",
     "responses",
+    "messages",
+    "true_claim",
+    "false_claim",
+    "status",
+    "claim_type",
+    "book_name",
+    "book_title",
+    "oolong_id",
+    "oolong_dataset",
+    "oolong_task_group",
+    "oolong_task",
+    "oolong_answer_type",
+    "oolong_input_subset",
+    "oolong_num_labels",
+    "oolong_context_window_id",
     "qas",
     "variation",
     "logprobs_vals",
@@ -48,9 +73,154 @@ COLS_TO_KEEP_TOKENIZED = [
     "labels",
     "context",
     "ctx_ids",
+    "book_name",
+    "book_title",
+    "claim_type",
+    "clipper_pair_id",
+    "clipper_status",
+    "clipper_true_claim",
+    "clipper_false_claim",
+    "oolong_id",
+    "oolong_dataset",
+    "oolong_task_group",
+    "oolong_task",
+    "oolong_answer_type",
+    "oolong_input_subset",
+    "oolong_num_labels",
+    "oolong_context_window_id",
     "logprobs_vals",
     "logprobs_indices",
 ]
+
+
+def get_large_string_overridden_features(
+    features: Features,
+    feature_overrides: dict[str, Any],
+) -> Features:
+    overridden_features = Features(dict(features))
+    for column, feature in feature_overrides.items():
+        if column in overridden_features:
+            overridden_features[column] = feature
+    return overridden_features
+
+
+def get_oolong_preprocessed_features(features: Features) -> Features:
+    return get_large_string_overridden_features(
+        features,
+        {
+            "context": Value("large_string"),
+            "prompts": [Value("large_string")],
+            "responses": [Value("large_string")],
+            "oolong_dataset": Value("large_string"),
+            "oolong_task_group": Value("large_string"),
+            "oolong_task": Value("large_string"),
+            "oolong_answer_type": Value("large_string"),
+            "oolong_input_subset": Value("large_string"),
+        },
+    )
+
+
+def get_oolong_messages_features(features: Features) -> Features:
+    overridden_features = get_oolong_preprocessed_features(features)
+    overridden_features["messages_list"] = [
+        [
+            {
+                "role": Value("string"),
+                "content": Value("large_string"),
+            }
+        ]
+    ]
+    return overridden_features
+
+
+def get_dataset_processing_config(ds_name: str, split: str) -> dict[str, Any]:
+    config = {
+        "num_proc": 16,
+        "input_tokenize_batch_size": 100_000,
+        "context_tokenize_batch_size": 100_000,
+        "qa_split_batch_size": 12_500,
+        "preprocess_writer_batch_size": None,
+        "messages_writer_batch_size": None,
+    }
+    if ds_name == "oolong-synth" and "train" not in split:
+        # Oolong has very large contexts, so we still need a conservative path,
+        # but the large_string fixes let us relax the earlier one-at-a-time
+        # settings to recover some throughput.
+        config.update(
+            num_proc=2,
+            input_tokenize_batch_size=512,
+            context_tokenize_batch_size=512,
+            qa_split_batch_size=512,
+            preprocess_writer_batch_size=8,
+            messages_writer_batch_size=8,
+        )
+    return config
+
+
+def stratified_subsample_dataset(
+    ds: Dataset,
+    group_column: str,
+    max_samples: int,
+    seed: int,
+) -> Dataset:
+    if len(ds) <= max_samples:
+        return ds
+
+    group_to_indices: dict[Any, list[int]] = {}
+    for idx, group_value in enumerate(ds[group_column]):
+        group_to_indices.setdefault(group_value, []).append(idx)
+
+    group_values = sorted(group_to_indices)
+    if len(group_values) > max_samples:
+        raise ValueError(
+            f"Cannot keep all {len(group_values)} groups in only {max_samples} samples."
+        )
+
+    quotas = {group_value: 0 for group_value in group_values}
+    remaining = max_samples
+    active_groups = list(group_values)
+
+    # Allocate samples in round-robin order so each context_len bucket is
+    # represented as evenly as possible, while naturally redistributing quota
+    # from exhausted small buckets into the remaining ones.
+    while remaining > 0 and active_groups:
+        next_active_groups = []
+        for group_value in active_groups:
+            if remaining == 0:
+                break
+            if quotas[group_value] < len(group_to_indices[group_value]):
+                quotas[group_value] += 1
+                remaining -= 1
+            if quotas[group_value] < len(group_to_indices[group_value]):
+                next_active_groups.append(group_value)
+        active_groups = next_active_groups
+
+    rng = np.random.default_rng(seed)
+    sampled_indices = []
+    for group_value in group_values:
+        group_indices = np.array(group_to_indices[group_value])
+        group_quota = quotas[group_value]
+        if group_quota == 0:
+            continue
+        if group_quota == len(group_indices):
+            sampled_indices.extend(group_indices.tolist())
+        else:
+            sampled_indices.extend(
+                rng.choice(group_indices, size=group_quota, replace=False).tolist()
+            )
+
+    return ds.select(sorted(sampled_indices))
+
+
+def filter_dataset_by_max_value(
+    ds: Dataset,
+    column: str,
+    max_value: int,
+) -> Dataset:
+    eligible_indices = [
+        idx for idx, value in enumerate(ds[column]) if value <= max_value
+    ]
+    return ds.select(eligible_indices)
 
 
 def get_ds_prob(train_ds_len: list[int], total_len: int):
@@ -208,9 +378,11 @@ def load_and_process_dataset(
     split: str,
     add_negative_prompt: bool,
     num_proc: int,
+    writer_batch_size: int | None = None,
     remove_cols: bool = True,
 ):
     logger.info(f"Loading dataset {ds_name} with split {split}...")
+    is_oolong_eval = ds_name == "oolong-synth" and "train" not in split
     try:
         ds_kwargs = get_ds_kwargs(ds_name, split)
         skip = ds_kwargs.pop("skip", None)
@@ -224,6 +396,18 @@ def load_and_process_dataset(
         raise ValueError(
             f"Failed to load dataset {ds_name} with split {split}. Error: {e}"
         )
+    if is_oolong_eval:
+        ds = filter_dataset_by_max_value(
+            ds=ds,
+            column="context_len",
+            max_value=OOLONG_MAX_CONTEXT_LEN,
+        )
+        ds = stratified_subsample_dataset(
+            ds=ds,
+            group_column="context_len",
+            max_samples=OOLONG_SUBSAMPLE_SIZE,
+            seed=OOLONG_SUBSAMPLE_SEED,
+        )
     cols_to_remove = None
     if remove_cols:
         cols_to_remove = [
@@ -233,12 +417,15 @@ def load_and_process_dataset(
     ds = ds.map(
         get_preprocessing_fn(ds_name, is_eval),
         remove_columns=cols_to_remove,
-        num_proc=16,
+        num_proc=num_proc,
+        writer_batch_size=writer_batch_size,
     )
+    if is_oolong_eval:
+        ds = ds.cast(get_oolong_preprocessed_features(ds.features))
     ds = ds.filter(
         filter_none,
         batched=False,
-        num_proc=16,
+        num_proc=num_proc,
     )
     if add_negative_prompt and "context" in ds:
         ds = ds.map(
@@ -266,6 +453,7 @@ def get_tokenized_dataset(
     add_ctx_to_chat: bool,
     add_negative_prompt: bool,
     use_kl_loss: bool,
+    ctx_chunk_overlap: int = 0,
     max_new_tokens: int = 256,
     add_self_distill_template: bool = False,
     set_format: str | None = None,
@@ -273,17 +461,21 @@ def get_tokenized_dataset(
     truncate_if_too_long_ctx: bool = False,
     flip_ctx_inp: bool = False,
 ) -> dict[str, Any]:
+    if "train" in split and ctx_chunk_overlap > 0:
+        raise ValueError("`ctx_chunk_overlap` is only supported for eval splits.")
     if max_qas_len > 0:
         assert max_qas_len <= base_model_max_len, (
             f"`max_qas_len` should be <= {base_model_max_len=}, got {max_qas_len=}"
         )
     logger.info(f"Loading dataset {ds_name} with split {split}...")
     need_ctx_ids = ctx_model_max_len is not None
+    processing_config = get_dataset_processing_config(ds_name, split)
 
     load_and_process_kwargs = dict(
         ds_name=ds_name,
         split=split,
         add_negative_prompt=add_negative_prompt,
+        writer_batch_size=processing_config["preprocess_writer_batch_size"],
     )
     tokenize_kwargs = dict(
         max_qas_len=max_qas_len,
@@ -292,6 +484,7 @@ def get_tokenized_dataset(
         ctx_model_max_len=ctx_model_max_len,
         add_ctx_to_chat=add_ctx_to_chat,
         max_ctx_chunk_len=max_ctx_chunk_len,
+        ctx_chunk_overlap=ctx_chunk_overlap,
         min_ctx_chunk_len=min_ctx_chunk_len,
         num_chunk_probs=num_chunk_probs,
         max_ctx_chunk_num=max_ctx_chunk_num,
@@ -320,7 +513,7 @@ def get_tokenized_dataset(
             )
         return tokenized_ds
 
-    num_proc = 4
+    num_proc = processing_config["num_proc"]
     ds = load_and_process_dataset(
         **load_and_process_kwargs,
         num_proc=num_proc,
@@ -351,6 +544,7 @@ def get_tokenized_dataset(
         ds = ds.map(unsqueeze, fn_kwargs={"column": "prompts"})
 
     tokenized_ds = construct_and_tokenize_ctx_qa(
+        ds_name=ds_name,
         ds=ds,
         tokenizer=tokenizer,
         ctx_tokenizer=ctx_tokenizer,
@@ -358,6 +552,10 @@ def get_tokenized_dataset(
         num_proc=num_proc,
         truncate_if_too_long_inp=truncate_if_too_long_inp,
         truncate_if_too_long_ctx=truncate_if_too_long_ctx,
+        input_tokenize_batch_size=processing_config["input_tokenize_batch_size"],
+        context_tokenize_batch_size=processing_config["context_tokenize_batch_size"],
+        qa_split_batch_size=processing_config["qa_split_batch_size"],
+        messages_writer_batch_size=processing_config["messages_writer_batch_size"],
         **tokenize_kwargs,
     )
 
@@ -388,39 +586,51 @@ def construct_and_tokenize_ctx_qa(
     min_ctx_chunk_len,
     num_chunk_probs,
     max_ctx_chunk_num,
+    ds_name,
     ds,
     split,
     max_new_tokens,
+    ctx_chunk_overlap=0,
     add_self_distill_template=False,
     set_format=None,
     num_proc=None,
     truncate_if_too_long_inp=False,
     truncate_if_too_long_ctx=False,
+    input_tokenize_batch_size=100_000,
+    context_tokenize_batch_size=100_000,
+    qa_split_batch_size=12_500,
+    messages_writer_batch_size=None,
 ):
     is_train = "train" in split
+    is_oolong_eval = ds_name == "oolong-synth" and not is_train
     # for sft + chat_model, we need to convert the dataset to chat format
     if "input_ids" in ds.column_names and "response_start_end" in ds.column_names:
         # already tokenized dataset (e.g., self-gen qa data)
-        tokenized_ds = ds.map(get_labels_from_input_ids, num_proc=16)
+        tokenized_ds = ds.map(get_labels_from_input_ids, num_proc=num_proc)
     else:
         # construct messages from prompts and responses
         # add "messages_list" field
+        logging.info("Converting context/prompt/response to messages format...")
         ds = ds.map(
             convert_ctx_prompt_response_to_messages,
             fn_kwargs={
                 "add_ctx_to_chat": add_ctx_to_chat,
                 "add_self_distill_template": add_self_distill_template,
             },
-            num_proc=16,
+            num_proc=num_proc,
+            features=(
+                get_oolong_messages_features(ds.features) if is_oolong_eval else None
+            ),
+            writer_batch_size=messages_writer_batch_size,
         )
         # add `input_ids`, `attention_mask`, `labels`
         os.environ["TOKENIZERS_PARALLELISM"] = "true"
-        logging.debug("Tokenizing inputs")
+        logging.info("Tokenizing inputs")
 
         tokenized_ds = ds.map(
             get_sft_prompt_formatting_fn(tokenizer),
             batched=True,
-            batch_size=100_000,
+            batch_size=input_tokenize_batch_size,
         )
 
     tokenized_ds = tokenized_ds.remove_columns(
@@ -428,7 +638,7 @@ def construct_and_tokenize_ctx_qa(
     )
     tokenized_ds = tokenized_ds.filter(
         lambda x: bool(x["input_ids"]),  # remove empty "input_ids"
-        num_proc=16,
+        num_proc=num_proc,
     )
 
     if need_ctx_ids:
@@ -441,19 +651,19 @@ def construct_and_tokenize_ctx_qa(
                 detokenize_ctx_text,
                 fn_kwargs={"tokenizer": tokenizer},
                 batched=True,
-                batch_size=100_000,
+                batch_size=context_tokenize_batch_size,
                 remove_columns=["ctx_ids"],
             )
 
         if "ctx_ids" not in tokenized_ds.column_names:
             # tokenize the ctx_text to get ctx_ids and ctx_attn_mask
             os.environ["TOKENIZERS_PARALLELISM"] = "true"
-            logging.debug("Tokenizing context")
+            logging.info("Tokenizing context")
             tokenized_ds = tokenized_ds.map(
                 tokenize_ctx_text,
                 fn_kwargs={"tokenizer": ctx_tokenizer},
                 batched=True,
-                batch_size=100_000,
+                batch_size=context_tokenize_batch_size,
                 remove_columns=["context"],
             )
 
@@ -465,6 +675,7 @@ def construct_and_tokenize_ctx_qa(
         # with some big caveats, e.g., losing order info
         split_ctx_kwargs = {
             "max_chunk_len": max_ctx_chunk_len,
+            "chunk_overlap": ctx_chunk_overlap,
             "min_chunk_len": min_ctx_chunk_len,
             "num_chunk_probs": num_chunk_probs,
             "max_num_split": max_ctx_chunk_num,
@@ -475,7 +686,7 @@ def construct_and_tokenize_ctx_qa(
         tokenized_ds = tokenized_ds.map(
             split_too_long_ctx,
             fn_kwargs=split_ctx_kwargs,
-            num_proc=16,
+            num_proc=num_proc,
         )
 
         logging.info(f"Num samples after ctx chunking: {len(tokenized_ds)}")
@@ -493,11 +704,12 @@ def construct_and_tokenize_ctx_qa(
             split_too_long_qas,
             fn_kwargs=split_qa_kwargs,
             batched=True,
-            batch_size=12_500,
-            num_proc=16,
+            batch_size=qa_split_batch_size,
+            num_proc=num_proc,
         )
     if "train" not in split:
         # squeeze since we always have one query per sample in eval
+        logger.info("Squeezing input_ids and labels for eval...")
         tokenized_ds = tokenized_ds.map(squeeze_tokens, num_proc=num_proc)
         tokenized_ds = tokenized_ds.map(
             add_length_info,
@@ -683,6 +895,7 @@ def split_too_long_ctx(
     min_chunk_len: int,
     max_num_split: int | None,
     is_train: bool,
+    chunk_overlap: int = 0,
 ) -> dict[str, Any]:
     """
     Split context into smaller chunks if it exceeds the maximum length.
@@ -698,6 +911,12 @@ def split_too_long_ctx(
 
     chunk_len = max_chunk_len
     ctx_ids = sample["ctx_ids"]
+    if chunk_overlap < 0:
+        raise ValueError("`chunk_overlap` must be >= 0.")
+    if chunk_len > 0 and chunk_overlap >= chunk_len:
+        raise ValueError("`chunk_overlap` must be smaller than `max_chunk_len`.")
+    if is_train and chunk_overlap > 0:
+        raise ValueError("`chunk_overlap` is only supported for eval splits.")
     # Early exits
     if chunk_len <= 0 and max_num_split is None:
         return {"ctx_ids": [ctx_ids], "n_ctx_chunks": 1}
@@ -732,7 +951,22 @@ def split_too_long_ctx(
         return {"ctx_ids": [ctx_ids], "n_ctx_chunks": 1}
 
     avg_len = ceil(len(ctx_ids) / n_chunks)
-    chunks = [ctx_ids[i : i + avg_len] for i in range(0, len(ctx_ids), avg_len)]
+
+    if chunk_overlap > 0:
+        if chunk_overlap >= avg_len:
+            raise ValueError(
+                "Derived eval chunk window is too small for the requested overlap: "
+                f"window_len={avg_len}, chunk_overlap={chunk_overlap}."
+            )
+
+        stride = avg_len - chunk_overlap
+        last_start = max(0, len(ctx_ids) - avg_len)
+        start_positions = list(range(0, last_start + 1, stride))
+        if start_positions[-1] != last_start:
+            start_positions.append(last_start)
+        chunks = [ctx_ids[i : i + avg_len] for i in start_positions]
+    else:
+        chunks = [ctx_ids[i : i + avg_len] for i in range(0, len(ctx_ids), avg_len)]
 
     ctx_affixes = CTX_AFFIXES[model_name_or_path]
     prefix = ctx_affixes["prefix"]

@@ -73,7 +73,6 @@ print(tokenizer.decode(outputs[0]))
 uv run demo/app.py
 ```
 <div align="center">
-    <h3>Video Demo</h3>
     <video src="https://github.com/user-attachments/assets/f46325b1-d040-48f0-8b3e-deba0e6218ff" controls autoplay muted playsinline preload="metadata" width="900"></video>
 </div>
 
@@ -86,6 +85,39 @@ To run any of the following scripts, use `uv run $PATH_TO_SCRIPT` from the root 
 | [Main experiment](scripts/main_exp/) | `scripts/main_exp/0-download_data.sh` | `scripts/main_exp/1-train.sh` | `scripts/main_exp/eval/*.sh` | Downloading data is fastest; regenerate only if you need fresh synthetic data. Evaluation scripts reproduce the main paper metrics. |
 | [NIAH](scripts/niah/)                | `scripts/niah/0-gen_data.sh`          | `scripts/niah/1-train.sh`     | `scripts/niah/2-eval.sh`     | Run the scripts in order; data generation only needs to happen once                                                                 |
 
+`scripts/main_exp/eval/clipper.sh` adds the CLIPPER long-context benchmark to the eval pipeline via the public `chtmp223/CLIPPER` Hugging Face dataset.
+
+`scripts/main_exp/eval/rag.sh` runs a lightweight BM25-style RAG baseline over each example's `context` field. It keeps dataset-side context chunking disabled and performs retrieval chunking inside the eval-time wrapper.
+
+```bash
+WANDB_MODE=disabled uv run run_eval.py \
+  --model_name_or_path google/gemma-2-2b-it \
+  --datasets squad drop ropes \
+  --split test \
+  --eval_batch_size_gen 1 \
+  --use_rag \
+  --rag_chunk_size 256 \
+  --rag_chunk_overlap 64 \
+  --rag_top_k 4 \
+  --rag_max_retrieved_tokens 1536
+```
+
+`scripts/main_exp/eval/d2l_rag.sh` runs a hybrid mode where Doc-to-LoRA internalizes the full document while the same document is also queried with BM25-style retrieval to build a smaller prompt-side evidence block.
+
+```bash
+WANDB_MODE=disabled uv run run_eval.py \
+  --checkpoint_path train_outputs/runs/$RUN_NAME/checkpoint-$step/pytorch_model.bin \
+  --datasets squad drop ropes \
+  --split test \
+  --eval_batch_size_gen 1 \
+  --use_hybrid_rag \
+  --rag_chunk_size 256 \
+  --rag_chunk_overlap 64 \
+  --rag_top_k 4 \
+  --rag_max_retrieved_tokens 1536
+```
+
+Generated JSONL outputs include compact retrieval metadata under `rag_selected_chunks` together with prompt/context token counts for debugging.
 
 ### 🔬 Self-Generated Data Viewer
 After downloading/generating the data, we can see samples of the data using this script.

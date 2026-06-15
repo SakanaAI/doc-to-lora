@@ -32,6 +32,7 @@ from ctx_to_lora.configs import (
     HypernetArguments,
 )
 from ctx_to_lora.data.processing import tokenize_ctx_text
+from ctx_to_lora.lora_stats import DenseLoraMagnitudeAggregator
 from ctx_to_lora.model_loading import (
     get_model,
     get_tokenizer,
@@ -461,6 +462,10 @@ class ModulatedPretrainedModel(nn.Module):
         self.inp_compressor = inp_compressor
         self.model_accepts_loss_kwargs = True
         self.generated_loras = None
+        self.log_dense_lora_magnitude = False
+        self.dense_lora_magnitude = DenseLoraMagnitudeAggregator(
+            scaling=self.peft_config.lora_alpha
+        )
 
         self.register_module("base_model", base_model)
         self._init_model()
@@ -683,6 +688,27 @@ class ModulatedPretrainedModel(nn.Module):
     def enable_iterative_mode(self, x: bool):
         self.hypernet.enable_iterative_mode(x)
 
+    def enable_dense_lora_magnitude_logging(
+        self, x: bool, out_chunk_size: int = 8
+    ) -> None:
+        self.log_dense_lora_magnitude = x
+        self.dense_lora_magnitude.scaling = self.peft_config.lora_alpha
+        self.dense_lora_magnitude.out_chunk_size = out_chunk_size
+        self.dense_lora_magnitude.reset()
+
+    def reset_dense_lora_magnitude_stats(self) -> None:
+        self.dense_lora_magnitude.reset()
+
+    def get_dense_lora_magnitude_stats(self) -> dict[str, object]:
+        return self.dense_lora_magnitude.to_dict()
+
+    def _maybe_track_dense_lora_magnitude(
+        self, generated_loras: dict[str, dict[str, Tensor]] | None
+    ) -> None:
+        if not self.log_dense_lora_magnitude or generated_loras is None:
+            return
+        self.dense_lora_magnitude.update(generated_loras)
+
     def forward(
         self,
         ctx_ids: Integer[Tensor, "n_ctx ctx_len"] | None = None,
@@ -735,6 +761,7 @@ class ModulatedPretrainedModel(nn.Module):
                 if self.hypernet.config.use_bias
                 else None,
             )
+            self._maybe_track_dense_lora_magnitude(generated_loras)
 
             # input_ids in model_inputs_kwargs contains only
             # prompt + response (for hypernet training)
@@ -877,6 +904,7 @@ class ModulatedPretrainedModel(nn.Module):
                 scalers=scalers,
                 bias_scaler=bias_scaler,
             )
+            self._maybe_track_dense_lora_magnitude(generated_loras)
 
             # apply lora hook to the base model
             # TODO: we dont this position_ids for generation?

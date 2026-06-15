@@ -1,5 +1,7 @@
+import hashlib
 import logging
 import random
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -7,6 +9,8 @@ from ctx_to_lora.data.definitions import CLOSED_QA_INTX_TEMPLATES, EVAL_INTX_TEM
 from ctx_to_lora.utils import concat_list
 
 logger = logging.getLogger()
+
+_CLIPPER_CONTEXT_RE = re.compile(r"<context>(.*?)</context>", re.DOTALL)
 
 
 def closed_qa_prompting(prompt: str):
@@ -23,6 +27,20 @@ def chat_to_str(messages: list[dict[str, str]]):
             for m in messages
         ]
     )
+
+
+def parse_clipper_user_message(user_message: str) -> tuple[str, str]:
+    match = _CLIPPER_CONTEXT_RE.search(user_message)
+    if match is None:
+        raise ValueError("Could not find <context>...</context> block in CLIPPER row.")
+
+    context = match.group(1).strip()
+    prompt_parts = [
+        user_message[: match.start()].strip(),
+        user_message[match.end() :].strip(),
+    ]
+    prompt = "\n\n".join(part for part in prompt_parts if part)
+    return context, prompt
 
 
 def get_preprocessing_fn(
@@ -73,6 +91,52 @@ def get_preprocessing_fn(
                 "context": sample["context"],
                 "prompt": sample["input"],
                 "response": sample["answers"][0],
+            }
+
+    elif ds_name == "clipper":
+
+        def f(sample):
+            messages = sample["messages"]
+            if len(messages) < 3:
+                raise ValueError(
+                    f"Expected at least 3 messages in CLIPPER row, got {len(messages)}"
+                )
+
+            context, prompt = parse_clipper_user_message(messages[1]["content"])
+            pair_id = hashlib.sha1(
+                f"{sample['true_claim']}\n{sample['false_claim']}".encode()
+            ).hexdigest()
+
+            return {
+                # "system_message": "",
+                "context": context.replace("-", " "),
+                # "prompt": prompt,
+                "prompt": "Who is Tarrano?",
+                "response": messages[2]["content"],
+                "book_name": sample["book_name"],
+                "book_title": sample["book_title"],
+                "claim_type": sample["claim_type"],
+                "clipper_pair_id": pair_id,
+                "clipper_status": sample["status"],
+                "clipper_true_claim": sample["true_claim"],
+                "clipper_false_claim": sample["false_claim"],
+            }
+
+    elif ds_name == "oolong-synth":
+
+        def f(sample):
+            return {
+                "context": sample["context_window_text"],
+                "prompt": sample["question"],
+                "response": sample["answer"],
+                "oolong_id": sample["id"],
+                "oolong_dataset": sample["dataset"],
+                "oolong_task_group": sample["task_group"],
+                "oolong_task": sample["task"],
+                "oolong_answer_type": sample["answer_type"],
+                "oolong_input_subset": sample["input_subset"],
+                "oolong_num_labels": sample["num_labels"],
+                "oolong_context_window_id": sample["context_window_id"],
             }
 
     elif ds_name == "pwc" or ds_name == "pwc_tiny":

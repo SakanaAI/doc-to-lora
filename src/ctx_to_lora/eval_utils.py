@@ -1,3 +1,4 @@
+import ast
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ from collections import Counter, defaultdict
 from dataclasses import fields
 from functools import partial
 
+import dateutil
 import numpy as np
 import pandas as pd
 import torch
@@ -55,6 +57,7 @@ from ctx_to_lora.modeling.context_distillation import CtxDistillModel
 from ctx_to_lora.modeling.generative_adapter import GenerativeAdapter
 from ctx_to_lora.modeling.hypernet import ModulatedPretrainedModel
 from ctx_to_lora.modeling.llm_lingua import LLMLinguaModel
+from ctx_to_lora.modeling.rag import DocToLoraRAGModel, RAGModel
 from ctx_to_lora.modeling.text_to_lora import TextToLoRA
 from ctx_to_lora.tracker.tracker import (
     add_tracker,
@@ -82,6 +85,11 @@ _SQUOTES = re.compile(r"[‘’ʼ]")  # curly apostrophes → '
 _ELLIPSIS = re.compile(r"…")  # single‐char ellipsis → "..."
 _ENDASH = re.compile(r"\u2013")
 _EMDASH = re.compile(r"\u2014")
+_CLIPPER_ANSWER_TAG = re.compile(
+    r"<answer>\s*(true|false)\s*</answer>",
+    re.IGNORECASE | re.DOTALL,
+)
+_CLIPPER_BOOL = re.compile(r"\b(true|false)\b", re.IGNORECASE)
 
 
 def humanize_str(text: str) -> str:
@@ -178,6 +186,199 @@ def compute_qa_f1_score(
     ), dict(qa_f1_score=f1_scores, qa_precision=precisions, qa_recall=recalls)
 
 
+def extract_clipper_answer(text: str) -> str | None:
+    if not isinstance(text, str):
+        return None
+
+    text = humanize_str(text)
+    match = _CLIPPER_ANSWER_TAG.search(text)
+    if match is not None:
+        return match.group(1).lower()
+
+    matches = _CLIPPER_BOOL.findall(text)
+    if matches:
+        return matches[-1].lower()
+
+    return None
+
+
+def compute_clipper_metrics(
+    decoded_txts: list[dict[str, object]],
+) -> tuple[dict[str, float | int | str], dict[str, list[float]], dict[str, int]]:
+    row_accs = []
+    parse_successes = []
+    true_accs = []
+    false_accs = []
+    pair_outcomes = defaultdict(dict)
+
+    for sample in decoded_txts:
+        predicted = extract_clipper_answer(sample["generated"])
+        gold = sample.get("clipper_status")
+        if gold not in {"true", "false"}:
+            gold = extract_clipper_answer(sample.get("label", ""))
+
+        is_parsed = predicted in {"true", "false"}
+        is_correct = bool(is_parsed and gold in {"true", "false"} and predicted == gold)
+
+        row_accs.append(float(is_correct))
+        parse_successes.append(float(is_parsed))
+
+        if gold == "true":
+            true_accs.append(float(is_correct))
+        elif gold == "false":
+            false_accs.append(float(is_correct))
+
+        pair_id = sample.get("clipper_pair_id")
+        if pair_id and gold in {"true", "false"}:
+            pair_outcomes[pair_id][gold] = is_correct
+
+    pair_correct_by_id = {}
+    for pair_id, outcomes in pair_outcomes.items():
+        if {"true", "false"}.issubset(outcomes):
+            pair_correct_by_id[pair_id] = float(outcomes["true"] and outcomes["false"])
+
+    metrics = {
+        "clipper_accuracy": float(np.mean(row_accs)) if row_accs else "None",
+        "clipper_parse_rate": (
+            float(np.mean(parse_successes)) if parse_successes else "None"
+        ),
+        "clipper_true_accuracy": float(np.mean(true_accs)) if true_accs else "None",
+        "clipper_false_accuracy": float(np.mean(false_accs)) if false_accs else "None",
+        "clipper_pair_accuracy": (
+            float(np.mean(list(pair_correct_by_id.values())))
+            if pair_correct_by_id
+            else "None"
+        ),
+    }
+    per_sample_metric = {
+        "clipper_accuracy": row_accs,
+        "clipper_parse_rate": parse_successes,
+        "clipper_pair_accuracy": [
+            pair_correct_by_id.get(sample.get("clipper_pair_id"), 0.0)
+            for sample in decoded_txts
+        ],
+    }
+    counts = {
+        "clipper_accuracy": len(row_accs),
+        "clipper_parse_rate": len(parse_successes),
+        "clipper_true_accuracy": len(true_accs),
+        "clipper_false_accuracy": len(false_accs),
+        "clipper_pair_accuracy": len(pair_correct_by_id),
+    }
+    return metrics, per_sample_metric, counts
+
+
+def parse_oolong_gold_answer(answer: object) -> object | None:
+    if not isinstance(answer, str):
+        return answer
+
+    answer = humanize_str(answer).strip()
+    if not answer:
+        return None
+
+    if "datetime.date" in answer:
+        match = re.search(r"datetime\.date\((\d+),\s*(\d+),\s*(\d+)\)", answer)
+        if match is None:
+            return answer
+        year, month, day = (int(group) for group in match.groups())
+        return pd.Timestamp(year=year, month=month, day=day).date()
+
+    try:
+        parsed = ast.literal_eval(answer)
+    except (ValueError, SyntaxError):
+        return answer
+
+    if isinstance(parsed, list) and parsed:
+        return parsed[0]
+    return parsed
+
+
+def extract_oolong_answer(answer: object) -> tuple[object | None, str]:
+    if not isinstance(answer, str):
+        return None, "low"
+
+    answer = humanize_str(answer).strip()
+    if not answer:
+        return None, "low"
+
+    parse_confidence = "low"
+    if ":" not in answer:
+        candidate = answer if len(answer) < 20 else answer.split()[-1]
+        return candidate.strip("[]* "), parse_confidence
+
+    candidate = answer.split(":")[-1].strip()
+    candidate = candidate.replace("*", "")
+    candidate = candidate.replace("[", "")
+    candidate = candidate.replace("]", "")
+    parse_confidence = "med"
+
+    if any(marker in answer for marker in ("User:", "Answer:", "Date:", "Label")):
+        parse_confidence = "high"
+
+    if len(candidate) < 20:
+        parse_confidence = "vhigh"
+    elif "more common" in candidate:
+        candidate = "more common"
+    elif "less common" in candidate:
+        candidate = "less common"
+    elif "same frequency" in candidate:
+        candidate = "same frequency"
+
+    return candidate.strip(), parse_confidence
+
+
+def compute_oolong_metrics(
+    decoded_txts: list[dict[str, object]],
+) -> tuple[dict[str, float | int | str], dict[str, list[float]], dict[str, int]]:
+    scores = []
+    parse_successes = []
+
+    for sample in decoded_txts:
+        gold = parse_oolong_gold_answer(sample.get("label"))
+        predicted, parse_confidence = extract_oolong_answer(sample.get("generated"))
+        answer_type = sample.get("oolong_answer_type")
+        score = 0.0
+
+        if str(predicted) == str(gold):
+            score = 1.0
+        elif (
+            isinstance(predicted, str)
+            and predicted in {"more common", "less common", "same frequency"}
+            and predicted in str(gold)
+        ):
+            score = 1.0
+        elif answer_type == "ANSWER_TYPE.NUMERIC":
+            try:
+                score = 0.75 ** abs(int(gold) - int(predicted))
+            except (TypeError, ValueError):
+                parse_confidence = "low"
+        elif answer_type == "ANSWER_TYPE.DATE":
+            try:
+                parsed_date = dateutil.parser.parse(str(predicted)).date()
+                score = float(parsed_date == gold)
+            except (TypeError, ValueError, OverflowError):
+                parse_confidence = "low"
+
+        scores.append(float(score))
+        parse_successes.append(float(parse_confidence != "low"))
+
+    metrics = {
+        "oolong_score": float(np.mean(scores)) if scores else "None",
+        "oolong_parse_rate": (
+            float(np.mean(parse_successes)) if parse_successes else "None"
+        ),
+    }
+    per_sample_metric = {
+        "oolong_score": scores,
+        "oolong_parse_rate": parse_successes,
+    }
+    counts = {
+        "oolong_score": len(scores),
+        "oolong_parse_rate": len(parse_successes),
+    }
+    return metrics, per_sample_metric, counts
+
+
 def add_longbench_tasks(ds_names: list[str]) -> None:
     """Add longbench tasks to dataset names list."""
     if "longbench" in ds_names:
@@ -209,6 +410,48 @@ def save_generated_text(
             for metric_name in metric_keys:
                 sample[f"{metric_name}"] = per_sample_metric[metric_name][i]
             f.write(json.dumps(sample) + "\n")
+
+
+def save_dense_lora_magnitude_stats(
+    stats: dict[str, object],
+    output_dir: str,
+    split: str,
+) -> None:
+    """Save aggregate dense LoRA magnitude stats to JSON."""
+    os.makedirs(output_dir, exist_ok=True)
+    if "/" in split:
+        split_dir = os.path.join(output_dir, os.path.dirname(split))
+        os.makedirs(split_dir, exist_ok=True)
+
+    with open(f"{output_dir}/{split}_dense_lora_magnitude.json", "w") as f:
+        json.dump(stats, f, indent=2, sort_keys=True)
+
+
+def flatten_dense_lora_magnitude_metrics(
+    stats: dict[str, object],
+) -> dict[str, float | int]:
+    """Flatten dense LoRA stats for trainer logging."""
+    out = {}
+
+    overall = stats.get("overall", {})
+    for metric_name in ("mean", "min", "max", "std", "count"):
+        value = overall.get(metric_name)
+        if value is not None:
+            out[f"dense_lora_magnitude_{metric_name}"] = value
+
+    for metric_name in ("num_examples", "num_batches", "num_layer_matrices"):
+        value = stats.get(metric_name)
+        if value is not None:
+            out[f"dense_lora_magnitude_{metric_name}"] = value
+
+    by_module = stats.get("by_module", {})
+    for module_name, module_stats in by_module.items():
+        for metric_name in ("mean", "min", "max", "std", "count"):
+            value = module_stats.get(metric_name)
+            if value is not None:
+                out[f"dense_lora_magnitude_{module_name}_{metric_name}"] = value
+
+    return out
 
 
 # ============================================================================
@@ -478,6 +721,23 @@ def decode_test_result(
     test_dataset, test_result, tokenizer, ctx_tokenizer
 ) -> list[dict]:
     """Decode test results into human-readable format."""
+    metadata_keys = (
+        "book_name",
+        "book_title",
+        "claim_type",
+        "clipper_pair_id",
+        "clipper_status",
+        "clipper_true_claim",
+        "clipper_false_claim",
+        "oolong_id",
+        "oolong_dataset",
+        "oolong_task_group",
+        "oolong_task",
+        "oolong_answer_type",
+        "oolong_input_subset",
+        "oolong_num_labels",
+        "oolong_context_window_id",
+    )
     out = []
     for sample, pred_toks in zip(test_dataset, test_result.predictions):
         d = dict()
@@ -511,6 +771,15 @@ def decode_test_result(
             d["context"] = ctx_tokenizer.decode(
                 concat_list(sample["ctx_ids"]), skip_special_tokens=False
             )
+        for key in metadata_keys:
+            if key in sample:
+                value = sample[key]
+                if hasattr(value, "item"):
+                    try:
+                        value = value.item()
+                    except (TypeError, ValueError):
+                        pass
+                d[key] = value
         for k in sample:
             if k.endswith("_len"):
                 d[k] = sample[k].item()
@@ -546,12 +815,29 @@ def eval_generation(
             split_name += "_no_context"
 
         clear_gpu()
+        if hasattr(eval_trainer.model, "reset_retrieval_history"):
+            eval_trainer.model.reset_retrieval_history()
+        if getattr(eval_trainer.model, "log_dense_lora_magnitude", False) and hasattr(
+            eval_trainer.model, "reset_dense_lora_magnitude_stats"
+        ):
+            eval_trainer.model.reset_dense_lora_magnitude_stats()
         eval_result = eval_trainer.predict(
             ds,
             metric_key_prefix=split_name,
             **gen_kwargs,
         )
         decoded_txts = decode_test_result(ds, eval_result, tokenizer, ctx_tokenizer)
+        if hasattr(eval_trainer.model, "get_retrieval_history"):
+            retrieval_history = eval_trainer.model.get_retrieval_history()
+            if len(retrieval_history) == len(decoded_txts):
+                for decoded, retrieval in zip(decoded_txts, retrieval_history):
+                    decoded.update(retrieval)
+            else:
+                logger.warning(
+                    "RAG retrieval history length (%s) does not match decoded samples (%s).",
+                    len(retrieval_history),
+                    len(decoded_txts),
+                )
 
         pred_texts = [txt["generated"] for txt in decoded_txts]
         label_texts = [txt["label"] for txt in decoded_txts]
@@ -560,8 +846,17 @@ def eval_generation(
         else:
             answers_list = [[txt] for txt in label_texts]
         n = len(pred_texts)
+        metric_mode = (
+            "clipper"
+            if ds_name == "clipper"
+            else "oolong"
+            if ds_name == "oolong-synth"
+            else "closed_qa"
+            if ds_name in CLOSED_QA_DATASETS
+            else "rouge"
+        )
 
-        if ds_name in CLOSED_QA_DATASETS:
+        if metric_mode == "closed_qa":
             print("Computing QA F1 Score")
             qa_f1_metric, per_sample_metric = compute_qa_f1_score(
                 pred_texts, answers_list
@@ -569,6 +864,22 @@ def eval_generation(
             for k, v in qa_f1_metric.items():
                 eval_result.metrics[f"{split_name}_{k}"] = v
                 eval_result.metrics[f"{split_name}_num_samples_{k}"] = n
+        elif metric_mode == "clipper":
+            print("Computing CLIPPER Accuracy")
+            clipper_metrics, per_sample_metric, metric_counts = compute_clipper_metrics(
+                decoded_txts
+            )
+            for k, v in clipper_metrics.items():
+                eval_result.metrics[f"{split_name}_{k}"] = v
+                eval_result.metrics[f"{split_name}_num_samples_{k}"] = metric_counts[k]
+        elif metric_mode == "oolong":
+            print("Computing Oolong Score")
+            oolong_metrics, per_sample_metric, metric_counts = compute_oolong_metrics(
+                decoded_txts
+            )
+            for k, v in oolong_metrics.items():
+                eval_result.metrics[f"{split_name}_{k}"] = v
+                eval_result.metrics[f"{split_name}_num_samples_{k}"] = metric_counts[k]
         else:
             rouge_metrics, per_sample_metric = compute_rouge(pred_texts, label_texts)
             for k, v in rouge_metrics.items():
@@ -577,8 +888,22 @@ def eval_generation(
 
         # Ensure all keys for length metrics are present, even if a bin is empty
         for low, high in LENGTH_BINS:
-            if ds_name in CLOSED_QA_DATASETS:
+            if metric_mode == "closed_qa":
                 eval_result.metrics[f"{split_name}_qa_f1_len_{low}-{high}"] = "None"
+            elif metric_mode == "clipper":
+                eval_result.metrics[
+                    f"{split_name}_clipper_accuracy_len_{low}-{high}"
+                ] = "None"
+                eval_result.metrics[
+                    f"{split_name}_clipper_pair_accuracy_len_{low}-{high}"
+                ] = "None"
+            elif metric_mode == "oolong":
+                eval_result.metrics[f"{split_name}_oolong_score_len_{low}-{high}"] = (
+                    "None"
+                )
+                eval_result.metrics[
+                    f"{split_name}_oolong_parse_rate_len_{low}-{high}"
+                ] = "None"
             else:
                 eval_result.metrics[f"{split_name}_rougeL.f1_len_{low}-{high}"] = "None"
 
@@ -596,10 +921,9 @@ def eval_generation(
 
         for group_key, data in grouped_texts.items():
             if data["count"] > 0:
-                if ds_name in CLOSED_QA_DATASETS:
+                if metric_mode == "closed_qa":
                     # Get corresponding answers for this group
                     group_answers = []
-                    group_idx = 0
                     for i, txt in enumerate(decoded_txts):
                         len_key = (
                             "ctx_ids_len" if "ctx_ids_len" in txt else "input_ids_len"
@@ -624,6 +948,50 @@ def eval_generation(
                         eval_result.metrics[
                             f"{split_name}_num_samples_{k}_len_{group_key}"
                         ] = data["count"]
+                elif metric_mode == "clipper":
+                    group_txts = []
+                    for txt in decoded_txts:
+                        len_key = (
+                            "ctx_ids_len" if "ctx_ids_len" in txt else "input_ids_len"
+                        )
+                        input_len = txt[len_key]
+                        for low, high in LENGTH_BINS:
+                            if (
+                                low <= input_len <= high
+                                and f"{low}-{high}" == group_key
+                            ):
+                                group_txts.append(txt)
+
+                    group_clipper_metrics, _, group_counts = compute_clipper_metrics(
+                        group_txts
+                    )
+                    for k, v in group_clipper_metrics.items():
+                        eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
+                        eval_result.metrics[
+                            f"{split_name}_num_samples_{k}_len_{group_key}"
+                        ] = group_counts[k]
+                elif metric_mode == "oolong":
+                    group_txts = []
+                    for txt in decoded_txts:
+                        len_key = (
+                            "ctx_ids_len" if "ctx_ids_len" in txt else "input_ids_len"
+                        )
+                        input_len = txt[len_key]
+                        for low, high in LENGTH_BINS:
+                            if (
+                                low <= input_len <= high
+                                and f"{low}-{high}" == group_key
+                            ):
+                                group_txts.append(txt)
+
+                    group_oolong_metrics, _, group_counts = compute_oolong_metrics(
+                        group_txts
+                    )
+                    for k, v in group_oolong_metrics.items():
+                        eval_result.metrics[f"{split_name}_{k}_len_{group_key}"] = v
+                        eval_result.metrics[
+                            f"{split_name}_num_samples_{k}_len_{group_key}"
+                        ] = group_counts[k]
                 else:
                     group_rouge_metrics, _ = compute_rouge(
                         data["generated"], data["label"]
@@ -634,6 +1002,19 @@ def eval_generation(
                         eval_result.metrics[
                             f"{split_name}_num_samples_{k}_len_{group_key}"
                         ] = data["count"]
+
+        if getattr(eval_trainer.model, "log_dense_lora_magnitude", False) and hasattr(
+            eval_trainer.model, "get_dense_lora_magnitude_stats"
+        ):
+            dense_lora_stats = eval_trainer.model.get_dense_lora_magnitude_stats()
+            dense_lora_metrics = flatten_dense_lora_magnitude_metrics(dense_lora_stats)
+            for metric_name, value in dense_lora_metrics.items():
+                eval_result.metrics[f"{split_name}_{metric_name}"] = value
+            save_dense_lora_magnitude_stats(
+                dense_lora_stats,
+                split=split_name,
+                output_dir=eval_trainer.args.output_dir,
+            )
 
         save_generated_text(
             decoded_txts,
@@ -679,7 +1060,23 @@ def eval_teacher_forcing(
         if remove_context:
             split_name += "_no_context"
 
+        if getattr(eval_trainer.model, "log_dense_lora_magnitude", False) and hasattr(
+            eval_trainer.model, "reset_dense_lora_magnitude_stats"
+        ):
+            eval_trainer.model.reset_dense_lora_magnitude_stats()
         metrics = eval_trainer.evaluate(ds, metric_key_prefix=split_name)
+        if getattr(eval_trainer.model, "log_dense_lora_magnitude", False) and hasattr(
+            eval_trainer.model, "get_dense_lora_magnitude_stats"
+        ):
+            dense_lora_stats = eval_trainer.model.get_dense_lora_magnitude_stats()
+            dense_lora_metrics = flatten_dense_lora_magnitude_metrics(dense_lora_stats)
+            for metric_name, value in dense_lora_metrics.items():
+                metrics[f"{split_name}_{metric_name}"] = value
+            save_dense_lora_magnitude_stats(
+                dense_lora_stats,
+                split=split_name,
+                output_dir=eval_trainer.args.output_dir,
+            )
         out[split_name] = metrics
         eval_trainer.log_metrics(split_name, metrics)
         eval_trainer.save_metrics(split_name, metrics)
@@ -707,6 +1104,7 @@ def evaluate(
     args: Namespace,
     split: str,
     max_ctx_chunk_len: int,
+    ctx_chunk_overlap: int,
     max_new_tokens: int,
     generative: bool,
 ) -> dict[str, dict]:
@@ -750,6 +1148,20 @@ def evaluate(
         add_tracker(model.generate_weights, "generate_weights")
         add_tracker(model.combine_lora, "combine_lora")
         add_tracker(model.apply_lora_to_layers, "apply_lora_to_layers")
+        model.enable_dense_lora_magnitude_logging(
+            getattr(args, "log_dense_lora_magnitude", False)
+        )
+        if getattr(args, "use_hybrid_rag", False):
+            model = DocToLoraRAGModel(
+                model=model,
+                tokenizer=tokenizer,
+                chunk_size=args.rag_chunk_size,
+                chunk_overlap=args.rag_chunk_overlap,
+                top_k=args.rag_top_k,
+                max_retrieved_tokens=args.rag_max_retrieved_tokens,
+                retrieval_mode=args.rag_retrieval_mode,
+            )
+            add_tracker(model._retrieve, "retrieve")
     else:
         model = base_model = get_model(
             model_name_or_path,
@@ -823,6 +1235,19 @@ def evaluate(
             add_tracker(model.base_model.generate, "base_model.generate")
             add_tracker(model.generate_weights, "generate_weights")
 
+        elif use_rag := getattr(args, "use_rag", False):
+            model = RAGModel(
+                model=base_model,
+                tokenizer=tokenizer,
+                chunk_size=args.rag_chunk_size,
+                chunk_overlap=args.rag_chunk_overlap,
+                top_k=args.rag_top_k,
+                max_retrieved_tokens=args.rag_max_retrieved_tokens,
+                retrieval_mode=args.rag_retrieval_mode,
+            )
+            ctx_model_max_len = base_model.config.max_position_embeddings
+            add_tracker(model._retrieve, "retrieve")
+
         elif args.use_generative_adapter:
             model = GenerativeAdapter(model=base_model, tokenizer=tokenizer)
             ctx_model_max_len = base_model.config.max_position_embeddings
@@ -849,6 +1274,7 @@ def evaluate(
         max_qas_len=-1,
         max_qas_per_sample=1,
         max_ctx_chunk_len=max_ctx_chunk_len,
+        ctx_chunk_overlap=ctx_chunk_overlap,
         min_ctx_chunk_len=-1,
         num_chunk_probs=None,
         max_ctx_chunk_num=None,
@@ -1020,6 +1446,7 @@ def run_eval(
     max_val_samples_per_ds: int = -1,
     max_test_samples_per_ds: int = -1,
     max_ctx_chunk_len: int = -1,
+    ctx_chunk_overlap: int = 0,
     remove_context: bool = False,
     max_new_tokens: int = 256,
     generative: bool = False,
@@ -1032,24 +1459,84 @@ def run_eval(
     use_llmlingua: bool = False,
     llmlingua_compression_rate: float = 0.9,
     use_t2l: bool = False,
+    use_rag: bool = False,
+    use_hybrid_rag: bool = False,
+    rag_chunk_size: int = 256,
+    rag_chunk_overlap: int = 64,
+    rag_top_k: int = 4,
+    rag_max_retrieved_tokens: int = 1536,
+    rag_retrieval_mode: str = "bm25",
     add_ctx_to_input: bool = False,
     truncate_if_too_long_inp: bool = False,
     truncate_if_too_long_ctx: bool = False,
     flip_ctx_inp: bool = False,
     gen_lora_scaling: float = 1,
     use_generative_adapter: bool = False,
+    log_dense_lora_magnitude: bool = False,
 ) -> None:
     """Run evaluation with the specified parameters."""
     assert bool(model_name_or_path) ^ bool(checkpoint_path), (
         "Either --model_name_or_path or --checkpoint_path must be provided"
     )
-    if (use_cd or use_llmlingua or use_t2l) and eval_batch_size != 1:
+    if (
+        use_cd or use_llmlingua or use_t2l or use_rag or use_hybrid_rag
+    ) and eval_batch_size != 1:
         raise ValueError("When using a baseline method, eval_batch_size must be 1.")
+    if ctx_chunk_overlap < 0:
+        raise ValueError("`ctx_chunk_overlap` must be >= 0.")
+    if max_ctx_chunk_len > 0 and ctx_chunk_overlap >= max_ctx_chunk_len:
+        raise ValueError(
+            "`ctx_chunk_overlap` must be smaller than `max_ctx_chunk_len`."
+        )
 
     if use_llmlingua and add_ctx_to_input:
         raise ValueError(
             "LLMLingua always adds compressed context to input by default."
         )
+    baseline_methods = [
+        use_cd,
+        use_llmlingua,
+        use_t2l,
+        use_rag,
+        use_hybrid_rag,
+        use_generative_adapter,
+    ]
+    if sum(bool(method) for method in baseline_methods) > 1:
+        raise ValueError("Please enable at most one baseline method at a time.")
+    if use_rag and remove_context:
+        raise ValueError(
+            "RAG baseline requires context; `remove_context` is incompatible."
+        )
+    if use_hybrid_rag and remove_context:
+        raise ValueError(
+            "Hybrid D2L+RAG requires context; `remove_context` is incompatible."
+        )
+    if use_rag and add_ctx_to_input:
+        raise ValueError(
+            "RAG baseline rebuilds its own prompt; `add_ctx_to_input` is incompatible."
+        )
+    if use_hybrid_rag and add_ctx_to_input:
+        raise ValueError(
+            "Hybrid D2L+RAG rebuilds its own prompt; `add_ctx_to_input` is incompatible."
+        )
+    if use_rag and max_ctx_chunk_len > 0:
+        raise ValueError(
+            "RAG baseline performs its own retrieval chunking; `max_ctx_chunk_len` must stay disabled."
+        )
+    if use_hybrid_rag and model_name_or_path:
+        raise ValueError(
+            "Hybrid D2L+RAG is only available when evaluating a D2L checkpoint."
+        )
+    if rag_chunk_size <= 0:
+        raise ValueError("`rag_chunk_size` must be > 0.")
+    if rag_chunk_overlap < 0 or rag_chunk_overlap >= rag_chunk_size:
+        raise ValueError(
+            "`rag_chunk_overlap` must be >= 0 and smaller than `rag_chunk_size`."
+        )
+    if rag_top_k <= 0:
+        raise ValueError("`rag_top_k` must be > 0.")
+    if rag_max_retrieved_tokens <= 0:
+        raise ValueError("`rag_max_retrieved_tokens` must be > 0.")
     if use_generative_adapter and (
         model_name_or_path != "mistralai/Mistral-7B-Instruct-v0.2"
     ):
@@ -1096,6 +1583,20 @@ def run_eval(
         if use_llmlingua:
             args.use_llmlingua = use_llmlingua
             args.llmlingua_compression_rate = llmlingua_compression_rate
+        if use_rag:
+            args.use_rag = use_rag
+            args.rag_chunk_size = rag_chunk_size
+            args.rag_chunk_overlap = rag_chunk_overlap
+            args.rag_top_k = rag_top_k
+            args.rag_max_retrieved_tokens = rag_max_retrieved_tokens
+            args.rag_retrieval_mode = rag_retrieval_mode
+        if use_hybrid_rag:
+            args.use_hybrid_rag = use_hybrid_rag
+            args.rag_chunk_size = rag_chunk_size
+            args.rag_chunk_overlap = rag_chunk_overlap
+            args.rag_top_k = rag_top_k
+            args.rag_max_retrieved_tokens = rag_max_retrieved_tokens
+            args.rag_retrieval_mode = rag_retrieval_mode
     else:
         args = Namespace(
             model_name_or_path=model_name_or_path,
@@ -1117,6 +1618,20 @@ def run_eval(
             args.llmlingua_compression_rate = llmlingua_compression_rate
         if use_t2l:
             args.use_t2l = use_t2l
+        if use_rag:
+            args.use_rag = use_rag
+            args.rag_chunk_size = rag_chunk_size
+            args.rag_chunk_overlap = rag_chunk_overlap
+            args.rag_top_k = rag_top_k
+            args.rag_max_retrieved_tokens = rag_max_retrieved_tokens
+            args.rag_retrieval_mode = rag_retrieval_mode
+        if use_hybrid_rag:
+            args.use_hybrid_rag = use_hybrid_rag
+            args.rag_chunk_size = rag_chunk_size
+            args.rag_chunk_overlap = rag_chunk_overlap
+            args.rag_top_k = rag_top_k
+            args.rag_max_retrieved_tokens = rag_max_retrieved_tokens
+            args.rag_retrieval_mode = rag_retrieval_mode
         args.use_generative_adapter = use_generative_adapter
     if max_val_samples_per_ds > 0:
         args.max_val_samples_per_ds = max_val_samples_per_ds
@@ -1127,6 +1642,7 @@ def run_eval(
     args.truncate_if_too_long_inp = truncate_if_too_long_inp
     args.truncate_if_too_long_ctx = truncate_if_too_long_ctx
     args.flip_ctx_inp = flip_ctx_inp
+    args.log_dense_lora_magnitude = log_dense_lora_magnitude
     setup_logging(args.logging_dir)
     logger.debug(f"CMD: {' '.join(os.sys.argv)}")
 
@@ -1144,6 +1660,7 @@ def run_eval(
         args,
         split,
         max_ctx_chunk_len,
+        ctx_chunk_overlap,
         max_new_tokens,
         generative=generative,
     )

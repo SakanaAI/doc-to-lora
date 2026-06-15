@@ -255,9 +255,13 @@ def compile_linear(model):
 
 def clear_gpu():
     gc.collect()
+    if not torch.cuda.is_available():
+        return
     torch.cuda.empty_cache()
-    torch.cuda.reset_max_memory_allocated()
-    torch.cuda.reset_max_memory_cached()
+    try:
+        torch.cuda.reset_peak_memory_stats()
+    except RuntimeError:
+        return
 
 
 def concat_list(l):
