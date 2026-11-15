@@ -3,7 +3,8 @@ import os
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, NewType
+from types import UnionType
+from typing import Any, Literal, NewType, Union, get_args, get_origin
 
 import torch
 import yaml
@@ -59,6 +60,13 @@ class ArgumentParser(HfArgumentParser):
                         used_args[arg] = val
                         continue
                     base_type = data_yaml.__dataclass_fields__[arg].type
+                    # unwrap Optional[X] / X | None to X so that the casts below apply
+                    if get_origin(base_type) in [Union, UnionType]:
+                        non_none_types = [
+                            t for t in get_args(base_type) if t is not type(None)
+                        ]
+                        if len(non_none_types) == 1:
+                            base_type = non_none_types[0]
                     inputs[arg] = val
 
                     # cast type for ints, floats (default to strings)

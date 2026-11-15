@@ -254,13 +254,16 @@ def self_generate(
         keep_in_memory=True,
     )
 
-    ctxs = [sample["context"] for sample in ds]
     questions = [
         [add_closed_qa_prompt(q, closed_qa_prob) for q in sample["prompts"] if q]
         for sample in ds
     ]
 
-    questions = [q_list for q_list in ds["prompts"] if len(q_list) > 0]
+    # drop samples without questions so that contexts, ctx_ids and questions stay aligned
+    keep_indices = [i for i, q_list in enumerate(questions) if len(q_list) > 0]
+    ds = ds.select(keep_indices)
+    questions = [questions[i] for i in keep_indices]
+    ctxs = [sample["context"] for sample in ds]
 
     print(f"Loaded {len(ctxs)} contexts and {len(questions)} questions")
 
